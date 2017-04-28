@@ -1,0 +1,1648 @@
+// The MIT License (MIT)
+//
+// Copyright (c) 2017 Steven Michaud
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+// Template for a hook library that can be used to hook C/C++ methods and/or
+// swizzle Objective-C methods for debugging/reverse-engineering.
+//
+// A number of methods are provided to be called from your hooks, including
+// ones that make use of Apple's CoreSymbolication framework (which though
+// undocumented is heavily used by Apple utilities such as atos, ReportCrash,
+// crashreporterd and dtrace).  Particularly useful are LogWithFormat() and
+// PrintStackTrace().
+//
+// Once the hook library is built, use it as follows:
+//
+// A) From a Terminal prompt:
+//    1) HC_INSERT_LIBRARY=/full/path/to/hook.dylib /path/to/application
+//
+// B) From gdb:
+//    1) set HC_INSERT_LIBRARY /full/path/to/hook.dylib
+//    2) run
+// 
+// C) From lldb:
+//    1) env HC_INSERT_LIBRARY=/full/path/to/hook.dylib
+//    2) run
+
+#include <asl.h>
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <libproc.h>
+#include <stdarg.h>
+#include <time.h>
+#import <Cocoa/Cocoa.h>
+#import <Carbon/Carbon.h>
+#import <objc/Object.h>
+extern "C" {
+#include <mach-o/getsect.h>
+}
+#include <mach-o/dyld.h>
+#include <mach-o/dyld_images.h>
+#include <mach-o/nlist.h>
+#include <mach/vm_map.h>
+#include <libgen.h>
+#include <execinfo.h>
+
+pthread_t gMainThreadID = 0;
+
+bool IsMainThread()
+{
+  return (!gMainThreadID || (gMainThreadID == pthread_self()));
+}
+
+void CreateGlobalSymbolicator();
+
+bool sGlobalInitDone = false;
+
+void basic_init()
+{
+  if (!sGlobalInitDone) {
+    gMainThreadID = pthread_self();
+    CreateGlobalSymbolicator();
+    sGlobalInitDone = true;
+  }
+}
+
+// Hooked methods are sometimes called before the CoreFoundation framework is
+// initialized.  Once libobjc.dylib is initialized, we can hurry the process
+// along by calling __CFInitialize() ourselves.  But before then, trying to
+// use CF methods (even after __CFInitialize()) leads to mysterious crashes.
+
+extern "C" void __CFInitialize();
+
+bool sObjcInited = false;
+
+void (*_objc_init_caller)() = NULL;
+
+// 64-bit only on OS X 10.11 (ElCapitan) and below, but for both 64-bit and
+// 32-bit code on OS X 10.12 (Sierra) and up.
+static void Hooked__objc_init()
+{
+  _objc_init_caller();
+  sObjcInited = true;
+}
+
+void (*_ZL10_objc_initv_caller)() = NULL;
+
+// 32-bit only on OS X 10.11 (ElCapitan) and below.
+static void Hooked__ZL10_objc_initv()
+{
+  _ZL10_objc_initv_caller();
+  sObjcInited = true;
+}
+
+bool CanUseCF()
+{
+  if (!sObjcInited) {
+    return false;
+  }
+  basic_init();
+  __CFInitialize();
+  return true;
+}
+
+#define MAC_OS_X_VERSION_10_9_HEX  0x00000A90
+#define MAC_OS_X_VERSION_10_10_HEX 0x00000AA0
+#define MAC_OS_X_VERSION_10_11_HEX 0x00000AB0
+#define MAC_OS_X_VERSION_10_12_HEX 0x00000AC0
+
+char gOSVersionString[PATH_MAX] = {0};
+
+int32_t OSX_Version()
+{
+  if (!CanUseCF()) {
+    return 0;
+  }
+
+  static int32_t version = -1;
+  if (version != -1) {
+    return version;
+  }
+
+  CFURLRef url =
+    CFURLCreateWithString(kCFAllocatorDefault,
+                          CFSTR("file:///System/Library/CoreServices/SystemVersion.plist"),
+                          NULL);
+  CFReadStreamRef stream =
+    CFReadStreamCreateWithFile(kCFAllocatorDefault, url);
+  CFReadStreamOpen(stream);
+  CFDictionaryRef sysVersionPlist = (CFDictionaryRef)
+    CFPropertyListCreateWithStream(kCFAllocatorDefault,
+                                   stream, 0, kCFPropertyListImmutable,
+                                   NULL, NULL);
+  CFReadStreamClose(stream);
+  CFRelease(stream);
+  CFRelease(url);
+
+  CFStringRef versionString = (CFStringRef)
+    CFDictionaryGetValue(sysVersionPlist, CFSTR("ProductVersion"));
+  CFStringGetCString(versionString, gOSVersionString,
+                     sizeof(gOSVersionString), kCFStringEncodingUTF8);
+
+  CFArrayRef versions =
+    CFStringCreateArrayBySeparatingStrings(kCFAllocatorDefault,
+                                           versionString, CFSTR("."));
+  CFIndex count = CFArrayGetCount(versions);
+  version = 0;
+  for (int i = 0; i < count; ++i) {
+    CFStringRef component = (CFStringRef) CFArrayGetValueAtIndex(versions, i);
+    int value = CFStringGetIntValue(component);
+    version += (value << ((2 - i) * 4));
+  }
+  CFRelease(sysVersionPlist);
+  CFRelease(versions);
+
+  return version;
+}
+
+bool OSX_Mavericks()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_9_HEX);
+}
+
+bool OSX_Yosemite()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_10_HEX);
+}
+
+bool OSX_ElCapitan()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_11_HEX);
+}
+
+bool macOS_Sierra()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_12_HEX);
+}
+
+class nsAutoreleasePool {
+public:
+    nsAutoreleasePool()
+    {
+        mLocalPool = [[NSAutoreleasePool alloc] init];
+    }
+    ~nsAutoreleasePool()
+    {
+        [mLocalPool release];
+    }
+private:
+    NSAutoreleasePool *mLocalPool;
+};
+
+typedef struct _CSTypeRef {
+  unsigned long type;
+  void *contents;
+} CSTypeRef;
+
+static CSTypeRef initializer = {0};
+
+void CreateGlobalSymbolicator();
+const char *GetOwnerName(void *address, CSTypeRef owner = initializer);
+const char *GetAddressString(void *address, CSTypeRef owner = initializer);
+void PrintAddress(void *address, CSTypeRef symbolicator = initializer);
+void PrintStackTrace();
+BOOL SwizzleMethods(Class aClass, SEL orgMethod, SEL posedMethod, BOOL classMethods);
+
+char gProcPath[PROC_PIDPATHINFO_MAXSIZE] = {0};
+
+static void MaybeGetProcPath()
+{
+  if (gProcPath[0]) {
+    return;
+  }
+  proc_pidpath(getpid(), gProcPath, sizeof(gProcPath) - 1);
+}
+
+static void GetThreadName(char *name, size_t size)
+{
+  pthread_getname_np(pthread_self(), name, size);
+}
+
+static void LogWithFormatV(bool decorate, CFStringRef format, va_list args)
+{
+  MaybeGetProcPath();
+
+  CFStringRef message = CFStringCreateWithFormatAndArguments(kCFAllocatorDefault, NULL,
+                                                             format, args);
+
+  int msgLength = CFStringGetMaximumSizeForEncoding(CFStringGetLength(message),
+                                                    kCFStringEncodingUTF8);
+  char *msgUTF8 = (char *) calloc(msgLength + 1, 1);
+  CFStringGetCString(message, msgUTF8, msgLength, kCFStringEncodingUTF8);
+  CFRelease(message);
+
+  char *finished = (char *) calloc(msgLength + 1024, 1);
+  const time_t currentTime = time(NULL);
+  char timestamp[30] = {0};
+  ctime_r(&currentTime, timestamp);
+  timestamp[strlen(timestamp) - 1] = 0;
+  if (decorate) {
+    char threadName[PROC_PIDPATHINFO_MAXSIZE] = {0};
+    GetThreadName(threadName, sizeof(threadName) - 1);
+    sprintf(finished, "(%s) %s[%u] %s[%p] %s\n",
+            timestamp, gProcPath, getpid(), threadName, pthread_self(), msgUTF8);
+  } else {
+    sprintf(finished, "%s\n", msgUTF8);
+  }
+  free(msgUTF8);
+
+  char stdout_path[PATH_MAX] = {0};
+  fcntl(STDOUT_FILENO, F_GETPATH, stdout_path);
+
+  if (!strcmp("/dev/console", stdout_path) ||
+      !strcmp("/dev/null", stdout_path))
+  {
+    aslclient asl = asl_open(NULL, "com.apple.console", ASL_OPT_NO_REMOTE);
+    aslmsg msg = asl_new(ASL_TYPE_MSG);
+    asl_set(msg, ASL_KEY_LEVEL, "4"); // kCFLogLevelWarning, used by NSLog()
+    asl_set(msg, ASL_KEY_MSG, finished);
+    asl_send(asl, msg);
+    asl_free(msg);
+    asl_close(asl);
+  } else {
+    fputs(finished, stdout);
+  }
+
+#ifdef DEBUG_STDOUT
+  struct stat stdout_stat;
+  fstat(STDOUT_FILENO, &stdout_stat);
+  char *stdout_info = (char *) calloc(4096, 1);
+  sprintf(stdout_info, "stdout: pid \'%i\', path \"%s\", st_dev \'%i\', st_mode \'0x%x\', st_nlink \'%i\', st_ino \'%lli\', st_uid \'%i\', st_gid \'%i\', st_rdev \'%i\', st_size \'%lli\', st_blocks \'%lli\', st_blksize \'%i\', st_flags \'0x%x\', st_gen \'%i\'\n",
+          getpid(), stdout_path, stdout_stat.st_dev, stdout_stat.st_mode, stdout_stat.st_nlink,
+          stdout_stat.st_ino, stdout_stat.st_uid, stdout_stat.st_gid, stdout_stat.st_rdev,
+          stdout_stat.st_size, stdout_stat.st_blocks, stdout_stat.st_blksize,
+          stdout_stat.st_flags, stdout_stat.st_gen);
+
+  aslclient asl = asl_open(NULL, "com.apple.console", ASL_OPT_NO_REMOTE);
+  aslmsg msg = asl_new(ASL_TYPE_MSG);
+  asl_set(msg, ASL_KEY_LEVEL, "4"); // kCFLogLevelWarning, used by NSLog()
+  asl_set(msg, ASL_KEY_MSG, stdout_info);
+  asl_send(asl, msg);
+  asl_free(msg);
+  asl_close(asl);
+  free(stdout_info);
+#endif
+
+  free(finished);
+}
+
+// A (shared) copy of dyld is loaded into every Mach executable, and code in
+// it (starting from _dyld_start) initializes the executable before jumping
+// to main().  Because the code in dyld needs to be able to run before any
+// other modules have been linked in, it's entirely self-contained -- it has
+// no external dependencies.  So methods in it can be used from any hook, no
+// matter how early it runs.  Here we're interested in the
+// internal dyld::vlog(char const*, __va_list_tag*) method, which we can use
+// for logging before the CoreFoundation framework has finished
+// initialization.  The output from dyld::vlog() goes to stderr if it's
+// available, and otherwise to the system log.
+
+extern "C" void *module_dlsym(const char *module_name, const char *symbol);
+
+void (*dyld_vlog_caller)(const char *format, va_list list) = NULL;
+
+static void dyld_vlog(const char *format, va_list list)
+{
+  if (!dyld_vlog_caller) {
+    dyld_vlog_caller = (void (*)(const char*, va_list))
+      module_dlsym("dyld", "__ZN4dyld4vlogEPKcP13__va_list_tag");
+    if (!dyld_vlog_caller) {
+      return;
+    }
+  }
+  size_t len = strlen(format) + 2;
+  char *holder = (char *) calloc(len, 1);
+  if (!holder) {
+    return;
+  }
+  snprintf(holder, len, "%s\n", format);
+  dyld_vlog_caller(holder, list);
+  free(holder);
+}
+
+static void LogWithFormat(bool decorate, const char *format, ...)
+{
+  va_list args;
+  va_start(args, format);
+  if (CanUseCF()) {
+    CFStringRef formatCFSTR = CFStringCreateWithCString(kCFAllocatorDefault, format,
+                                                        kCFStringEncodingUTF8);
+    LogWithFormatV(decorate, formatCFSTR, args);
+    CFRelease(formatCFSTR);
+  } else {
+    dyld_vlog(format, args);
+  }
+  va_end(args);
+}
+
+extern "C" void hooklib_LogWithFormatV(bool decorate, const char *format, va_list args)
+{
+  if (CanUseCF()) {
+    CFStringRef formatCFSTR = CFStringCreateWithCString(kCFAllocatorDefault, format,
+                                                        kCFStringEncodingUTF8);
+    LogWithFormatV(decorate, formatCFSTR, args);
+    CFRelease(formatCFSTR);
+  } else {
+    dyld_vlog(format, args);
+  }
+}
+
+extern "C" void hooklib_PrintStackTrace()
+{
+  PrintStackTrace();
+}
+
+extern "C" const struct dyld_all_image_infos *_dyld_get_all_image_infos();
+
+// Bit in mach_header.flags that indicates whether or not the (dylib) module
+// is in the shared cache.
+#define MH_SHAREDCACHE 0x80000000
+
+// Helper method for GetModuleHeaderAndSlide() below.
+static
+#ifdef __LP64__
+uintptr_t GetImageSlide(const struct mach_header_64 *mh)
+#else
+uintptr_t GetImageSlide(const struct mach_header *mh)
+#endif
+{
+  if (!mh) {
+    return 0;
+  }
+
+  uintptr_t retval = 0;
+
+  if ((mh->flags & MH_SHAREDCACHE) != 0) {
+    const struct dyld_all_image_infos *info = _dyld_get_all_image_infos();
+    if (info) {
+      retval = info->sharedCacheSlide;
+    }
+    return retval;
+  }
+
+  uint32_t numCommands = mh->ncmds;
+
+#ifdef __LP64__
+  const struct segment_command_64 *aCommand = (struct segment_command_64 *)
+    ((uintptr_t)mh + sizeof(struct mach_header_64));
+#else
+  const struct segment_command *aCommand = (struct segment_command *)
+    ((uintptr_t)mh + sizeof(struct mach_header));
+#endif
+
+  for (uint32_t i = 0; i < numCommands; ++i) {
+#ifdef __LP64__
+    if (aCommand->cmd != LC_SEGMENT_64)
+#else
+    if (aCommand->cmd != LC_SEGMENT)
+#endif
+    {
+      break;
+    }
+
+    if (!aCommand->fileoff && aCommand->filesize) {
+      retval = (uintptr_t) mh - aCommand->vmaddr;
+      break;
+    }
+
+    aCommand =
+#ifdef __LP64__
+      (struct segment_command_64 *)
+#else
+      (struct segment_command *)
+#endif
+      ((uintptr_t)aCommand + aCommand->cmdsize);
+  }
+
+  return retval;
+}
+
+// Helper method for module_dysym() below.
+static
+void GetModuleHeaderAndSlide(const char *moduleName,
+#ifdef __LP64__
+                             const struct mach_header_64 **pMh,
+#else
+                             const struct mach_header **pMh,
+#endif
+                             intptr_t *pVmaddrSlide)
+{
+  if (pMh) {
+    *pMh = NULL;
+  }
+  if (pVmaddrSlide) {
+    *pVmaddrSlide = 0;
+  }
+  if (!moduleName) {
+    return;
+  }
+
+  char basename_local[PATH_MAX];
+  strncpy(basename_local, basename((char *)moduleName),
+          sizeof(basename_local));
+
+  // If moduleName's base name is "dyld", we take it to mean the copy of dyld
+  // that's present in every Mach executable.
+  if (strcmp(basename_local, "dyld") == 0) {
+    const struct dyld_all_image_infos *info = _dyld_get_all_image_infos();
+    if (!info || !info->dyldImageLoadAddress) {
+      return;
+    }
+    if (pMh) {
+      *pMh =
+#ifdef __LP64__
+      (const struct mach_header_64 *)
+#endif
+      info->dyldImageLoadAddress;
+    }
+    if (pVmaddrSlide) {
+      *pVmaddrSlide = GetImageSlide(
+#ifdef __LP64__
+        (const struct mach_header_64 *)
+#endif
+        info->dyldImageLoadAddress);
+    }
+    return;
+  }
+
+  bool moduleNameIsBasename = (strcmp(basename_local, moduleName) == 0);
+  char moduleName_local[PATH_MAX] = {0};
+  if (moduleNameIsBasename) {
+    strncpy(moduleName_local, moduleName, sizeof(moduleName_local));
+  } else {
+    // Get the canonical path for moduleName (which may be a symlink or
+    // otherwise non-canonical).
+    int fd = open(moduleName, O_RDONLY);
+    if (fd > 0) {
+      if (fcntl(fd, F_GETPATH, moduleName_local) == -1) {
+        strncpy(moduleName_local, moduleName, sizeof(moduleName_local));
+      }
+      close(fd);
+    } else {
+      strncpy(moduleName_local, moduleName, sizeof(moduleName_local));
+    }
+  }
+
+  for (uint32_t i = 0; i < _dyld_image_count(); ++i) {
+    const char *name = _dyld_get_image_name(i);
+    bool match = false;
+    if (moduleNameIsBasename) {
+      match = (strstr(basename((char *)name), moduleName_local) != NULL);
+    } else {
+      match = (strstr(name, moduleName_local) != NULL);
+    }
+    if (match) {
+      if (pMh) {
+        *pMh =
+#ifdef __LP64__
+        (const struct mach_header_64 *)
+#endif
+        _dyld_get_image_header(i);
+      }
+      if (pVmaddrSlide) {
+        *pVmaddrSlide = _dyld_get_image_vmaddr_slide(i);
+      }
+      break;
+    }
+  }
+}
+
+// Helper method for module_dysym() below.
+static const
+#ifdef __LP64__
+struct segment_command_64 *
+GetSegment(const struct mach_header_64* mh,
+#else
+struct segment_command *
+GetSegment(const struct mach_header* mh,
+#endif
+           const char *segname,
+           uint32_t *numFollowingCommands)
+{
+  if (numFollowingCommands) {
+    *numFollowingCommands = 0;
+  }
+  uint32_t numCommands = mh->ncmds;
+
+#ifdef __LP64__
+  const struct segment_command_64 *aCommand = (struct segment_command_64 *)
+    ((uintptr_t)mh + sizeof(struct mach_header_64));
+#else
+  const struct segment_command *aCommand = (struct segment_command *)
+    ((uintptr_t)mh + sizeof(struct mach_header));
+#endif
+
+  for (uint32_t i = 1; i <= numCommands; ++i) {
+#ifdef __LP64__
+    if (aCommand->cmd != LC_SEGMENT_64)
+#else
+    if (aCommand->cmd != LC_SEGMENT)
+#endif
+    {
+      break;
+    }
+    if (strcmp(segname, aCommand->segname) == 0) {
+      if (numFollowingCommands) {
+        *numFollowingCommands = numCommands-i;
+      }
+      return aCommand;
+    }
+    aCommand =
+#ifdef __LP64__
+      (struct segment_command_64 *)
+#else
+      (struct segment_command *)
+#endif
+      ((uintptr_t)aCommand + aCommand->cmdsize);
+  }
+
+  return NULL;
+}
+
+// A variant of dlsym() that can find non-exported (non-public) symbols.
+// Unlike with dlsym() and friends, 'symbol' should be specified exactly as it
+// appears in the symbol table (and the output of programs like 'nm').  In
+// other words, 'symbol' should (most of the time) be prefixed by an "extra"
+// underscore.  The reason is that some symbols (especially non-public ones)
+// don't have any underscore prefix, even in the symbol table.
+extern "C" void *module_dlsym(const char *module_name, const char *symbol)
+{
+#ifdef __LP64__
+  const struct mach_header_64 *mh = NULL;
+#else
+  const struct mach_header *mh = NULL;
+#endif
+  intptr_t vmaddr_slide = 0;
+  GetModuleHeaderAndSlide(module_name, &mh, &vmaddr_slide);
+  if (!mh) {
+    return NULL;
+  }
+
+  uint32_t numFollowingCommands = 0;
+#ifdef __LP64__
+  const struct segment_command_64 *linkeditSegment =
+#else
+  const struct segment_command *linkeditSegment =
+#endif
+    GetSegment(mh, "__LINKEDIT", &numFollowingCommands);
+  if (!linkeditSegment) {
+    return NULL;
+  }
+  uintptr_t fileoffIncrement =
+    linkeditSegment->vmaddr - linkeditSegment->fileoff;
+
+  struct symtab_command *symtab = (struct symtab_command *)
+    ((uintptr_t)linkeditSegment + linkeditSegment->cmdsize);
+  for (uint32_t i = 1;; ++i) {
+    if (symtab->cmd == LC_SYMTAB) {
+      break;
+    }
+    if (i == numFollowingCommands) {
+      return NULL;
+    }
+    symtab = (struct symtab_command *)
+      ((uintptr_t)symtab + symtab->cmdsize);
+  }
+  uintptr_t symbolTableOffset =
+    symtab->symoff + fileoffIncrement + vmaddr_slide;
+  uintptr_t stringTableOffset =
+    symtab->stroff + fileoffIncrement + vmaddr_slide;
+
+  struct dysymtab_command *dysymtab = (struct dysymtab_command *)
+    ((uintptr_t)symtab + symtab->cmdsize);
+  if (dysymtab->cmd != LC_DYSYMTAB) {
+    return NULL;
+  }
+
+  void *retval = NULL;
+  for (int i = 1; i <= 2; ++i) {
+    uint32_t index;
+    uint32_t count;
+    if (i == 1) {
+      index = dysymtab->ilocalsym;
+      count = index + dysymtab->nlocalsym;
+    } else {
+      index = dysymtab->iextdefsym;
+      count = index + dysymtab->nextdefsym;
+    }
+
+    for (uint32_t j = index; j < count; ++j) {
+#ifdef __LP64__
+      struct nlist_64 *symbolTableItem = (struct nlist_64 *)
+        (symbolTableOffset + j * sizeof(struct nlist_64));
+#else
+      struct nlist *symbolTableItem = (struct nlist *)
+        (symbolTableOffset + j * sizeof(struct nlist));
+#endif
+      uint8_t type = symbolTableItem->n_type;
+      if ((type & N_STAB) || ((type & N_TYPE) != N_SECT)) {
+        continue;
+      }
+      uint8_t sect = symbolTableItem->n_sect;
+      if (!sect) {
+        continue;
+      }
+      const char *stringTableItem = (char *)
+        (stringTableOffset + symbolTableItem->n_un.n_strx);
+      if (strcmp(symbol, stringTableItem)) {
+        continue;
+      }
+      retval = (void *) (symbolTableItem->n_value + vmaddr_slide);
+      break;
+    }
+  }
+
+  return retval;
+}
+
+// dladdr() is normally used from libdyld.dylib.  But this isn't safe before
+// our execution environment is fully initialized.  So instead we use it from
+// the copy of dyld loaded in every Mach executable, which has no external
+// dependencies.
+
+int (*dyld_dladdr_caller)(const void *addr, Dl_info *info) = NULL;
+
+int dyld_dladdr(const void *addr, Dl_info *info)
+{
+  if (!dyld_dladdr_caller) {
+    dyld_dladdr_caller = (int (*)(const void*, Dl_info *))
+      module_dlsym("dyld", "_dladdr");
+    if (!dyld_dladdr_caller) {
+      return 0;
+    }
+  }
+  return dyld_dladdr_caller(addr, info);
+}
+
+// Call this from a hook to get the filename of the module from which the hook
+// was called -- which of course is also the module from which the original
+// method was called.
+const char *GetCallerOwnerName()
+{
+  static char holder[1024] = {0};
+
+  const char *ownerName = "";
+  Dl_info addressInfo = {0};
+  void **addresses = (void **) calloc(3, sizeof(void *));
+  if (addresses) {
+    int count = backtrace(addresses, 3);
+    if (count == 3) {
+      if (dyld_dladdr(addresses[2], &addressInfo)) {
+        ownerName = basename((char *)addressInfo.dli_fname);
+      }
+    }
+    free(addresses);
+  }
+
+  strncpy(holder, ownerName, sizeof(holder));
+  return holder;
+}
+
+// Reset a patch hook after it's been unset (as it was called).  Not always
+// required -- most patch hooks don't get unset when called.  But using it
+// when not required does no harm.
+void reset_hook(void *hook)
+{
+  __asm__ ("int %0" :: "N" (0x22));
+}
+
+class loadHandler
+{
+public:
+  loadHandler();
+  ~loadHandler() {}
+};
+
+// In Apple's 32-bit mode code, internal (non-exported) methods often use a
+// non-standard ABI to speed things up -- something called "fastcc".  If we
+// hook such methods, our hooks will crash unless we also use that ABI.  The
+// basic rules are to put the first two integer/pointer parameters into ECX
+// and EDX, and to put floating point parameters into the XMM registers.
+// Also, fastcc is never used with varargs functions.  But fastcc is only for
+// internal use, and is deliberately non-standardized.  So using it can be
+// tricky.  One needs to build the hook library with tools that are as
+// compatible as possible with those used to build the OS itself.  I've had
+// good luck with the LLVM 3.9.0 Clang download:
+// http://releases.llvm.org/3.9.0/clang+llvm-3.9.0-x86_64-apple-darwin.tar.xz.
+//
+// Note that the "fastcall" calling convention is *not* the same as the
+// "fastcc" calling convention.  But (as it's deliberately non-standard),
+// there's no way to specify a "fastcc" method in C/C++ code.  There *is*,
+// though, a way to specify it in LLVM intermediate language.  So we need to
+// take more steps to build a hook library that hooks non-exported methods in
+// 32-bit code.  One of them generates an LLVM intermediate language file
+// (ending in *.iii), which we use sed to transform into a file (ending in
+// *.ii) where instances of "x86_fastcallcc" (the internal name for the
+// fastcall calling convention) are replaced by "fastcc".  See our makefile
+// for more information.
+#ifdef __i386__
+#define FASTI386 __attribute__((fastcall))
+#else
+#define FASTI386
+#endif
+
+CFStringRef (*CopyEventDescription)(EventRef event, Boolean verbose) = NULL;
+CFStringRef (*AEDescribeDesc)(CFAllocatorRef alloc, const AEDesc *desc, Boolean verbose) = NULL;
+
+loadHandler::loadHandler()
+{
+  basic_init();
+#if (0)
+  LogWithFormat(true, "Hook.mm: loadHandler()");
+  PrintStackTrace();
+#endif
+
+  CopyEventDescription = (CFStringRef (*)(EventRef, Boolean))
+    module_dlsym("/System/Library/Frameworks/Carbon.framework/Frameworks/HIToolbox.framework/HIToolbox",
+                 "_CopyEventDescription");
+  AEDescribeDesc = (CFStringRef (*)(CFAllocatorRef, const AEDesc *, Boolean))
+    module_dlsym("/System/Library/Frameworks/CoreServices.framework/Frameworks/AE.framework/AE",
+                 "_AEDescribeDesc");
+}
+
+loadHandler handler = loadHandler();
+
+static BOOL gMethodsSwizzled = NO;
+static void InitSwizzling()
+{
+  if (!gMethodsSwizzled) {
+#if (0)
+    LogWithFormat(true, "Hook.mm: InitSwizzling()");
+    PrintStackTrace();
+#endif
+    gMethodsSwizzled = YES;
+    // Swizzle methods here
+#if (0)
+    Class ExampleClass = ::NSClassFromString(@"Example");
+    SwizzleMethods(ExampleClass, @selector(doSomethingWith:),
+                   @selector(Example_doSomethingWith:), NO);
+#endif
+
+    SwizzleMethods([NSAppleEventManager class],
+                   @selector(dispatchRawAppleEvent:withRawReply:handlerRefCon:),
+                   @selector(NSAppleEventManager_dispatchRawAppleEvent:withRawReply:handlerRefCon:),
+                   NO);
+  }
+}
+
+extern "C" void *NSPushAutoreleasePool();
+
+static void *Hooked_NSPushAutoreleasePool()
+{
+  void *retval = NSPushAutoreleasePool();
+  if (IsMainThread()) {
+    InitSwizzling();
+  }
+  return retval;
+}
+
+#if (0)
+// If the PATCH_FUNCTION macro is used below, this will be set to the correct
+// value by the the HookCase extension.
+int (*patch_example_caller)(char *arg) = NULL;
+
+static int Hooked_patch_example(char *arg)
+{
+  int retval = patch_example_caller(arg);
+  LogWithFormat(true, "Hook.mm: example(): arg \"%s\", returning \'%i\'", arg, retval);
+  PrintStackTrace();
+  // Not always required, but using it when not required does no harm.
+  reset_hook(reinterpret_cast<void*>(Hooked_example));
+  return retval;
+}
+
+extern "C" int interpose_example(char *arg);
+
+static int Hooked_interpose_example(char *arg)
+{
+  int retval = interpose_example(arg);
+  LogWithFormat(true, "Hook.mm: example(): arg \"%s\", returning \'%i\'", arg, retval);
+  PrintStackTrace();
+  return retval;
+}
+
+@interface NSObject (ExampleMethodSwizzling)
+- (id)Example_doSomethingWith:(id)whatever;
+@end
+
+@implementation NSObject (ExampleMethodSwizzling)
+
+- (id)Example_doSomethingWith:(id)whatever
+{
+  id retval = [self Example_doSomethingWith:whatever];
+  if ([self isKindOfClass:ExampleClass]) {
+    LogWithFormat(true, "Hook.mm: [Example doSomethingWith:]: self %@, whatever %@, returning %@",
+                  self, whatever, retval);
+  }
+  return retval;
+}
+
+@end
+#endif // #if (0)
+
+// Put other hooked methods and swizzled classes here
+
+// There are two basic kinds of (non-synthetic) events -- "high-level" and
+// "low-level".  High-level events are Apple events, which may be used for
+// application scripting.  They're delivered to applications via the Mach
+// messaging system (as described under "AE Mach API" in the AE framework's
+// AEMach.h).  Low-level events are everything else -- things like keyboard
+// and mouse events.  Applications pull them from WindowServer (a system
+// daemon from the CoreGraphics framework).
+
+// Logging stack traces on a secondary thread generally only works properly
+// if we don't also try to log stack traces on other threads (like the main
+// thread).
+//#define LOG_NSEVENTTHREAD_STACKS 1
+
+typedef uint32_t CGSConnectionID;
+typedef uint32_t CGSError;
+#define kCGSErrorSuccess 0
+#define kCGEventMouseMoved 5
+
+class AEEventImpl;
+
+// As reported by CGSEventRecordLength(), this structure is 0xF8 (248) bytes
+// long on Mavericks through Sierra in 64-bit mode, and 0xD0 (208) bytes long
+// in 32-bit mode.  A full definition (though without member names) is present
+// in the class-dump output for the AppKit framework.
+typedef struct _CGSEventRecord {
+  unsigned short unknown1;
+  unsigned short unknown2;
+  unsigned int length;
+  unsigned int type;
+  struct CGPoint location;
+  struct CGPoint windowLocation;
+  unsigned long long timestamp;
+  unsigned int flags;
+#ifdef __i386__
+  uint32_t pad[42];
+#else
+  uint32_t pad[47];
+#endif
+} CGSEventRecord;
+
+// CGEventGetEventRecord() copies sizeof(CGSEventRecord) bytes from a CGEvent
+// structure starting at offset 0x18 in 64-bit mode and 0xC in 32-bit mode.
+typedef struct __CGEvent {
+  uintptr_t pad[3];
+  CGSEventRecord eventRecord;
+} CGEvent, *CGEventRef;
+
+extern "C" uint32_t CGSEventRecordLength();
+extern "C" CGEventRef CGEventCreate(CGEventSourceRef source);
+extern "C" CGSEventRecord *CGEventRecordPointer(CGEventRef event);
+extern "C" OSStatus CreateEventWithCGEvent(CFAllocatorRef unused,
+                                           CGEventRef inCGEvent,
+                                           EventAttributes inAttributes,
+                                           EventRef *outEvent);
+
+EventRef EventFromCGSEventRecord(CGSEventRecord *eventRecord)
+{
+  if (!eventRecord) {
+    return NULL;
+  }
+  CGEventRef cgEvent = CGEventCreate(NULL);
+  if (!cgEvent) {
+    return NULL;
+  }
+  CGSEventRecord *cgEventRecord = CGEventRecordPointer(cgEvent);
+  if (!cgEventRecord) {
+    CFRelease(cgEvent);
+    return NULL;
+  }
+  memcpy(cgEventRecord, eventRecord, CGSEventRecordLength());
+  EventRef retval = NULL;
+  OSStatus rv = CreateEventWithCGEvent(NULL, cgEvent, kEventAttributeNone,
+                                       &retval);
+  if (rv != noErr) {
+    retval = NULL;
+  }
+  return retval;
+}
+
+// This is called (via _CGEventCreateNextEvent()) from
+// PullEventsFromWindowServerOnConnection(), which pulls events from
+// WindowServer on the com.apple.NSEventThread (not the main thread).
+// PullEventsFromWindowServerOnConnection() then pushes the newly created
+// CGEvent on to the CGEvent queue.  Later, on the main thread, the CGEvent is
+// removed from the CGEvent queue, converted to a Carbon event, and posted to
+// the main event queue (using Convert1CGEvent()).  This method is called
+// SLSGetNextEventRecordInternal() on macOS Sierra, and is in a different
+// framework (the SkyLight framework).
+extern "C" CGSError CGSGetNextEventRecordInternal(CGSConnectionID cid,
+                                                  CGSEventRecord *eventRecord);
+
+FASTI386 CGSError (*CGSGetNextEventRecordInternal_caller)(CGSConnectionID, CGSEventRecord *) = NULL;
+
+static FASTI386 CGSError Hooked_CGSGetNextEventRecordInternal(CGSConnectionID cid,
+                                                              CGSEventRecord *eventRecord)
+{
+  CGSError retval = CGSGetNextEventRecordInternal_caller(cid, eventRecord);
+  if ((retval == kCGSErrorSuccess) && eventRecord->type &&
+      (eventRecord->type != kCGEventMouseMoved))
+  {
+    CFStringRef description = NULL;
+    EventRef event = EventFromCGSEventRecord(eventRecord);
+    if (event) {
+      description = CopyEventDescription(event, true);
+      ReleaseEvent(event);
+    }
+    LogWithFormat(true, "HookEvents: CGSGetNextEventRecordInternal(): event %@", description);
+#ifdef LOG_NSEVENTTHREAD_STACKS
+    PrintStackTrace();
+#endif
+    if (description) {
+      CFRelease(description);
+    }
+  }
+  return retval;
+}
+
+extern "C" CGSError SLSGetNextEventRecordInternal(CGSConnectionID cid,
+                                                  CGSEventRecord *eventRecord);
+
+FASTI386 CGSError (*SLSGetNextEventRecordInternal_caller)(CGSConnectionID, CGSEventRecord *) = NULL;
+
+static FASTI386 CGSError Hooked_SLSGetNextEventRecordInternal(CGSConnectionID cid,
+                                                              CGSEventRecord *eventRecord)
+{
+  CGSError retval = SLSGetNextEventRecordInternal_caller(cid, eventRecord);
+  if ((retval == kCGSErrorSuccess) && eventRecord->type &&
+      (eventRecord->type != kCGEventMouseMoved))
+  {
+    CFStringRef description = NULL;
+    EventRef event = EventFromCGSEventRecord(eventRecord);
+    if (event) {
+      description = CopyEventDescription(event, true);
+      ReleaseEvent(event);
+    }
+    LogWithFormat(true, "HookEvents: SLSGetNextEventRecordInternal(): event %@", description);
+#ifdef LOG_NSEVENTTHREAD_STACKS
+    PrintStackTrace();
+#endif
+    if (description) {
+      CFRelease(description);
+    }
+  }
+  return retval;
+}
+
+// This pulls high-level and low-level events from the main event queue for
+// all apps (Cocoa and Carbon).
+extern "C" OSStatus ReceiveNextEventCommon(ItemCount inNumTypes,
+                                           const EventTypeSpec *inList,
+                                           EventTimeout inTimeout,
+                                           void *inOptions,
+                                           Boolean inPullEvent,
+                                           EventRef *outEvent,
+                                           CFStringRef inMode,
+                                           Boolean inUnknown);
+
+FASTI386 OSStatus (*ReceiveNextEventCommon_caller)(ItemCount inNumTypes,
+                                                   const EventTypeSpec *inList,
+                                                   EventTimeout inTimeout,
+                                                   void *inOptions,
+                                                   Boolean inPullEvent,
+                                                   EventRef *outEvent,
+                                                   CFStringRef inMode,
+                                                   Boolean inUnknown) = NULL;
+
+static FASTI386 OSStatus Hooked_ReceiveNextEventCommon(ItemCount inNumTypes,
+                                                       const EventTypeSpec *inList,
+                                                       EventTimeout inTimeout,
+                                                       void *inOptions,
+                                                       Boolean inPullEvent,
+                                                       EventRef *outEvent,
+                                                       CFStringRef inMode,
+                                                       Boolean inUnknown)
+{
+  OSStatus retval =
+    ReceiveNextEventCommon_caller(inNumTypes, inList, inTimeout, inOptions,
+                                  inPullEvent, outEvent, inMode, inUnknown);
+  if (retval == noErr) {
+    OSType evClass = GetEventClass(*outEvent);
+    UInt32 kind = GetEventKind(*outEvent);
+    if ((evClass != kEventClassMouse) || (kind != kEventMouseMoved)) {
+      CFStringRef description = CopyEventDescription(*outEvent, true);
+      LogWithFormat(true, "HookEvents: ReceiveNextEventCommon(): event %@", description);
+#ifndef LOG_NSEVENTTHREAD_STACKS
+      PrintStackTrace();
+#endif
+      if (description) {
+        CFRelease(description);
+      }
+    }
+  }
+  return retval;
+}
+
+// _DPSNextEvent() processes both high-level and low-level Carbon events in
+// Cocoa apps, delivering them to their handlers.  'cid' is usually the result
+// of CGSMainConnectionID().
+//
+// The definition of _DPSNextEvent() changed considerably in Sierra, so we
+// compile different versions of its hook, depending on which version of OS X
+// we're compiling on.
+extern "C" CGSEventRecord _DPSNextEvent_ElCapitan(CGSConnectionID cid,  // in
+                                                  NSEventMask mask,     // in, long long
+                                                  NSDate *expiration,   // in
+                                                  NSString *mode,       // in
+                                                  BOOL dequeue,         // in
+                                                  EventRef *eventCopy); // out if not null
+
+extern "C" CGEventRef _DPSNextEvent_Sierra(CGSConnectionID cid,         // in
+                                           NSEventMask mask,            // in, long long
+                                           NSDate *expiration,          // in
+                                           NSString *mode,              // in
+                                           BOOL dequeue,                // in
+                                           BOOL unknown,                // in
+                                           EventRef *eventCopy);        // out if not null
+
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101200
+
+CGEventRef (*_DPSNextEvent_caller)(CGSConnectionID cid, NSEventMask mask,
+                                   NSDate *expiration, NSString *mode,
+                                   BOOL dequeue, BOOL unknown,
+                                   EventRef *eventCopy) = NULL;
+
+static CGEventRef Hooked__DPSNextEvent(CGSConnectionID cid,
+                                       NSEventMask mask,
+                                       NSDate *expiration,
+                                       NSString *mode,
+                                       BOOL dequeue,
+                                       BOOL unknown,
+                                       EventRef *eventCopy)
+{
+  EventRef holder = NULL;
+  if (!eventCopy) {
+    eventCopy = &holder;
+  }
+
+  CGEventRef retval = _DPSNextEvent_caller(cid, mask, expiration, mode,
+                                           dequeue, unknown, eventCopy);
+
+  NSEvent *cocoaEvent = NULL;
+  if (retval && CGEventGetType(retval)) {
+    cocoaEvent = (NSEvent *)
+      objc_msgSend([NSEvent alloc], @selector(_initWithCGEvent:eventRef:),
+                   retval, *eventCopy);
+  }
+  if (cocoaEvent) {
+    NSEventType cocoaType = [cocoaEvent type];
+    NSEventType subtype = 0;
+    NSInteger data1 = 0;
+    NSInteger data2 = 0;
+    if (cocoaType == NSApplicationDefined) {
+      subtype = [cocoaEvent subtype];
+      data1 = [cocoaEvent data1];
+      data2 = [cocoaEvent data2];
+    }
+    if ((cocoaType != NSMouseMoved) &&
+        // Firefox uses lots of NSApplicationDefined events with subtype,
+        // data1 and data2 all set to 0.
+        ((cocoaType != NSApplicationDefined) || subtype || data1 || data2))
+    {
+      LogWithFormat(true, "HookEvents: _DPSNextEvent(): event %@", cocoaEvent);
+    }
+    [cocoaEvent release];
+  }
+
+  if (holder) {
+    ReleaseEvent(holder);
+  }
+  return retval;
+}
+
+#else  // __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 101200
+
+CGSEventRecord (*_DPSNextEvent_caller)(CGSConnectionID cid, NSEventMask mask,
+                                       NSDate *expiration, NSString *mode,
+                                       BOOL dequeue, EventRef *eventCopy) = NULL;
+
+static CGSEventRecord Hooked__DPSNextEvent(CGSConnectionID cid,
+                                           NSEventMask mask,
+                                           NSDate *expiration,
+                                           NSString *mode,
+                                           BOOL dequeue,
+                                           EventRef *eventCopy)
+{
+  EventRef holder = NULL;
+  if (!eventCopy) {
+    eventCopy = &holder;
+  }
+
+  CGSEventRecord retval = _DPSNextEvent_caller(cid, mask, expiration,
+                                               mode, dequeue, eventCopy);
+
+  NSEvent *cocoaEvent = NULL;
+  if (retval.type) {
+    cocoaEvent = (NSEvent *)
+      objc_msgSend([NSEvent alloc], @selector(_initWithCGSEvent:eventRef:),
+                   retval, *eventCopy);
+  }
+  if (cocoaEvent) {
+    NSEventType cocoaType = [cocoaEvent type];
+    NSEventType subtype = 0;
+    NSInteger data1 = 0;
+    NSInteger data2 = 0;
+    if (cocoaType == NSApplicationDefined) {
+      subtype = [cocoaEvent subtype];
+      data1 = [cocoaEvent data1];
+      data2 = [cocoaEvent data2];
+    }
+    if ((cocoaType != NSMouseMoved) &&
+        // Firefox uses lots of NSApplicationDefined events with subtype,
+        // data1 and data2 all set to 0.
+        ((cocoaType != NSApplicationDefined) || subtype || data1 || data2))
+    {
+      LogWithFormat(true, "HookEvents: _DPSNextEvent(): event %@", cocoaEvent);
+    }
+    [cocoaEvent release];
+  }
+
+  if (holder) {
+    ReleaseEvent(holder);
+  }
+  return retval;
+}
+
+#endif // __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__
+
+// This is where an Apple event first appears in a process.  It gets wrapped
+// in the Carbon event created here.  CreateHighLevelEvent() is called from
+// enqueueHighLevelEvent(AEEventImpl*) in the AE framework, which then calls
+// PostEventToQueueInternal() to post the event.  enqueueHighLevelEvent() is
+// in turn called (via AEProcessMessage()) from
+// _aeMachPortCallback(__CFMachPort*, void*, long, void*), which is a
+// "callout" for the Mach port used to receive incoming Mach messages that
+// contain Apple events sent from another process.
+extern "C" OSStatus CreateHighLevelEvent(EventRecord *inEventRecord,
+                                         AEEventImpl *inAEEvent,
+                                         EventRef *outEvent);
+
+OSStatus (*CreateHighLevelEvent_caller)(EventRecord *inEventRecord,
+                                        AEEventImpl *inAEEvent,
+                                        EventRef *outEvent) = NULL;
+
+static OSStatus Hooked_CreateHighLevelEvent(EventRecord *inEventRecord,
+                                            AEEventImpl *inAEEvent,
+                                            EventRef *outEvent)
+{
+  OSStatus retval =
+    CreateHighLevelEvent_caller(inEventRecord, inAEEvent, outEvent);
+  if (retval == noErr) {
+    CFStringRef description = CopyEventDescription(*outEvent, true);
+    LogWithFormat(true, "HookEvents: CreateHighLevelEvent(): event %@", description);
+#ifndef LOG_NSEVENTTHREAD_STACKS
+    PrintStackTrace();
+#endif
+    if (description) {
+      CFRelease(description);
+    }
+  }
+  return retval;
+}
+
+// This is what delivers Apple events to their handlers in Cocoa apps.  It's
+// called from _DPSNextEvent() (via AEProcessAppleEvent()).
+@interface NSAppleEventManager (MethodSwizzling)
+- (OSErr)NSAppleEventManager_dispatchRawAppleEvent:(const AppleEvent *)theAppleEvent
+                                      withRawReply:(AppleEvent *)theReply
+                                     handlerRefCon:(SRefCon)handlerRefCon;
+@end
+
+@implementation NSAppleEventManager (MethodSwizzling)
+
+- (OSErr)NSAppleEventManager_dispatchRawAppleEvent:(const AppleEvent *)theAppleEvent
+                                      withRawReply:(AppleEvent *)theReply
+                                     handlerRefCon:(SRefCon)handlerRefCon
+{
+  OSErr retval =
+    [self NSAppleEventManager_dispatchRawAppleEvent:theAppleEvent
+                                       withRawReply:theReply
+                                      handlerRefCon:handlerRefCon];
+  CFStringRef description = AEDescribeDesc(kCFAllocatorDefault, theAppleEvent, NO);
+  LogWithFormat(true, "HookEvents: [NSAppleEventManager dispatchRawAppleEvent:...]: theAppleEvent %@",
+                description);
+#ifndef LOG_NSEVENTTHREAD_STACKS
+  PrintStackTrace();
+#endif
+  if (description) {
+    CFRelease(description);
+  }
+  return retval;
+}
+
+@end
+
+extern "C" OSStatus PostEventToQueueInternal(EventQueueRef inQueue,
+                                             EventRef inEvent,
+                                             EventPriority inPriority,
+                                             Boolean inSignalRunLoop);
+
+OSStatus (*PostEventToQueueInternal_caller)(EventQueueRef inQueue,
+                                            EventRef inEvent,
+                                            EventPriority inPriority,
+                                            Boolean inSignalRunLoop) = NULL;
+
+static OSStatus Hooked_PostEventToQueueInternal(EventQueueRef inQueue,
+                                                EventRef inEvent,
+                                                EventPriority inPriority,
+                                                Boolean inSignalRunLoop)
+{
+  OSStatus retval =
+    PostEventToQueueInternal_caller(inQueue, inEvent, inPriority,
+                                    inSignalRunLoop);
+  if (retval == noErr) {
+    if (GetEventClass(inEvent) == kEventClassAppleEvent) {
+      CFStringRef description = CopyEventDescription(inEvent, true);
+      LogWithFormat(true, "HookEvents: PostEventToQueueInternal(): event %@", description);
+#ifndef LOG_NSEVENTTHREAD_STACKS
+      PrintStackTrace();
+#endif
+      if (description) {
+        CFRelease(description);
+      }
+    }
+  }
+  return retval;
+}
+
+extern "C" Boolean Convert1CGEvent(Boolean wakeup);
+
+FASTI386 Boolean (*_ZL15Convert1CGEventh_caller)(Boolean) = NULL;
+
+static FASTI386 Boolean Hooked__ZL15Convert1CGEventh(Boolean wakeup)
+{
+  Boolean retval = _ZL15Convert1CGEventh_caller(wakeup);
+  LogWithFormat(true, "HookEvents: Convert1CGEvent(): wakeup %i, returning %i",
+                wakeup, retval);
+#ifndef LOG_NSEVENTTHREAD_STACKS
+  PrintStackTrace();
+#endif
+  return retval;
+}
+
+extern "C" EventRef AcquireEventFromQueue(EventQueueRef inQueue,
+                                          ItemCount inNumTypes,
+                                          const EventTypeSpec *inList,
+                                          void *inOptions,
+                                          Boolean inPullEvent);
+
+// This may be called from AEPredispatchHandler() (via AEProcessAppleEvent()
+// via _DPSNextEvent()) to create additional Carbon events wrapping Apple
+// events, presumably for delivery to their handlers.  Presumably these Apple
+// events not handled via NSAppleEventManager.
+extern "C" OSStatus _CreateEventWithAppleEvents(CFAllocatorRef inAllocator,
+                                                AEEventClass inEventClass,
+                                                AEEventID inEventID,
+                                                EventTime inWhen,
+                                                EventAttributes inAttributes,
+                                                const AEDesc *inFromDesc,
+                                                AEDesc *inToDesc,
+                                                Boolean inUnknown,
+                                                EventRef *outEvent);
+
+typedef struct _hook_desc {
+  const void *hook_function;
+  union {
+    // For interpose hooks
+    const void *orig_function;
+    // For patch hooks
+    const void *caller_func_ptr;
+  };
+  const char *orig_function_name;
+  const char *orig_module_name;
+} hook_desc;
+
+#define PATCH_FUNCTION(function, module)               \
+  { reinterpret_cast<const void*>(Hooked_##function),  \
+    reinterpret_cast<const void*>(&function##_caller), \
+    "_" #function,                                     \
+    #module }
+
+#define INTERPOSE_FUNCTION(function)                   \
+  { reinterpret_cast<const void*>(Hooked_##function),  \
+    reinterpret_cast<const void*>(function),           \
+    "_" #function,                                     \
+    "" }
+
+__attribute__((used)) static const hook_desc user_hooks[]
+  __attribute__((section("__DATA, __hook"))) =
+{
+  INTERPOSE_FUNCTION(NSPushAutoreleasePool),
+  PATCH_FUNCTION(_objc_init, /usr/lib/libobjc.dylib),
+  PATCH_FUNCTION(_ZL10_objc_initv, /usr/lib/libobjc.dylib),
+
+  PATCH_FUNCTION(ReceiveNextEventCommon, /System/Library/Frameworks/Carbon.framework/Frameworks/HIToolbox.framework/HIToolbox),
+  PATCH_FUNCTION(_DPSNextEvent, /System/Library/Frameworks/AppKit.framework/AppKit),
+  PATCH_FUNCTION(CreateHighLevelEvent, /System/Library/Frameworks/Carbon.framework/Frameworks/HIToolbox.framework/HIToolbox),
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101200
+  PATCH_FUNCTION(SLSGetNextEventRecordInternal, /System/Library/PrivateFrameworks/SkyLight.framework/SkyLight),
+#else
+  PATCH_FUNCTION(CGSGetNextEventRecordInternal, /System/Library/Frameworks/CoreGraphics.framework/CoreGraphics),
+#endif
+  //PATCH_FUNCTION(PostEventToQueueInternal, /System/Library/Frameworks/Carbon.framework/Frameworks/HIToolbox.framework/HIToolbox),
+  //PATCH_FUNCTION(_ZL15Convert1CGEventh, /System/Library/Frameworks/Carbon.framework/Frameworks/HIToolbox.framework/HIToolbox),
+};
+
+// What follows are declarations of the CoreSymbolication APIs that we use to
+// get stack traces.  This is an undocumented, private framework available on
+// OS X 10.6 and up.  It's used by Apple utilities like atos and ReportCrash.
+
+// Defined above
+#if (0)
+typedef struct _CSTypeRef {
+  unsigned long type;
+  void *contents;
+} CSTypeRef;
+#endif
+
+typedef struct _CSRange {
+  unsigned long long location;
+  unsigned long long length;
+} CSRange;
+
+// Defined above
+typedef CSTypeRef CSSymbolicatorRef;
+typedef CSTypeRef CSSymbolOwnerRef;
+typedef CSTypeRef CSSymbolRef;
+typedef CSTypeRef CSSourceInfoRef;
+
+typedef unsigned long long CSArchitecture;
+
+#define kCSNow LONG_MAX
+
+extern "C" {
+CSSymbolicatorRef CSSymbolicatorCreateWithTaskFlagsAndNotification(task_t task,
+                                                                   uint32_t flags,
+                                                                   uint32_t notification);
+CSSymbolicatorRef CSSymbolicatorCreateWithPid(pid_t pid);
+CSSymbolicatorRef CSSymbolicatorCreateWithPidFlagsAndNotification(pid_t pid,
+                                                                  uint32_t flags,
+                                                                  uint32_t notification);
+CSArchitecture CSSymbolicatorGetArchitecture(CSSymbolicatorRef symbolicator);
+CSSymbolOwnerRef CSSymbolicatorGetSymbolOwnerWithAddressAtTime(CSSymbolicatorRef symbolicator,
+                                                               unsigned long long address,
+                                                               long time);
+
+const char *CSSymbolOwnerGetName(CSSymbolOwnerRef owner);
+unsigned long long CSSymbolOwnerGetBaseAddress(CSSymbolOwnerRef owner);
+CSSymbolRef CSSymbolOwnerGetSymbolWithAddress(CSSymbolOwnerRef owner,
+                                              unsigned long long address);
+CSSourceInfoRef CSSymbolOwnerGetSourceInfoWithAddress(CSSymbolOwnerRef owner,
+                                                      unsigned long long address);
+
+const char *CSSymbolGetName(CSSymbolRef symbol);
+CSRange CSSymbolGetRange(CSSymbolRef symbol);
+
+const char *CSSourceInfoGetFilename(CSSourceInfoRef info);
+uint32_t CSSourceInfoGetLineNumber(CSSourceInfoRef info);
+
+CSTypeRef CSRetain(CSTypeRef);
+void CSRelease(CSTypeRef);
+bool CSIsNull(CSTypeRef);
+void CSShow(CSTypeRef);
+const char *CSArchitectureGetFamilyName(CSArchitecture);
+} // extern "C"
+
+CSSymbolicatorRef gSymbolicator = {0};
+
+void CreateGlobalSymbolicator()
+{
+  if (CSIsNull(gSymbolicator)) {
+    // 0x40e0000 is the value returned by
+    // uint32_t CSSymbolicatorGetFlagsForNListOnlyData(void).  We don't use
+    // this method directly because it doesn't exist on OS X 10.6.  Unless
+    // we limit ourselves to NList data, it will take too long to get a
+    // stack trace where Dwarf debugging info is available (about 15 seconds
+    // with Firefox).
+    gSymbolicator =
+      CSSymbolicatorCreateWithTaskFlagsAndNotification(mach_task_self(), 0x40e0000, 0);
+  }
+}
+
+// Does nothing (and returns 'false') if *symbolicator is already non-null.
+// Otherwise tries to set it appropriately.  Returns 'true' if the returned
+// *symbolicator will need to be released after use (because it isn't the
+// global symbolicator).
+bool GetSymbolicator(CSSymbolicatorRef *symbolicator)
+{
+  bool retval = false;
+  if (CSIsNull(*symbolicator)) {
+    if (!CSIsNull(gSymbolicator)) {
+      *symbolicator = gSymbolicator;
+    } else {
+      // 0x40e0000 is the value returned by
+      // uint32_t CSSymbolicatorGetFlagsForNListOnlyData(void).  We don't use
+      // this method directly because it doesn't exist on OS X 10.6.  Unless
+      // we limit ourselves to NList data, it will take too long to get a
+      // stack trace where Dwarf debugging info is available (about 15 seconds
+      // with Firefox).  This means we won't be able to get a CSSourceInfoRef,
+      // or line number information.  Oh well.
+      *symbolicator =
+        CSSymbolicatorCreateWithTaskFlagsAndNotification(mach_task_self(), 0x40e0000, 0);
+      if (!CSIsNull(*symbolicator)) {
+        retval = true;
+      }
+    }
+  }
+  return retval;
+}
+
+const char *GetOwnerName(void *address, CSTypeRef owner)
+{
+  static char holder[1024] = {0};
+
+  const char *ownerName = "unknown";
+
+  bool symbolicatorNeedsRelease = false;
+  CSSymbolicatorRef symbolicator = {0};
+
+  if (CSIsNull(owner)) {
+    symbolicatorNeedsRelease = GetSymbolicator(&symbolicator);
+    if (!CSIsNull(symbolicator)) {
+      owner = CSSymbolicatorGetSymbolOwnerWithAddressAtTime(
+                symbolicator,
+                (unsigned long long) address,
+                kCSNow);
+    }
+  }
+
+  if (!CSIsNull(owner)) {
+    ownerName = CSSymbolOwnerGetName(owner);
+  }
+
+  snprintf(holder, sizeof(holder), "%s", ownerName);
+  if (symbolicatorNeedsRelease) {
+    CSRelease(symbolicator);
+  }
+
+  return holder;
+}
+
+const char *GetAddressString(void *address, CSTypeRef owner)
+{
+  static char holder[1024] = {0};
+
+  const char *addressName = "unknown";
+  unsigned long long addressOffset = 0;
+  bool addressOffsetIsBaseAddress = false;
+
+  bool symbolicatorNeedsRelease = false;
+  CSSymbolicatorRef symbolicator = {0};
+
+  if (CSIsNull(owner)) {
+    symbolicatorNeedsRelease = GetSymbolicator(&symbolicator);
+    if (!CSIsNull(symbolicator)) {
+      owner = CSSymbolicatorGetSymbolOwnerWithAddressAtTime(
+                symbolicator,
+                (unsigned long long) address,
+                kCSNow);
+    }
+  }
+
+  if (!CSIsNull(owner)) {
+    CSSymbolRef symbol =
+      CSSymbolOwnerGetSymbolWithAddress(owner, (unsigned long long) address);
+    if (!CSIsNull(symbol)) {
+      addressName = CSSymbolGetName(symbol);
+      CSRange range = CSSymbolGetRange(symbol);
+      addressOffset = (unsigned long long) address;
+      if (range.location <= addressOffset) {
+        addressOffset -= range.location;
+      } else {
+        addressOffsetIsBaseAddress = true;
+      }
+    } else {
+      addressOffset = (unsigned long long) address;
+      unsigned long long baseAddress = CSSymbolOwnerGetBaseAddress(owner);
+      if (baseAddress <= addressOffset) {
+        addressOffset -= baseAddress;
+      } else {
+        addressOffsetIsBaseAddress = true;
+      }
+    }
+  }
+
+  if (addressOffsetIsBaseAddress) {
+    snprintf(holder, sizeof(holder), "%s 0x%llx",
+             addressName, addressOffset);
+  } else {
+    snprintf(holder, sizeof(holder), "%s + 0x%llx",
+             addressName, addressOffset);
+  }
+  if (symbolicatorNeedsRelease) {
+    CSRelease(symbolicator);
+  }
+
+  return holder;
+}
+
+void PrintAddress(void *address, CSTypeRef symbolicator)
+{
+  const char *ownerName = "unknown";
+  const char *addressString = "unknown + 0";
+
+  bool symbolicatorNeedsRelease = false;
+  CSSymbolOwnerRef owner = {0};
+
+  if (CSIsNull(symbolicator)) {
+    symbolicatorNeedsRelease = GetSymbolicator(&symbolicator);
+    if (!CSIsNull(symbolicator)) {
+      owner = CSSymbolicatorGetSymbolOwnerWithAddressAtTime(
+                symbolicator,
+                (unsigned long long) address,
+                kCSNow);
+    }
+  }
+
+  if (!CSIsNull(symbolicator)) {
+      owner = CSSymbolicatorGetSymbolOwnerWithAddressAtTime(
+                symbolicator,
+                (unsigned long long) address,
+                kCSNow);
+  }
+
+  if (!CSIsNull(owner)) {
+    ownerName = GetOwnerName(address, owner);
+    addressString = GetAddressString(address, owner);
+  }
+  LogWithFormat(false, "    (%s) %s", ownerName, addressString);
+
+  if (symbolicatorNeedsRelease) {
+    CSRelease(symbolicator);
+  }
+}
+
+#define STACK_MAX 256
+
+void PrintStackTrace()
+{
+  if (!CanUseCF()) {
+    return;
+  }
+
+  void **addresses = (void **) calloc(STACK_MAX, sizeof(void *));
+  if (!addresses) {
+    return;
+  }
+
+  CSSymbolicatorRef symbolicator = {0};
+  bool symbolicatorNeedsRelease = GetSymbolicator(&symbolicator);
+  if (CSIsNull(symbolicator)) {
+    free(addresses);
+    return;
+  }
+
+  uint32_t count = backtrace(addresses, STACK_MAX);
+  for (uint32_t i = 0; i < count; ++i) {
+    PrintAddress(addresses[i], symbolicator);
+  }
+
+  if (symbolicatorNeedsRelease) {
+    CSRelease(symbolicator);
+  }
+  free(addresses);
+}
+
+BOOL SwizzleMethods(Class aClass, SEL orgMethod, SEL posedMethod, BOOL classMethods)
+{
+  Method original = nil;
+  Method posed = nil;
+
+  if (classMethods) {
+    original = class_getClassMethod(aClass, orgMethod);
+    posed = class_getClassMethod(aClass, posedMethod);
+  } else {
+    original = class_getInstanceMethod(aClass, orgMethod);
+    posed = class_getInstanceMethod(aClass, posedMethod);
+  }
+
+  if (!original || !posed)
+    return NO;
+
+  method_exchangeImplementations(original, posed);
+
+  return YES;
+}
