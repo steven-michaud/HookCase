@@ -85,6 +85,6 @@ method as a process starts up, perform our own initialization, then
 allow the original `dyld::InitializeMainExecutable()` method to run
 (which, among other things, runs the process's C++ initializers).
 
-For more information, the best place to start is the long series of
-comments in `HookCase.cpp` before the definition of
-`C_64_REDZONE_LEN`.
+For more information, the best place to start is the
+[long series of comments](HookCase/HookCase/HookCase.cpp#L5978)
+in `HookCase.cpp` before the definition of `C_64_REDZONE_LEN`.

@@ -57,8 +57,9 @@ each named for an application that uses the App Sandbox (for example
 needs to (re)generate it.  Among other things this involves a call to
 `sandbox_compile_entitlements()`.
 
-`Examples/secinit` includes two hook libraries, one
-(`secinitd-hook.dylib`) for `secinitd` and the other (`hook.dylib`)
+[`Examples/secinit`](Examples/secinit/) includes two hook libraries,
+one ([`secinitd-hook.dylib`](Examples/secinit/secinitd-hook.mm)) for
+`secinitd` and the other ([`hook.dylib`](Examples/secinit/hook.mm))
 for its possible clients.
 
 As `secinitd` is a system daemon, making it load a hook library takes

@@ -11,8 +11,8 @@ the XPC service over itself (so that the XPC service keeps the same
 process id as `xpcproxy`).
 
 You can see all this in action by building and using the hook library
-under `Examples/xpcproxy`.  There's more information in the hook
-library's comments.
+under [`Examples/xpcproxy`](Examples/xpcproxy/).  There's more
+information in the hook library's comments.
 
 Once the hook library is built, you should use it with an application
 (like Safari) that uses XPC services.  Here's one way to do that, from

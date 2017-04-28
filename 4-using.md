@@ -4,8 +4,9 @@ To use HookCase (once it's loaded into the kernel) you need to write
 an "interpose library" (aka a "hook library") containing hook
 functions for the methods you wish to hook.  The syntax is very
 similar to that of `DYLD_INSERT_LIBRARIES` interpose libraries.
-There's a annotated template in `HookLibraryTemplate`, and there are
-more examples under `Examples`.
+There's a annotated template in
+[`HookLibraryTemplate`](HookLibraryTemplate/), and there are more
+examples under [`Examples`](Examples/).
 
 Once you have a hook library, you need to set environment variables to
 load it into a new process and to determine how it behaves there.

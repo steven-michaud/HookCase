@@ -13,20 +13,21 @@ Applications pull them from `WindowServer` (a system daemon from the
 
 It can be extremely useful to know what kinds of events are delivered
 to applications, and how they get there.  The hook library in
-`Examples/events` provides a comprehensive overview.  To get a more
-detailed view of particular kinds of events, you'll want to comment
-out some hooks and add more logging.
+[`Examples/events`](Examples/events/) provides a comprehensive
+overview.  To get a more detailed view of particular kinds of events,
+you'll want to comment out some hooks and add more logging.
 
-The `Examples/events` hook library is also a good example of the
-additional work needed to successfully hook non-exported methods in
-32-bit mode.  These often use a non-standard ABI to speed things up --
-something called `fastcc`.  If we hook such methods, our hooks will
-crash unless we also use that ABI.  The basic rules are to put the
-first two integer/pointer parameters into `ECX` and `EDX`, and to put
-floating point parameters into the `XMM` registers.  Also, `fastcc` is
-never used with `varargs` functions.  But it's only for internal use,
-and is deliberately non-standardized.  Moreover clang chooses on its
-own which methods to "optimize" using `fastcc`.
+The [`Examples/events`](Examples/events/) hook library is also a good
+example of the additional work needed to successfully hook
+non-exported methods in 32-bit mode.  These often use a non-standard
+ABI to speed things up -- something called `fastcc`.  If we hook such
+methods, our hooks will crash unless we also use that ABI.  The basic
+rules are to put the first two integer/pointer parameters into `ECX`
+and `EDX`, and to put floating point parameters into the `XMM`
+registers.  Also, `fastcc` is never used with `varargs` functions.
+But it's only for internal use, and is deliberately non-standardized.
+Moreover clang chooses on its own which methods to "optimize" using
+`fastcc`.
 
 So working with `fastcc` can be tricky.  For every private method you
 wish to hook in 32-bit mode, you'll need to use a disassembler (like
