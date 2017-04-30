@@ -6004,7 +6004,7 @@ bool ensure_user_region_wired(vm_map_t map, vm_map_offset_t start,
 // All hooks (if any) that existed before a process is "exec"-ed get deleted
 // when that happens.
 
-// Every cast hook has five "legal" states it may be in at any given time.
+// Every cast hook has four "legal" states it may be in at any given time.
 // These correspond to where we are in the work needed to create user hooks
 // for a given process.
 //
@@ -6013,7 +6013,7 @@ bool ensure_user_region_wired(vm_map_t map, vm_map_offset_t start,
 // We've set a breakpoint in the process's embedded copy of dyld (in
 // maybe_cast_hook()), and are waiting for it to be hit for the first time.
 //
-// hook_state_rising
+// hook_state_flying
 //
 // We've hit the breakpoint once, and (in process_hook_cast()) have set up a
 // call to dlopen() to load our hook library.  We've also set another hook to
@@ -6022,33 +6022,24 @@ bool ensure_user_region_wired(vm_map_t map, vm_map_offset_t start,
 // hook methods they call.)  Now we're waiting for the call to dlopen() to
 // finish, and for the breakpoint to be hit a second time.
 //
-// hook_state_falling
-//
-// We've hit the breakpoint a second time, and the call to dlopen() has
-// succeeded or failed.  In process_hook_rising() we've unset the hook that
-// prevents calls to C++ initializers.  If the call to dlopen() succeeded,
-// we've looked for hook descriptions in the hook library and have tried to
-// set user hooks accordingly.  If the call to dlopen() failed, or we didn't
-// find any valid hook descriptions, we'll have unset our breakpoint and
-// deleted the cast hook.  In that case we won't have reached this point.  But
-// otherwise we've set up a call to run the hook library's C++ initializers
-// (and those of its dependencies) before those of any other modules, and are
-// waiting for the breakpoint to be hit a third time.
-//
 // hook_state_landed
 //
-// We've hit the breakpoint a third time, and our hook library's C++
-// initializers have been called.  If there was no more work to do we'll have
-// unset our breakpoint and deleted the cast hook, and won't have reached this
-// point.  But if there might be more work to do in the future (on modules
-// that haven't yet been loaded), we've set up a call to
-// _dyld_register_func_for_add_image() (in process_hook_falling()), and are
-// waiting for our breakpoint to be hit a fourth time.  If it succeeds,
-// on_add_image() will be called every time a new module is loaded.
+// We've hit the breakpoint a second time, and the call to dlopen() has
+// succeeded or failed.  If it succeeded we've looked for hook descriptions
+// in the hook library and have tried to set user hooks accordingly (in
+// process_hook_flying()).  We've also unset the hook that prevents calls to
+// C++ initializers.  If there was no more work to do (whether we succeeded or
+// failed), we'll have unset our breakpoint and deleted the cast hook.  In
+// that case we won't have reached this point.  But if there might be more
+// work to do in the future (on modules that haven't yet been loaded), we've
+// set up a call to _dyld_register_func_for_add_image(), and are waiting for
+// our breakpoint to be hit a third time (indicating the call has happened).
+// If it succeeds, on_add_image() will be called every time a new module is
+// loaded.
 //
 // hook_state_floating
 //
-// We've hit the breakpoint a fourth time, and the call to
+// We've hit the breakpoint a third time, and the call to
 // _dyld_register_func_for_add_image() has happened (we don't know whether it
 // succeeded or failed).  In process_hook_landed() we've unset the breakpoint
 // we set in maybe_cast_hook().  Our hook_t structure is being kept alive for
@@ -6103,13 +6094,12 @@ bool ensure_user_region_wired(vm_map_t map, vm_map_offset_t start,
 //   4) Set the stack's "return address" to dyld::InitializeMainExecutable()
 //   5) Set RIP/EIP to dlopen()
 //
-// Later, in process_hook_rising(), we may set up another call, to
-// dyld::runInitializers().  And in process_hook_landed() we may set up a
-// call to _dyld_register_func_for_add_image().  This time we need user mode
-// code for this method's 'func' argument.  We allocate a page of kernel
-// memory and copy to it the appropriate machine code (which contains an
-// "int 0x21" instruction).  Then we remap that page into the user process and
-// set the 'func' argument accordingly.  We also set RIP/EIP to
+// Later, in process_hook_landed(), we may set up another call, to
+// _dyld_register_func_for_add_image().  This time we need user mode code for
+// this method's 'func' argument.  We allocate a page of kernel memory and
+// copy to it the appropriate machine code (which contains an "int 0x21"
+// instruction).  Then we remap that page into the user process and set the
+// 'func' argument accordingly.  We also set RIP/EIP to
 // _dyld_register_func_for_add_image() and the "return address" to
 // dyld::InitializeMainExecutable().  Our int 0x21 handler calls
 // on_add_image().
@@ -6175,15 +6165,12 @@ typedef struct _hook_desc {
 typedef enum {
   hook_state_broken   = 0,
   hook_state_cast     = 1, // Only for cast hooks
-  hook_state_rising   = 2, // Only for cast hooks
-  hook_state_falling  = 3, // Only for cast hooks
-  hook_state_landed   = 4, // Only for cast hooks
-  hook_state_floating = 5, // Only for cast hooks
-  hook_state_set      = 6, // Only for patch hooks
-  hook_state_unset    = 7, // Only for patch hooks
+  hook_state_flying   = 2, // Only for cast hooks
+  hook_state_landed   = 3, // Only for cast hooks
+  hook_state_floating = 4, // Only for cast hooks
+  hook_state_set      = 5, // Only for patch hooks
+  hook_state_unset    = 6, // Only for patch hooks
 } hook_state;
-
-//hook_state_flying   = 2, // Only for cast hooks
 
 typedef struct _hook {
   LIST_ENTRY(_hook) list_entry;
@@ -6844,7 +6831,10 @@ bool maybe_cast_hook(proc_t proc)
 
 // Our breakpoint at dyld::initializeMainExecutable() has been hit for the
 // first time.  Set up a call to dlopen() our hook library and wait for it to
-// be hit again, triggering a call to process_hook_flying().
+// be hit again, triggering a call to process_hook_flying().  Also hook
+// dyld::runInitializers() to prevent the call to dlopen() from triggering any
+// calls to C++ initializers.  (Otherwise some of those initializers would run
+// before we had a chance to hook methods they call.)
 void process_hook_cast(hook_t *hookp, x86_saved_state_t *intr_state)
 {
   if (!hookp || !intr_state) {
@@ -6853,8 +6843,11 @@ void process_hook_cast(hook_t *hookp, x86_saved_state_t *intr_state)
 
   hookp->state = hook_state_broken;
 
-  proc_t proc = current_proc();
+  if (!hookp->dyld_runInitializers) {
+    return;
+  }
 
+  proc_t proc = current_proc();
   vm_map_t proc_map = task_map_for_proc(proc);
   if (!proc_map) {
     return;
@@ -6971,7 +6964,7 @@ void process_hook_cast(hook_t *hookp, x86_saved_state_t *intr_state)
                sizeof(new_code), true, false);
 
   vm_map_deallocate(proc_map);
-  hookp->state = hook_state_rising;
+  hookp->state = hook_state_flying;
 
 #ifdef DEBUG_LOG
   sm_report_t report;
@@ -8042,20 +8035,25 @@ bool set_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp)
 
   thread_interrupt_level(old_state);
 
+  if (!check_for_pending_user_hooks(patch_hooks, num_patch_hooks,
+                                    interpose_hooks, num_interpose_hooks))
+  {
+    retval = false;
+  }
+
   return retval;
 }
 
 // Our breakpoint at dyld::initializeMainExecutable() has been hit for the
-// second time.  Unset our hook at dyld::runInitializers().  If dlopen()
-// loaded our hook library, try to set the user hooks it describes.  If we're
-// unable to do this, delete our cast hook, unset our breakpoint at
-// dyld::initializeMainExecutable(), and pay no further attention to the
-// current user process.  Otherwise set up a call to dyld::runInitializers()
-// (now unblocked) to run our hook library's C++ initializers (and those of
-// its dependencies) before those of any other modules.  Then wait for our
-// dyld::initializeMainExecutable() breakpoint to be hit again, triggering a
-// call to process_hook_falling() below.
-void process_hook_rising(hook_t *hookp, x86_saved_state_t *intr_state)
+// second time.  If dlopen() loaded our hook library, try to set the hooks it
+// describes.  Then if there's no more to do, delete our cast hook, unset our
+// breakpoint at dyld::initializeMainExecutable(), and pay no further
+// attention to the current user process.  Otherwise set up a call to
+// _dyld_register_func_for_add_image(), which (if it succeeds) will trigger
+// calls to on_add_image() (below) whenever a new module is loaded.  Then wait
+// for our dyld::initializeMainExecutable() breakpoint to be hit again,
+// triggering a call to process_hook_landed() below.
+void process_hook_flying(hook_t *hookp, x86_saved_state_t *intr_state)
 {
   if (!hookp || !intr_state) {
     return;
@@ -8074,6 +8072,10 @@ void process_hook_rising(hook_t *hookp, x86_saved_state_t *intr_state)
   }
 
   // Unset our hook at dyld::runInitializers(), and stop blocking calls to it.
+  // Our hook library's C++ initializers (and those of its dependencies) will
+  // run along with those from the remaining modules in our host process, when
+  // dyld::runInitializers() is called again from
+  // dyld::initializeMainExecutable().
   uint16_t orig_code;
   if (intr_state->flavor == x86_SAVED_STATE64) {
     orig_code = PROLOGUE_BEGIN_64BIT_SHORT;
@@ -8097,17 +8099,17 @@ void process_hook_rising(hook_t *hookp, x86_saved_state_t *intr_state)
   // dyld::initializeMainExecutable() breakpoint for the first time.
   memcpy(intr_state, &hookp->orig_intr_state, sizeof(x86_saved_state_t));
 
-  bool user_hooks_installed = false;
+  bool user_hooks_pending = false;
   if (dlopen_result) {
     if (set_hooks(proc, proc_map, hookp)) {
-      user_hooks_installed = true;
+      user_hooks_pending = true;
     }
   } else {
-    printf("HookCase(%s[%d]): process_hook_rising(): Library \"%s\" not found or can't be loaded\n",
+    printf("HookCase(%s[%d]): process_hook_flying(): Library \"%s\" not found or can't be loaded\n",
            procname, proc_pid(proc), hookp->inserted_dylib_path);
   }
 
-  if (!user_hooks_installed) {
+  if (!user_hooks_pending) {
     if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
                      sizeof(hookp->orig_code), true, false))
     {
@@ -8122,134 +8124,8 @@ void process_hook_rising(hook_t *hookp, x86_saved_state_t *intr_state)
 #ifdef DEBUG_LOG
     sm_report_t report;
     snprintf(report, sizeof(report),
-             "process_hook_rising(): No user hooks installed, pid \'%d\', unique_pid \'%lld\', dlopen_result \'0x%llx\'",
+             "process_hook_flying(): pid \'%d\', unique_pid \'%lld\', dlopen_result \'0x%llx\'",
               proc_pid(proc), proc_uniqueid(proc), dlopen_result);
-    do_report(report);
-#endif
-
-    remove_hook(hookp);
-    return;
-  }
-
-  if (intr_state->flavor == x86_SAVED_STATE64) {
-    user_addr_t stack_base = intr_state->ss_64.isf.rsp;
-    stack_base -= C_64_REDZONE_LEN;
-    // In 64-bit mode the stack needs to be 16-byte aligned.  We also need to
-    // ensure that RBP will get the same alignment, to prevent GPFs when
-    // reads/writes are made between stack variables and SSE registers.  As it
-    // happens the standard no-argument stack frame does this just fine.
-    stack_base &= 0xfffffffffffffff0;
-    stack_base -= sizeof(uint64_t);
-    user_addr_t return_address = stack_base;
-    if (!proc_copyout(proc_map, &hookp->orig_addr,
-                      return_address, sizeof(uint64_t), false, true))
-    {
-      if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
-                       sizeof(hookp->orig_code), true, false))
-      {
-        intr_state->ss_64.isf.rip = hookp->orig_addr;
-      }
-      vm_map_deallocate(proc_map);
-      remove_hook(hookp);
-      return;
-    }
-    intr_state->ss_64.isf.rsp = stack_base;
-    intr_state->ss_64.rdi = dlopen_result;
-    intr_state->ss_64.isf.rip = hookp->dyld_runInitializers;
-    // Note for future reference:  In 64-bit mode there's a varargs ABI that
-    // requires AL to be set to how many SSE registers contain arguments.
-    // dyld_register_func_for_add_image() doesn't use varargs, but we might
-    // also want to insert calls to other functions that do.
-    //intr_state->ss_64.rax = 0;
-  } else {     // flavor == x86_SAVED_STATE32
-    user32_addr_t stack_base = intr_state->ss_32.uesp;
-    // As best I can tell, the stack doesn't need to be 16- or 8-byte aligned
-    // in 32-bit mode.  But we do need to ensure that EBP will be 8 bytes off
-    // of 16-byte aligned.  The machine code written by Apple's compilers to
-    // read/write between stack variables and SSE registers assumes this.  So
-    // if we break this rule, these instructions will GPF because the memory
-    // addresses aren't 16-byte aligned.
-    stack_base &= 0xfffffff0;
-    stack_base -= 12;
-    uint32_t args[2];
-    args[1] = (uint32_t) dlopen_result;
-    args[0] = (uint32_t) hookp->orig_addr;
-    stack_base -= sizeof(args);
-    user32_addr_t args_base = stack_base;
-    if (!proc_copyout(proc_map, args, args_base, sizeof(args), false, true)) {
-      if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
-                       sizeof(hookp->orig_code), true, false))
-      {
-        intr_state->ss_32.eip = (uint32_t) hookp->orig_addr;
-      }
-      vm_map_deallocate(proc_map);
-      remove_hook(hookp);
-      return;
-    }
-    intr_state->ss_32.uesp = stack_base;
-    intr_state->ss_32.eip = (uint32_t) hookp->dyld_runInitializers;
-  }
-
-  vm_map_deallocate(proc_map);
-  hookp->state = hook_state_falling;
-
-#ifdef DEBUG_LOG
-  sm_report_t report;
-  snprintf(report, sizeof(report),
-           "process_hook_rising(): User hooks installed, pid \'%d\', unique_pid \'%lld\', dlopen_result \'0x%llx\'",
-           proc_pid(proc), proc_uniqueid(proc), dlopen_result);
-  do_report(report);
-#endif
-}
-
-// Our breakpoint at dyld::initializeMainExecutable() has been hit for the
-// third time.  Our hook library's C++ initializers have been called.  If
-// there's no more to do, delete our cast hook, unset our breakpoint at
-// dyld::initializeMainExecutable(), and pay no further attention to the
-// current user process.  Otherwise set up a call to
-// _dyld_register_func_for_add_image(), which (if it succeeds) will trigger
-// calls to on_add_image() (below) whenever a new module is loaded.  Then wait
-// for our dyld::initializeMainExecutable() breakpoint to be hit again,
-// triggering a call to process_hook_landed() below.
-void process_hook_falling(hook_t *hookp, x86_saved_state_t *intr_state)
-{
-  if (!hookp || !intr_state) {
-    return;
-  }
-
-  hookp->state = hook_state_broken;
-
-  proc_t proc = current_proc();
-  vm_map_t proc_map = task_map_for_proc(proc);
-  if (!proc_map) {
-    return;
-  }
-
-  // Reset the thread state to what it was just before we hit our
-  // dyld::initializeMainExecutable() breakpoint for the first time.
-  memcpy(intr_state, &hookp->orig_intr_state, sizeof(x86_saved_state_t));
-
-  if (!check_for_pending_user_hooks(hookp->patch_hooks,
-                                    hookp->num_patch_hooks,
-                                    hookp->interpose_hooks,
-                                    hookp->num_interpose_hooks))
-  {
-    if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
-                     sizeof(hookp->orig_code), true, false))
-    {
-      if (intr_state->flavor == x86_SAVED_STATE64) {
-        intr_state->ss_64.isf.rip = hookp->orig_addr;
-      } else {     // flavor == x86_SAVED_STATE32
-        intr_state->ss_32.eip = (uint32_t) hookp->orig_addr;
-      }
-    }
-    vm_map_deallocate(proc_map);
-
-#ifdef DEBUG_LOG
-    sm_report_t report;
-    snprintf(report, sizeof(report),
-             "process_hook_falling(): No pending user hooks, pid \'%d\', unique_pid \'%lld\'",
-              proc_pid(proc), proc_uniqueid(proc));
     do_report(report);
 #endif
 
@@ -8374,14 +8250,14 @@ void process_hook_falling(hook_t *hookp, x86_saved_state_t *intr_state)
 #ifdef DEBUG_LOG
   sm_report_t report;
   snprintf(report, sizeof(report),
-           "process_hook_falling(): Pending user hooks, pid \'%d\', unique_pid \'%lld\'",
-           proc_pid(proc), proc_uniqueid(proc));
+           "process_hook_flying(): pid \'%d\', unique_pid \'%lld\', dlopen_result \'0x%llx\'",
+           proc_pid(proc), proc_uniqueid(proc), dlopen_result);
   do_report(report);
 #endif
 }
 
 // Our breakpoint at dyld::initializeMainExecutable() has been hit for the
-// fourth time.  Unset that breakpoint and keep our cast hook alive for future
+// third time.  Unset that breakpoint and keep our cast hook alive for future
 // reference.  Also resume our parent task, if we suspended it above in
 // maybe_cast_hook() above.
 void process_hook_landed(hook_t *hookp, x86_saved_state_t *intr_state)
@@ -8549,11 +8425,8 @@ void check_hook_state(x86_saved_state_t *intr_state)
     case hook_state_cast:
       process_hook_cast(hookp, intr_state);
       break;
-    case hook_state_rising:
-      process_hook_rising(hookp, intr_state);
-      break;
-    case hook_state_falling:
-      process_hook_falling(hookp, intr_state);
+    case hook_state_flying:
+      process_hook_flying(hookp, intr_state);
       break;
     case hook_state_landed:
       process_hook_landed(hookp, intr_state);
