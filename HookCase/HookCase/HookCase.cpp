@@ -7475,7 +7475,7 @@ bool get_code_buffer(const char *code_string, char **buffer,
     IOFree(code_string_local, string_len);
     return false;
   }
-  bzero(buffer_local, sizeof(buffer_local));
+  bzero(buffer_local, buf_len_local);
 
   int i;
   char *code_string_iterator = code_string_local;
