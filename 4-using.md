@@ -17,6 +17,8 @@ Here are the environment variables that HookCase pays attention to:
 
 * `HC_NOKIDS` - Don't effect child processes
 
+* `HC_NO_NUMERICAL_ADDRS` - Disable numerical address naming convention
+
 By default, if HookCase sets hooks in a parent process, it will also
 set them in all its child processes.  But if you set `HC_NOKIDS` (to
 any value), HookCase only effects the parent process (not its
@@ -31,3 +33,14 @@ child processes of Apple applications (like Safari) are often XPC
 services, which don't inherit their parent's environment.  HookCase
 can keep track of "XPC children", but only on OS X 10.11 and up (not
 on OS X 10.10 (Yosemite) or 10.9 (Mavericks)).
+
+HookCase now supports creating a patch hook for an (un-named) method
+at a particular address in a given module.  (For more information see
+[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L810).)
+So, for example, creating a patch hook for a function named
+"sub_123abc" would (by default) specify that the hook should be
+inserted at offset 0x123abc (hexadecimal notation) in the module.  But
+this convention prevents you from creating a patch hook for a method
+that's actually named "sub_123abc" (in its module's symbol table).  To
+do so, you'll need turn off this behavior by setting the
+`HC_NO_NUMERICAL_ADDRS` environment variable.

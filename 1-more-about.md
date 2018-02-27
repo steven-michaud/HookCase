@@ -16,11 +16,13 @@ link methods called from other modules.  So they can only be used to
 hook "cross-module" calls to exported methods.
 
 HookCase supports interpose hooks.  But it also supports another, more
-powerful kind of hook that we call "patch hooks".  These hook calls to
-any method defined in any module's symbol table, including ones that
-come from the same module.  And they can be used with non-exported
-(aka private) methods -- ones not intended for use by external
-modules.
+powerful kind of hook that we call "patch hooks".  These can hook
+calls to a method named in its module's symbol table, including ones
+that come from the same module.  They can also hook calls to an
+unnamed method (one that isn't in its module's symbol table), by
+specifying the method's address in its module.  So they can be used
+with non-exported (aka private) methods (named and unnamed) -- ones
+not intended for use by external modules.
 
 Patch hooks are so-called because we set them up by "patching" the
 beginning of an original method with a software interrupt instruction
@@ -62,12 +64,12 @@ on the same method, or try to step through code that contains a patch
 hook.
 
 Apple's support for `DYLD_INSERT_LIBRARIES` is implemented in
-[`/usr/lib/dyld`](https://opensource.apple.com/source/dyld/dyld-433.5/).
+[`/usr/lib/dyld`](https://opensource.apple.com/source/dyld/dyld-519.2.2/).
 A (shared) copy of this module gets loaded into the image of every new
 process before it starts running.  `dyld`'s `man` page calls it the
 "dynamic link editor", and it's what runs first (starting from
 `_dyld_start` in `dyld`'s
-[`src/dyldStartup.s`](https://opensource.apple.com/source/dyld/dyld-433.5/src/dyldStartup.s.auto.html))
+[`src/dyldStartup.s`](https://opensource.apple.com/source/dyld/dyld-519.2.2/src/dyldStartup.s.auto.html))
 as a new process starts up.  Once `dyld` has finished its work, it
 jumps to the new process's `main()` method.
 
@@ -80,11 +82,11 @@ in `dyld`, and "call" code in it indirectly.  The best time to
 intervene is after `dyld` has finished most of its initialization, but
 before any of the new process's "own" code has run (including its C++
 initializers).  This is when `dyld`'s
-`dyld::InitializeMainExecutable()` method runs.  So we hook that
+`dyld::initializeMainExecutable()` method runs.  So we hook that
 method as a process starts up, perform our own initialization, then
 allow the original `dyld::InitializeMainExecutable()` method to run
 (which, among other things, runs the process's C++ initializers).
 
 For more information, the best place to start is the
-[long series of comments](HookCase/HookCase/HookCase.cpp#L5978)
+[long series of comments](HookCase/HookCase/HookCase.cpp#L6144)
 in `HookCase.cpp` before the definition of `C_64_REDZONE_LEN`.

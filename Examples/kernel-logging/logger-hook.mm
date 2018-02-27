@@ -37,7 +37,7 @@
 // B) From gdb:
 //    1) set HC_INSERT_LIBRARY /full/path/to/hook.dylib
 //    2) run
-// 
+//
 // C) From lldb:
 //    1) env HC_INSERT_LIBRARY=/full/path/to/hook.dylib
 //    2) run
@@ -62,7 +62,11 @@ extern "C" {
 #include <libgen.h>
 #include <execinfo.h>
 
+#include <libkern/OSAtomic.h>
 #include <xpc/xpc.h>
+#include <dispatch/dispatch.h>
+#include <uuid/uuid.h>
+#include <sys/rbtree.h>
 
 pthread_t gMainThreadID = 0;
 
@@ -203,7 +207,6 @@ typedef struct _CSTypeRef {
 
 static CSTypeRef initializer = {0};
 
-void CreateGlobalSymbolicator();
 const char *GetOwnerName(void *address, CSTypeRef owner = initializer);
 const char *GetAddressString(void *address, CSTypeRef owner = initializer);
 void PrintAddress(void *address, CSTypeRef symbolicator = initializer);
@@ -750,12 +753,11 @@ static void InitSwizzling();
 loadHandler::loadHandler()
 {
   basic_init();
+  InitSwizzling();
 #if (0)
   LogWithFormat(true, "Hook.mm: loadHandler()");
   PrintStackTrace();
 #endif
-
-  InitSwizzling();
 }
 
 loadHandler::~loadHandler()
@@ -769,8 +771,6 @@ loadHandler::~loadHandler()
 }
 
 loadHandler handler = loadHandler();
-
-Class ASBContainerClass = NULL;
 
 static BOOL gMethodsSwizzled = NO;
 static void InitSwizzling()
@@ -787,12 +787,11 @@ static void InitSwizzling()
     SwizzleMethods(ExampleClass, @selector(doSomethingWith:),
                    @selector(Example_doSomethingWith:), NO);
 #endif
-
-    ASBContainerClass = ::NSClassFromString(@"ASBContainer");
-    SwizzleMethods(ASBContainerClass,
-                   @selector(sandboxProfileDataValidationInfo),
-                   @selector(ASBContainer_sandboxProfileDataValidationInfo),
-                   NO);
+    Class OSActivityStreamClass = ::NSClassFromString(@"OSActivityStream");
+    SwizzleMethods(OSActivityStreamClass, @selector(start),
+                   @selector(OSActivityStream_start), NO);
+    SwizzleMethods(OSActivityStreamClass, @selector(streamEvent:error:),
+                   @selector(OSActivityStream_streamEvent:error:), NO);
   }
 }
 
@@ -870,45 +869,10 @@ static int Hooked_interpose_example(char *arg)
 
 // Put other hooked methods and swizzled classes here
 
-typedef struct _compiled {
-  char *builtin_name;
-  void *bytecode;
-  unsigned long bytecode_size;
-  char *trace_path;
-} compiled;
+#pragma mark -
 
-typedef struct _sb_params {
-  char **params;          // Name/value pairs
-  unsigned long items;    // Number of string pointers, always even
-  unsigned long capacity; // Max number of string pointers
-} sb_params;
-
-// Sandbox-specific entitlements are compiled once and cached in app-specific
-// directories under ~/Library/Containers -- for example com.apple.calculator
-// the Calculator app.  If the app-specific cache is missing, it needs to be
-// re-created, which (among other things) involves calling
-// sandbox_compile_entitlements().
-extern "C" compiled *sandbox_compile_entitlements(const char **entitlement_paths,
-                                                  sb_params *sandbox_params,
-                                                  CFDictionaryRef entitlements,
-                                                  char **errorbuf);
-
-compiled *(*sandbox_compile_entitlements_caller)(const char **, sb_params *,
-                                                 CFDictionaryRef, char **) = NULL;
-
-static compiled *Hooked_sandbox_compile_entitlements(const char **entitlement_paths,
-                                                     sb_params *sandbox_params,
-                                                     CFDictionaryRef entitlements,
-                                                     char **errorbuf)
-{
-  compiled *retval =
-    sandbox_compile_entitlements_caller(entitlement_paths, sandbox_params,
-                                        entitlements, errorbuf);
-  LogWithFormat(true, "secinit: sandbox_compile_entitlements(): entitlements %@, returning \'%p\'",
-                entitlements, retval);
-  PrintStackTrace();
-  return retval;
-}
+// Load this hook library into the "Console" app to see how it gets messages
+// from diagnosticd.
 
 static CFMutableDictionaryRef invokers = NULL;
 
@@ -922,6 +886,12 @@ static void ensure_invokers()
   }
 }
 
+// This structure is 0x60 bytes in 64-bit mode and 0x38 bytes in 32-bit mode.
+typedef struct _os_activity_stream {
+  unsigned long pad1[2];
+  xpc_connection_t connection;
+} os_activity_stream, *os_activity_stream_t;
+
 // The general format for block literals is documented in libclosure's
 // BlockImplementation.txt.
 typedef struct _xpc_handler_literal {
@@ -930,21 +900,21 @@ typedef struct _xpc_handler_literal {
   int reserved;
   void (*invoke)(struct _xpc_handler_literal *, xpc_object_t);
   void *descriptor;
-  const xpc_connection_t connection;
+  const os_activity_stream_t stream;
 } xpc_handler_literal, *xpc_handler_literal_t;
 
 typedef void (*xpc_handler_invoke_t)(xpc_handler_literal_t block,
                                      xpc_object_t object);
 
-static void store_connection_invoker(xpc_connection_t connection,
-                                     xpc_handler_invoke_t invoker)
+static void store_stream_invoker(os_activity_stream_t stream,
+                                 xpc_handler_invoke_t invoker)
 {
-  if (!connection || !invoker) {
+  if (!stream || !invoker) {
     return;
   }
   ensure_invokers();
   CFNumberRef key =
-    CFNumberCreate(kCFAllocatorDefault, kCFNumberLongType, &connection);
+    CFNumberCreate(kCFAllocatorDefault, kCFNumberLongType, &stream);
   CFNumberRef value =
     CFNumberCreate(kCFAllocatorDefault, kCFNumberLongType, &invoker);
   if (CFDictionaryContainsKey(invokers, key)) {
@@ -956,13 +926,13 @@ static void store_connection_invoker(xpc_connection_t connection,
   CFRelease(value);
 }
 
-static xpc_handler_invoke_t retrieve_connection_invoker(xpc_connection_t connection)
+static xpc_handler_invoke_t retrieve_stream_invoker(os_activity_stream_t stream)
 {
-  if (!connection || !invokers) {
+  if (!stream || !invokers) {
     return NULL;
   }
   CFNumberRef key =
-    CFNumberCreate(kCFAllocatorDefault, kCFNumberLongType, &connection);
+    CFNumberCreate(kCFAllocatorDefault, kCFNumberLongType, &stream);
   CFNumberRef value = (CFNumberRef)
     CFDictionaryGetValue(invokers, key);
   CFRelease(key);
@@ -977,25 +947,29 @@ static xpc_handler_invoke_t retrieve_connection_invoker(xpc_connection_t connect
 // This is our connection handler hook.  We pass it to
 // xpc_connection_set_event_handler() (below) in place of the original
 // handler.  We also store the original handler's "invoker" so we can call it
-// from here.  If 'object' is a request for information on sandbox-specific
-// entitlements, the original invoker calls xpc_connection_send_message()
-// (below) to send the requested information.  If the information hasn't
-// already been cached (in the appropriate subdirectory of
-// ~/Library/Containers), the invoker also (among other things) calls
-// sandbox_compile_entitlements() (above) to generate and store the requested
-// information.
+// from here.  Every message comes through here, regardless of filtering.
 static void handler_block_invoke(xpc_handler_literal_t block,
                                  xpc_object_t object)
 {
-  xpc_connection_t connection = NULL;
-  if (block && block->connection) {
-    connection = block->connection;
+  os_activity_stream_t stream = NULL;
+  if (block && block->stream) {
+    stream = block->stream;
   }
-  pid_t connection_pid = -1;
-  uid_t connection_uid = -1;
+  xpc_connection_t connection = NULL;
+  if (stream) {
+    connection = stream->connection;
+  }
+  pid_t peer_pid = -1;
+  uid_t peer_uid = -1;
   if (connection) {
-    connection_pid = xpc_connection_get_pid(connection);
-    connection_uid = xpc_connection_get_euid(connection);
+    peer_pid = xpc_connection_get_pid(connection);
+    peer_uid = xpc_connection_get_euid(connection);
+  }
+  char peer_name[PATH_MAX] = {0};
+  if (peer_pid && (peer_pid != -1)) {
+    proc_name(peer_pid, peer_name, sizeof(peer_name));
+  } else {
+    strcpy(peer_name, "none");
   }
 
   char *object_desc = NULL;
@@ -1003,9 +977,9 @@ static void handler_block_invoke(xpc_handler_literal_t block,
     object_desc = xpc_copy_description(object);
   }
 
-  xpc_handler_invoke_t invoke = retrieve_connection_invoker(connection);
-  LogWithFormat(true, "secinit: handler_block_invoke(): connection pid %u, uid %i, invoke %p, object %s",
-                connection_pid, connection_uid, invoke, object_desc ? object_desc : "null");
+  xpc_handler_invoke_t invoke = retrieve_stream_invoker(stream);
+  LogWithFormat(true, "KernelLogging: handler_block_invoke(): peer \"%s(%u)\", uid \'%i\', invoke \'%p\', object \"%s\"",
+                peer_name, peer_pid, peer_uid, invoke, object_desc ? object_desc : "null");
   if (object_desc) {
     free(object_desc);
   }
@@ -1015,100 +989,95 @@ static void handler_block_invoke(xpc_handler_literal_t block,
   }
 }
 
-// xpc_connection_set_event_handler() is called by secinitd to handle messages
-// that it receives from client applications via libsystem_secinit.dylib's
-// initialization code.
-
-void (*xpc_connection_set_event_handler_caller)(xpc_connection_t connection,
-                                                xpc_handler_t handler) = NULL;
-
 static void Hooked_xpc_connection_set_event_handler(xpc_connection_t connection, 
                                                     xpc_handler_t handler)
 {
-  bool is_secinitd = false;
+  bool is_LoggingSupport = false;
   const char *owner_name = GetCallerOwnerName();
-  if (!strcmp(owner_name, "secinitd")) {
-    is_secinitd = true;
+  if (!strcmp(owner_name, "LoggingSupport")) {
+    is_LoggingSupport = true;
   }
 
-  if (is_secinitd) {
+  if (is_LoggingSupport && handler) {
     xpc_handler_literal_t block = (xpc_handler_literal_t) handler;
-    // The first connection received by secinitd is from itself as it starts
-    // up.  Messages on that connection have block->connection set to null.
-    // We're not interested in them.  We *are* interested in messages received
-    // on subsequent connections, each of which is from a new client
-    // application.
-    if (block->connection) {
-      store_connection_invoker(block->connection, block->invoke);
+    if (block->stream) {
+      store_stream_invoker(block->stream, block->invoke);
       block->invoke = handler_block_invoke;
 
-      pid_t connection_pid = xpc_connection_get_pid(connection);
-      uid_t connection_uid = xpc_connection_get_euid(connection);
-      LogWithFormat(true, "secinit: xpc_connection_set_event_handler(): connection pid %u, uid %i",
-                    connection_pid, connection_uid);
+      pid_t peer_pid = -1;
+      uid_t peer_uid = -1;
+      if (connection) {
+        peer_pid = xpc_connection_get_pid(connection);
+        peer_uid = xpc_connection_get_euid(connection);
+      }
+      char peer_name[PATH_MAX] = {0};
+      if (peer_pid && (peer_pid != -1)) {
+        proc_name(peer_pid, peer_name, sizeof(peer_name));
+      } else {
+        strcpy(peer_name, "none");
+      }
+      LogWithFormat(true, "KernelLogging: xpc_connection_set_event_handler(): peer \"%s(%u)\", uid \'%i\'",
+                    peer_name, peer_pid, peer_uid);
       PrintStackTrace();
     }
   }
 
-  xpc_connection_set_event_handler_caller(connection, handler);
+  xpc_connection_set_event_handler(connection, handler);
 }
 
-// Called by secinitd's connection handler (above) to send information on
-// sandbox-specific entitlements to a client application.
-
-void (*xpc_connection_send_message_caller)(xpc_connection_t connection,
-                                           xpc_object_t message) = NULL;
-
-static void Hooked_xpc_connection_send_message(xpc_connection_t connection,
-                                               xpc_object_t message)
+xpc_connection_t Hooked_xpc_connection_create_mach_service(const char *name,
+                                                           dispatch_queue_t targetq,
+                                                           uint64_t flags)
 {
-  bool is_secinitd = false;
+  bool is_LoggingSupport = false;
   const char *owner_name = GetCallerOwnerName();
-  if (!strcmp(owner_name, "secinitd")) {
-    is_secinitd = true;
+  if (!strcmp(owner_name, "LoggingSupport")) {
+    is_LoggingSupport = true;
   }
 
-  if (is_secinitd) {
-    pid_t connection_pid = xpc_connection_get_pid(connection);
-    uid_t connection_uid = xpc_connection_get_euid(connection);
-    char *message_desc = NULL;
-    if (message) {
-      message_desc = xpc_copy_description(message);
-    }
-    LogWithFormat(true, "secinit: xpc_connection_send_message(): connection pid %i, uid %i, message %s",
-                  connection_pid, connection_uid, message_desc ? message_desc : "null");
-    PrintStackTrace();
-    if (message_desc) {
-      free(message_desc);
-    }
-  }
-  
-  xpc_connection_send_message_caller(connection, message);
-}
-
-@interface NSObject (ASBContainerMethodSwizzling)
-- (NSDictionary *)ASBContainer_sandboxProfileDataValidationInfo;
-@end
-
-@implementation NSObject (ASBContainerMethodSwizzling)
-
-// If this method returns NULL, sandboxProfileDataValidationInfo needs to be
-// (re)generated, which (among other things) triggers a call to
-// compile_sandbox_entitlements() (above).
-- (NSDictionary *)ASBContainer_sandboxProfileDataValidationInfo
-{
-  NSDictionary *retval = [self ASBContainer_sandboxProfileDataValidationInfo];
-  if ([self isKindOfClass:ASBContainerClass]) {
-    LogWithFormat(true, "secinit: [ASBContainer sandboxProfileDataValidationInfo]: returning '%p'",
-                  retval);
+  xpc_connection_t retval =
+    xpc_connection_create_mach_service(name, targetq, flags);
+  if (is_LoggingSupport) {
+    LogWithFormat(true, "KernelLogging: xpc_connection_create_mach_service(): name \"%s\", flags \'0x%llx\'",
+                  name, flags);
     PrintStackTrace();
   }
   return retval;
 }
 
+void (*os_activity_stream_resume_caller)(void *arg0) = NULL;
+
+void Hooked_os_activity_stream_resume(void *arg0)
+{
+  os_activity_stream_resume_caller(arg0);
+  LogWithFormat(true, "KernelLogging: os_activity_stream_resume()");
+  PrintStackTrace();
+}
+
+@interface NSObject (OSActivityStreamMethodSwizzling)
+- (void)OSActivityStream_start;
+- (BOOL)OSActivityStream_streamEvent:(id)event error:(id)error;
 @end
 
-#pragma mark -
+@implementation NSObject (OSActivityStreamMethodSwizzling)
+
+- (void)OSActivityStream_start
+{
+  [self OSActivityStream_start];
+  LogWithFormat(true, "KernelLogging: [OSActivityStream start]");
+  PrintStackTrace();
+}
+
+- (BOOL)OSActivityStream_streamEvent:(id)event error:(id)error
+{
+  BOOL retval = [self OSActivityStream_streamEvent:event error:error];
+  LogWithFormat(true, "KernelLogging: [OSActivityStream event:error:]: event %@, error %@",
+                event, error);
+  PrintStackTrace();
+  return retval;
+}
+
+@end
 
 typedef struct _hook_desc {
   const void *hook_function;
@@ -1140,9 +1109,9 @@ __attribute__((used)) static const hook_desc user_hooks[]
   INTERPOSE_FUNCTION(NSPushAutoreleasePool),
   PATCH_FUNCTION(__CFInitialize, /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation),
 
-  PATCH_FUNCTION(sandbox_compile_entitlements, /usr/lib/libsandbox.dylib),
-  PATCH_FUNCTION(xpc_connection_set_event_handler, /usr/lib/system/libxpc.dylib),
-  PATCH_FUNCTION(xpc_connection_send_message, /usr/lib/system/libxpc.dylib),
+  //PATCH_FUNCTION(os_activity_stream_resume, /System/Library/PrivateFrameworks/LoggingSupport.framework/LoggingSupport),
+  INTERPOSE_FUNCTION(xpc_connection_create_mach_service),
+  INTERPOSE_FUNCTION(xpc_connection_set_event_handler),
 };
 
 // What follows are declarations of the CoreSymbolication APIs that we use to

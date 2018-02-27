@@ -7,20 +7,17 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		DF4829B01D8710D400BA7558 /* HookCase.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DF4829AF1D8710D400BA7558 /* HookCase.cpp */; };
-		DFE647A61D89AD4F00111DDF /* HookCase.s in Sources */ = {isa = PBXBuildFile; fileRef = DFE647A51D89AD4F00111DDF /* HookCase.s */; };
+		DF20C594202B9A700069779A /* KernelLogging.c in Sources */ = {isa = PBXBuildFile; fileRef = DF20C593202B9A700069779A /* KernelLogging.c */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		DF4829AC1D8710D400BA7558 /* HookCase.kext */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = HookCase.kext; sourceTree = BUILT_PRODUCTS_DIR; };
-		DF4829AF1D8710D400BA7558 /* HookCase.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = HookCase.cpp; sourceTree = "<group>"; };
-		DF4829B11D8710D400BA7558 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		DFA122D01D89F5C7007F4AB6 /* HookCase.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HookCase.h; sourceTree = "<group>"; };
-		DFE647A51D89AD4F00111DDF /* HookCase.s */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.asm; path = HookCase.s; sourceTree = "<group>"; };
+		DF20C590202B9A700069779A /* KernelLogging.kext */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KernelLogging.kext; sourceTree = BUILT_PRODUCTS_DIR; };
+		DF20C593202B9A700069779A /* KernelLogging.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = KernelLogging.c; sourceTree = "<group>"; };
+		DF20C595202B9A700069779A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		DF4829A81D8710D400BA7558 /* Frameworks */ = {
+		DF20C58C202B9A700069779A /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -30,37 +27,35 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		DF4829A21D8710D400BA7558 = {
+		DF20C586202B9A700069779A = {
 			isa = PBXGroup;
 			children = (
-				DF4829AE1D8710D400BA7558 /* HookCase */,
-				DF4829AD1D8710D400BA7558 /* Products */,
+				DF20C592202B9A700069779A /* KernelLogging */,
+				DF20C591202B9A700069779A /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		DF4829AD1D8710D400BA7558 /* Products */ = {
+		DF20C591202B9A700069779A /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				DF4829AC1D8710D400BA7558 /* HookCase.kext */,
+				DF20C590202B9A700069779A /* KernelLogging.kext */,
 			);
 			name = Products;
 			sourceTree = "<group>";
 		};
-		DF4829AE1D8710D400BA7558 /* HookCase */ = {
+		DF20C592202B9A700069779A /* KernelLogging */ = {
 			isa = PBXGroup;
 			children = (
-				DFA122D01D89F5C7007F4AB6 /* HookCase.h */,
-				DF4829AF1D8710D400BA7558 /* HookCase.cpp */,
-				DFE647A51D89AD4F00111DDF /* HookCase.s */,
-				DF4829B11D8710D400BA7558 /* Info.plist */,
+				DF20C593202B9A700069779A /* KernelLogging.c */,
+				DF20C595202B9A700069779A /* Info.plist */,
 			);
-			path = HookCase;
+			path = KernelLogging;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXHeadersBuildPhase section */
-		DF4829A91D8710D400BA7558 /* Headers */ = {
+		DF20C58D202B9A700069779A /* Headers */ = {
 			isa = PBXHeadersBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -70,56 +65,56 @@
 /* End PBXHeadersBuildPhase section */
 
 /* Begin PBXNativeTarget section */
-		DF4829AB1D8710D400BA7558 /* HookCase */ = {
+		DF20C58F202B9A700069779A /* KernelLogging */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = DF4829B41D8710D400BA7558 /* Build configuration list for PBXNativeTarget "HookCase" */;
+			buildConfigurationList = DF20C598202B9A700069779A /* Build configuration list for PBXNativeTarget "KernelLogging" */;
 			buildPhases = (
-				DF4829A71D8710D400BA7558 /* Sources */,
-				DF4829A81D8710D400BA7558 /* Frameworks */,
-				DF4829A91D8710D400BA7558 /* Headers */,
-				DF4829AA1D8710D400BA7558 /* Resources */,
+				DF20C58B202B9A700069779A /* Sources */,
+				DF20C58C202B9A700069779A /* Frameworks */,
+				DF20C58D202B9A700069779A /* Headers */,
+				DF20C58E202B9A700069779A /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
-			name = HookCase;
-			productName = HookCase;
-			productReference = DF4829AC1D8710D400BA7558 /* HookCase.kext */;
+			name = KernelLogging;
+			productName = KernelLogging;
+			productReference = DF20C590202B9A700069779A /* KernelLogging.kext */;
 			productType = "com.apple.product-type.kernel-extension";
 		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		DF4829A31D8710D400BA7558 /* Project object */ = {
+		DF20C587202B9A700069779A /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
 				LastUpgradeCheck = 0720;
 				TargetAttributes = {
-					DF4829AB1D8710D400BA7558 = {
+					DF20C58F202B9A700069779A = {
 						CreatedOnToolsVersion = 7.2;
 					};
 				};
 			};
-			buildConfigurationList = DF4829A61D8710D400BA7558 /* Build configuration list for PBXProject "HookCase" */;
+			buildConfigurationList = DF20C58A202B9A700069779A /* Build configuration list for PBXProject "KernelLogging" */;
 			compatibilityVersion = "Xcode 3.2";
 			developmentRegion = English;
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
 			);
-			mainGroup = DF4829A21D8710D400BA7558;
-			productRefGroup = DF4829AD1D8710D400BA7558 /* Products */;
+			mainGroup = DF20C586202B9A700069779A;
+			productRefGroup = DF20C591202B9A700069779A /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				DF4829AB1D8710D400BA7558 /* HookCase */,
+				DF20C58F202B9A700069779A /* KernelLogging */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		DF4829AA1D8710D400BA7558 /* Resources */ = {
+		DF20C58E202B9A700069779A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -129,19 +124,18 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		DF4829A71D8710D400BA7558 /* Sources */ = {
+		DF20C58B202B9A700069779A /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				DFE647A61D89AD4F00111DDF /* HookCase.s in Sources */,
-				DF4829B01D8710D400BA7558 /* HookCase.cpp in Sources */,
+				DF20C594202B9A700069779A /* KernelLogging.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
-		DF4829B21D8710D400BA7558 /* Debug */ = {
+		DF20C596202B9A700069779A /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -177,14 +171,13 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 10.9;
 				MTL_ENABLE_DEBUG_INFO = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = macosx;
 			};
 			name = Debug;
 		};
-		DF4829B31D8710D400BA7558 /* Release */ = {
+		DF20C597202B9A700069779A /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -214,39 +207,38 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 10.9;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				SDKROOT = macosx;
 			};
 			name = Release;
 		};
-		DF4829B51D8710D400BA7558 /* Debug */ = {
+		DF20C599202B9A700069779A /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "";
-				INFOPLIST_FILE = HookCase/Info.plist;
+				INFOPLIST_FILE = KernelLogging/Info.plist;
 				INSTALL_PATH = /usr/local/sbin;
-				MODULE_NAME = org.smichaud.HookCase;
-				MODULE_START = HookCase_start;
-				MODULE_STOP = HookCase_stop;
-				MODULE_VERSION = 2.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = org.smichaud.HookCase;
+				MODULE_NAME = org.smichaud.KernelLogging;
+				MODULE_START = KernelLogging_start;
+				MODULE_STOP = KernelLogging_stop;
+				MODULE_VERSION = 1.0.0d1;
+				PRODUCT_BUNDLE_IDENTIFIER = org.smichaud.KernelLogging;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				WRAPPER_EXTENSION = kext;
 			};
 			name = Debug;
 		};
-		DF4829B61D8710D400BA7558 /* Release */ = {
+		DF20C59A202B9A700069779A /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "";
-				INFOPLIST_FILE = HookCase/Info.plist;
+				INFOPLIST_FILE = KernelLogging/Info.plist;
 				INSTALL_PATH = /usr/local/sbin;
-				MODULE_NAME = org.smichaud.HookCase;
-				MODULE_START = HookCase_start;
-				MODULE_STOP = HookCase_stop;
-				MODULE_VERSION = 2.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = org.smichaud.HookCase;
+				MODULE_NAME = org.smichaud.KernelLogging;
+				MODULE_START = KernelLogging_start;
+				MODULE_STOP = KernelLogging_stop;
+				MODULE_VERSION = 1.0.0d1;
+				PRODUCT_BUNDLE_IDENTIFIER = org.smichaud.KernelLogging;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				WRAPPER_EXTENSION = kext;
 			};
@@ -255,25 +247,25 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		DF4829A61D8710D400BA7558 /* Build configuration list for PBXProject "HookCase" */ = {
+		DF20C58A202B9A700069779A /* Build configuration list for PBXProject "KernelLogging" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				DF4829B21D8710D400BA7558 /* Debug */,
-				DF4829B31D8710D400BA7558 /* Release */,
+				DF20C596202B9A700069779A /* Debug */,
+				DF20C597202B9A700069779A /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		DF4829B41D8710D400BA7558 /* Build configuration list for PBXNativeTarget "HookCase" */ = {
+		DF20C598202B9A700069779A /* Build configuration list for PBXNativeTarget "KernelLogging" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				DF4829B51D8710D400BA7558 /* Debug */,
-				DF4829B61D8710D400BA7558 /* Release */,
+				DF20C599202B9A700069779A /* Debug */,
+				DF20C59A202B9A700069779A /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
 	};
-	rootObject = DF4829A31D8710D400BA7558 /* Project object */;
+	rootObject = DF20C587202B9A700069779A /* Project object */;
 }

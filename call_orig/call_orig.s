@@ -1,6 +1,6 @@
 /* The MIT License (MIT)
  *
- * Copyright (c) 2017 Steven Michaud
+ * Copyright (c) 2018 Steven Michaud
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -50,20 +50,22 @@
  *
  * Given that the first N bytes of a breakpointed method are known, we can
  * have the caller "run" them itself, then jump to an address N bytes after
- * the beginning of the breakpointed method.
+ * the beginning of the breakpointed method.  Since the caller's code must
+ * contain the equivalent of a C/C++ prologue, it should be at the caller's
+ * beginning -- otherwise debuggers and crash loggers may get confused.
  *
  * Caller Methods
  *
  * 64-bit                         32-bit
  *
+ * push  %rbp                     push  %ebp
+ * mov   %rsp, %rbp               mov   %esp, %ebp
  * lea   _orig_addr(%rip), %r10   call  L_call_orig_1
  * mov   (%r10), %r10             L_call_orig_1:
  * add   $4, %r10                 pop   %eax
- * push  %rbp                     lea   _orig_addr-L_call_orig_1(%eax), %eax
- * mov   %rsp, %rbp               mov   (%eax), %eax
- * jmp   *%r10                    add   $3, %eax
- *                                push  %ebp
- *                                mov   %esp, %ebp
+ * jmp   *%r10                    lea   _orig_addr-L_call_orig_1(%eax), %eax
+ *                                mov   (%eax), %eax
+ *                                add   $3, %eax
  *                                jmp   *%eax
  *
  * 2) Using RIP/EIP Relative Addressing to Access "Data"
@@ -111,23 +113,23 @@ _stuff:
 
 _call_stuff:
 #ifdef __x86_64__
+  push    %rbp
+  mov     %rsp, %rbp
+
   lea     _stuff_addr(%rip), %r10
   mov     (%r10), %r10
   add     $4, %r10
-
-  push    %rbp
-  mov     %rsp, %rbp
   jmp     *%r10
 #elif  __i386__
+  push    %ebp
+  mov     %esp, %ebp
+
   call    L_call_stuff_1
 L_call_stuff_1:
   pop      %eax
   lea     _stuff_addr-L_call_stuff_1(%eax), %eax
   mov     (%eax), %eax
   add     $3, %eax
-
-  push    %ebp
-  mov     %esp, %ebp
   jmp     *%eax
 #endif
 
@@ -174,23 +176,23 @@ L_main_1:
 
 _call_orig:
 #ifdef __x86_64__
+  push    %rbp
+  mov     %rsp, %rbp
+
   lea     _orig_addr(%rip), %r10
   mov     (%r10), %r10
   add     $4, %r10
-
-  push    %rbp
-  mov     %rsp, %rbp
   jmp     *%r10
 #elif  __i386__
+  push    %ebp
+  mov     %esp, %ebp
+
   call    L_call_orig_1
 L_call_orig_1:
   pop      %eax
   lea     _orig_addr-L_call_orig_1(%eax), %eax
   mov     (%eax), %eax
   add     $3, %eax
-
-  push    %ebp
-  mov     %esp, %ebp
   jmp     *%eax
 #endif
 

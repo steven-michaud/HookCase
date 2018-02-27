@@ -165,7 +165,26 @@ typedef struct cpu_data_fake
   };
   volatile task_map_t cpu_task_map;
   volatile addr64_t cpu_task_cr3;
-  addr64_t cpu_kernel_cr3;
+  union {
+    struct {
+      addr64_t cpu_kernel_cr3;
+    };
+    struct {
+      volatile addr64_t cpu_task_cr3_nokernel;
+      addr64_t cpu_kernel_cr3_kpti;
+      boolean_t cpu_pagezero_mapped;
+      addr64_t cpu_uber_isf;
+      uint64_t cpu_uber_tmp;
+      addr64_t cpu_uber_user_gs_base;
+      addr64_t cpu_user_stack;
+    };
+    struct {
+      addr64_t cpu_kernel_cr3_kpti_bp;
+      volatile addr64_t cpu_task_cr3_nokernel_bp;
+      uint64_t pad3[5];
+      addr64_t cpu_user_stack_bp;
+    };
+  };
 } cpu_data_fake_t;
 
 
@@ -280,6 +299,22 @@ main(
     offsetof(cpu_data_fake_t, cpu_task_cr3));
   DECLARE("CPU_KERNEL_CR3",
     offsetof(cpu_data_fake_t, cpu_kernel_cr3));
+  DECLARE("CPU_TASK_CR3_NOKERNEL",
+    offsetof(cpu_data_fake_t, cpu_task_cr3_nokernel));
+  DECLARE("CPU_KERNEL_CR3_KPTI",
+    offsetof(cpu_data_fake_t, cpu_kernel_cr3_kpti));
+  DECLARE("CPU_UBER_ISF",
+    offsetof(cpu_data_fake_t, cpu_uber_isf));
+  DECLARE("CPU_UBER_TMP",
+    offsetof(cpu_data_fake_t, cpu_uber_tmp));
+  DECLARE("CPU_USER_STACK",
+    offsetof(cpu_data_fake_t, cpu_user_stack));
+  DECLARE("CPU_KERNEL_CR3_KPTI_BP",
+    offsetof(cpu_data_fake_t, cpu_kernel_cr3_kpti_bp));
+  DECLARE("CPU_TASK_CR3_NOKERNEL_BP",
+    offsetof(cpu_data_fake_t, cpu_task_cr3_nokernel_bp));
+  DECLARE("CPU_USER_STACK_BP",
+    offsetof(cpu_data_fake_t, cpu_user_stack_bp));
 
  return (0);
 }

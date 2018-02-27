@@ -1,6 +1,6 @@
 // The MIT License (MIT)
 //
-// Copyright (c) 2017 Steven Michaud
+// Copyright (c) 2018 Steven Michaud
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -35,8 +35,8 @@
 // loaded modules (by changing pointers in the first module's symbol table).
 // HookCase.kext supports this kind of hook, which we call an "interpose hook".
 // But it also supports an even more powerful technique, which can be used to
-// hook any method in any module (even non-exported ones), as long as that
-// method has an entry in its own module's symbol table.  This we call a
+// hook any method in any module (even non-exported ones, and even those that
+// don't have an entry in their own module's symbol table).  This we call a
 // "patch hook", since it requires that we "patch" the beginning of the
 // original method with an assembly language "int 0x20" instruction.  This is
 // analogous to what a debugger does when it sets a breakpoint (though it uses
@@ -163,6 +163,7 @@ extern "C" void *get_bsdtask_info(task_t);
 #define MAC_OS_X_VERSION_10_10_HEX 0x00000E00
 #define MAC_OS_X_VERSION_10_11_HEX 0x00000F00
 #define MAC_OS_X_VERSION_10_12_HEX 0x00001000
+#define MAC_OS_X_VERSION_10_13_HEX 0x00001100
 
 char *gOSVersionString = NULL;
 size_t gOSVersionStringLength = 0;
@@ -223,10 +224,15 @@ bool macOS_Sierra()
   return ((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_10_12_HEX);
 }
 
+bool macOS_HighSierra()
+{
+  return ((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_10_13_HEX);
+}
+
 bool OSX_Version_Unsupported()
 {
   return (((OSX_Version() & 0xFF00) < MAC_OS_X_VERSION_10_9_HEX) ||
-          ((OSX_Version() & 0xFF00) > MAC_OS_X_VERSION_10_12_HEX));
+          ((OSX_Version() & 0xFF00) > MAC_OS_X_VERSION_10_13_HEX));
 }
 
 // When using the debug kernel, set "kernel_stack_pages=6" in the boot args
@@ -329,10 +335,11 @@ bool find_kernel_header()
     return true;
   }
 
-#if (defined(MAC_OS_X_VERSION_10_11) || defined(MAC_OS_X_VERSION_10_12)) && \
+#if (defined(MAC_OS_X_VERSION_10_11) || defined(MAC_OS_X_VERSION_10_12) || \
+             defined(MAC_OS_X_VERSION_10_13)) && \
     (MAC_OS_X_VERSION_MAX_ALLOWED / 100) >= (MAC_OS_X_VERSION_10_11 / 100)
   // vm_kernel_unslide_or_perm_external() is only available on OS X 10.11 and up.
-  if (OSX_ElCapitan() || macOS_Sierra()) {
+  if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra()) {
     vm_offset_t func_address = (vm_offset_t) vm_kernel_unslide_or_perm_external;
     vm_offset_t func_address_unslid = 0;
     vm_kernel_unslide_or_perm_external(func_address, &func_address_unslid);
@@ -364,7 +371,8 @@ bool find_kernel_header()
     if (!kernel_header_found) {
       return false;
     }
-#if (defined(MAC_OS_X_VERSION_10_11) || defined(MAC_OS_X_VERSION_10_12)) && \
+#if (defined(MAC_OS_X_VERSION_10_11) || defined(MAC_OS_X_VERSION_10_12) || \
+             defined(MAC_OS_X_VERSION_10_13)) && \
     (MAC_OS_X_VERSION_MAX_ALLOWED / 100) >= (MAC_OS_X_VERSION_10_11 / 100)
   }
 #endif
@@ -530,7 +538,7 @@ bool find_sysent_table()
   struct section_64 *data_sections = NULL;
   const char *data_segment_name;
   const char *const_section_name;
-  if (macOS_Sierra()) {
+  if (macOS_Sierra() || macOS_HighSierra()) {
     data_segment_name = "__CONST";
     const_section_name = "__constdata";
   } else {
@@ -540,9 +548,9 @@ bool find_sysent_table()
 
   // The definition of the sysent table is "const struct sysent sysent[]",
   // so we look for it in the __DATA segment's __const section (on ElCapitan
-  // and below) or in the __CONST segment's __constdata section (on Sierra).
-  // Note that this section's contents have been set read-only, which we need
-  // to work around below in hook_sysent_call().
+  // and below) or in the __CONST segment's __constdata section (on Sierra and
+  // above). Note that this section's contents have been set read-only, which
+  // we need to work around below in hook_sysent_call().
   uint32_t num_commands = g_kernel_header->ncmds;
   const struct load_command *load_command = (struct load_command *)
     ((vm_offset_t)g_kernel_header + sizeof(struct mach_header_64));
@@ -621,10 +629,8 @@ bool find_sysent_table()
   return found_sysent_table;
 }
 
-bool ensure_kernel_region_wired(vm_map_offset_t start, vm_map_offset_t end,
-                                vm_prot_t add_prot);
-bool set_kernel_region_protection(vm_map_offset_t start, vm_map_offset_t end,
-                                  vm_prot_t new_prot);
+bool set_kernel_physmap_protection(vm_map_offset_t start, vm_map_offset_t end,
+                                   vm_prot_t new_prot, bool use_pmap_protect);
 
 bool hook_sysent_call(uint32_t offset, sy_call_t *hook, sy_call_t **orig)
 {
@@ -658,28 +664,14 @@ bool hook_sysent_call(uint32_t offset, sy_call_t *hook, sy_call_t **orig)
     orig_addr = &(table[offset].sy_call);
   }
 
-  if (!ensure_kernel_region_wired((vm_map_offset_t) orig_addr,
-                                  (vm_map_offset_t) orig_addr + sizeof(void *),
-                                  VM_PROT_READ | VM_PROT_WRITE))
+  if (!set_kernel_physmap_protection((vm_map_offset_t) orig_addr,
+                                     (vm_map_offset_t) orig_addr + sizeof(void *),
+                                     VM_PROT_READ | VM_PROT_WRITE, true))
   {
     return false;
   }
 
   bool retval = true;
-
-  // In principle, in kernel mode we should be able to write to RAM even if
-  // it's been set read-only -- but not if the WP bit of the CR0 control
-  // register is set, as it is by default in Apple's kernel mode.  Since the
-  // const section containing the sysent table is read-only, we need to
-  // temporarily unset this bit.
-  //
-  // Note that we're currently not using this technique, because it may be
-  // causing occasional kernel panics (page faults) on attempts to use the
-  // cmpxchg/cmpxchg16b instructions to write kernel memory.
-#ifdef UNSET_WP_FOR_KERNEL_WRITES
-  uintptr_t org_cr0 = get_cr0();
-  set_cr0(org_cr0 & ~CR0_WP);
-#endif
 
   if (!OSCompareAndSwapPtr((void *) orig_local, (void *) hook,
                            (void **) orig_addr))
@@ -687,13 +679,9 @@ bool hook_sysent_call(uint32_t offset, sy_call_t *hook, sy_call_t **orig)
     retval = false;
   }
 
-#ifdef UNSET_WP_FOR_KERNEL_WRITES
-  set_cr0(org_cr0);
-#endif
-
-  set_kernel_region_protection((vm_map_offset_t) orig_addr,
-                               (vm_map_offset_t) orig_addr + sizeof(void *),
-                               VM_PROT_READ);
+  set_kernel_physmap_protection((vm_map_offset_t) orig_addr,
+                                (vm_map_offset_t) orig_addr + sizeof(void *),
+                                VM_PROT_READ, true);
 
   if (orig && retval) {
     *orig = orig_local;
@@ -718,8 +706,20 @@ bool hook_sysent_call(uint32_t offset, sy_call_t *hook, sy_call_t **orig)
 // processes, including XPC children.  Set this to make it only effect the
 // parent process.
 
+// HC_NO_NUMERICAL_ADDRS -- Disable numerical address naming convention
+//
+// By default, HookCase.kext supports a naming convention for patch hooks that
+// allows one to create a hook for an (un-named) method at a particular
+// address in a given module.  So, for example, creating a patch hook for a
+// function named "sub_123abc" would specify that the hook should be inserted
+// at offset 0x123abc (hexadecimal notation) in the module.  But this
+// convention prevents you from creating a patch hook for a method that's
+// actually named "sub_123abc" (in its module's symbol table).  To do so,
+// you'll need to set this environment variable.
+
 #define HC_INSERT_LIBRARY_ENV_VAR "HC_INSERT_LIBRARY"
 #define HC_NOKIDS_ENV_VAR "HC_NOKIDS"
+#define HC_NO_NUMERICAL_ADDRS_ENV_VAR "HC_NO_NUMERICAL_ADDRS"
 
 #define HC_PATH_SIZE PATH_MAX
 typedef char hc_path_t[HC_PATH_SIZE];
@@ -857,6 +857,13 @@ typedef void (*pmap_protect_t)(pmap_t map,
                                vm_map_offset_t sva,
                                vm_map_offset_t eva,
                                vm_prot_t prot);
+typedef kern_return_t (*pmap_enter_t)(pmap_t pmap,
+                                      vm_map_offset_t v,
+                                      ppnum_t pn,
+                                      vm_prot_t prot,
+                                      vm_prot_t fault_type,
+                                      unsigned int flags,
+                                      boolean_t wired);
 typedef vm_page_t (*vm_page_lookup_t)(vm_object_t object,
                                       vm_object_offset_t offset);
 typedef void (*vm_page_wire_t)(vm_page_t page,
@@ -898,6 +905,7 @@ static vm_map_clip_start_t vm_map_clip_start = NULL;
 static vm_map_clip_end_t vm_map_clip_end = NULL;
 static pmap_change_wiring_t pmap_change_wiring = NULL;
 static pmap_protect_t pmap_protect = NULL;
+static pmap_enter_t pmap_enter = NULL;
 static vm_page_lookup_t vm_page_lookup = NULL;
 static vm_page_wire_t vm_page_wire = NULL;
 static vm_page_alloc_t vm_page_alloc = NULL;
@@ -978,7 +986,7 @@ bool find_kernel_private_functions()
       return false;
     }
   }
-  if (macOS_Sierra()) {
+  if (macOS_Sierra() || macOS_HighSierra()) {
     if (!g_vm_pages) {
       g_vm_pages = (vm_page_t *)
         kernel_dlsym("_vm_pages");
@@ -1176,6 +1184,13 @@ bool find_kernel_private_functions()
       return false;
     }
   }
+  if (!pmap_enter) {
+    pmap_enter = (pmap_enter_t)
+      kernel_dlsym("_pmap_enter");
+    if (!pmap_enter) {
+      return false;
+    }
+  }
   if (!vm_page_lookup) {
     vm_page_lookup = (vm_page_lookup_t)
       kernel_dlsym("_vm_page_lookup");
@@ -1218,7 +1233,7 @@ bool find_kernel_private_functions()
       return false;
     }
   }
-  if (OSX_ElCapitan() || macOS_Sierra()) {
+  if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra()) {
     if (!task_coalition_ids) {
       task_coalition_ids = (task_coalition_ids_t)
         kernel_dlsym("_task_coalition_ids");
@@ -1248,7 +1263,7 @@ bool find_kernel_private_functions()
       }
     }
   }
-  if (macOS_Sierra()) {
+  if (macOS_Sierra() || macOS_HighSierra()) {
     if (!vm_object_unlock_ptr) {
       vm_object_unlock_ptr = (vm_object_unlock_t)
         kernel_dlsym("_vm_object_unlock");
@@ -1379,12 +1394,25 @@ typedef struct _vm_map_fake_sierra {
   unsigned int timestamp; // Offset 0xec
 } *vm_map_fake_sierra_t;
 
+typedef struct _vm_map_fake_highsierra {
+  lck_rw_t lock;
+  struct vm_map_links links; // Actually 1st member of "struct vm_map_header hdr"
+#define hdr links
+  uint64_t pad1[3];
+  pmap_t pmap;            // Offset 0x48
+  vm_map_size_t size;
+  vm_map_size_t user_wire_limit;
+  vm_map_size_t user_wire_size;
+  uint32_t pad2[35];
+  unsigned int timestamp; // Offset 0xf4
+} *vm_map_fake_highsierra_t;
+
 pmap_t vm_map_pmap(vm_map_t map)
 {
   if (!map) {
     return NULL;
   }
-  if (macOS_Sierra()) {
+  if (macOS_Sierra() || macOS_HighSierra()) {
     vm_map_fake_sierra_t m = (vm_map_fake_sierra_t) map;
     return m->pmap;
   } else {
@@ -1399,7 +1427,10 @@ unsigned int vm_map_timestamp(vm_map_t map)
     return 0;
   }
   unsigned int retval;
-  if (OSX_ElCapitan() || macOS_Sierra()) {
+  if (macOS_HighSierra()) {
+    vm_map_fake_highsierra_t map_local = (vm_map_fake_highsierra_t) map;
+    retval = map_local->timestamp;
+  } else if (OSX_ElCapitan() || macOS_Sierra()) {
     vm_map_fake_elcapitan_t map_local = (vm_map_fake_elcapitan_t) map;
     retval = map_local->timestamp;
   } else {
@@ -1433,7 +1464,7 @@ vm_map_size_t vm_map_user_wire_limit(vm_map_t map)
     return 0;
   }
   vm_map_size_t retval;
-  if (macOS_Sierra()) {
+  if (macOS_Sierra() || macOS_HighSierra()) {
     vm_map_fake_sierra_t m = (vm_map_fake_sierra_t) map;
     retval = m->user_wire_limit;
   } else {
@@ -1449,7 +1480,7 @@ vm_map_size_t vm_map_user_wire_size(vm_map_t map)
     return 0;
   }
   vm_map_size_t retval;
-  if (macOS_Sierra()) {
+  if (macOS_Sierra() || macOS_HighSierra()) {
     vm_map_fake_sierra_t m = (vm_map_fake_sierra_t) map;
     retval = m->user_wire_size;
   } else {
@@ -1464,7 +1495,7 @@ void vm_map_set_user_wire_size(vm_map_t map, vm_map_size_t new_size)
   if (!map) {
     return;
   }
-  if (macOS_Sierra()) {
+  if (macOS_Sierra() || macOS_HighSierra()) {
     vm_map_fake_sierra_t m = (vm_map_fake_sierra_t) map;
     m->user_wire_size = new_size;
   } else {
@@ -1569,7 +1600,7 @@ bool vm_map_entry_get_superpage_size(vm_map_entry_t entry)
     return false;
   }
   bool retval = false;
-  if (OSX_ElCapitan() || macOS_Sierra()) {
+  if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra()) {
     vm_map_entry_fake_elcapitan_t entry_local =
       (vm_map_entry_fake_elcapitan_t) entry;
     retval = entry_local->superpage_size;
@@ -1639,7 +1670,11 @@ void vm_map_lock_write_to_read(vm_map_t map)
   if (!map) {
     return;
   }
-  if (OSX_ElCapitan() || macOS_Sierra()) {
+  if (macOS_HighSierra()) {
+    vm_map_fake_highsierra_t map_local = (vm_map_fake_highsierra_t) map;
+    ++map_local->timestamp;
+    lck_rw_lock_exclusive_to_shared(&(map_local->lock));
+  } else if (OSX_ElCapitan() || macOS_Sierra()) {
     vm_map_fake_elcapitan_t map_local = (vm_map_fake_elcapitan_t) map;
     ++map_local->timestamp;
     lck_rw_lock_exclusive_to_shared(&(map_local->lock));
@@ -1655,7 +1690,11 @@ void vm_map_unlock(vm_map_t map)
   if (!map) {
     return;
   }
-  if (OSX_ElCapitan() || macOS_Sierra()) {
+  if (macOS_HighSierra()) {
+    vm_map_fake_highsierra_t map_local = (vm_map_fake_highsierra_t) map;
+    ++map_local->timestamp;
+    lck_rw_done(&(map_local->lock));
+  } else if (OSX_ElCapitan() || macOS_Sierra()) {
     vm_map_fake_elcapitan_t map_local = (vm_map_fake_elcapitan_t) map;
     ++map_local->timestamp;
     lck_rw_done(&(map_local->lock));
@@ -1994,6 +2033,66 @@ typedef struct vm_page_fake_sierra {
                                          *  to pmap_enter (read-only) */
 } *vm_page_fake_sierra_t;
 
+typedef struct vm_page_fake_highsierra {
+  uint64_t pad1[3];
+  vm_object_offset_t offset; /* offset into that object (O,P) */
+  vm_page_object_t vm_page_object;  /* which object am I in (O&P) */ // Offset 0x20
+  uint32_t pad2[2];
+ /*
+  * The following word of flags is protected
+  * by the "VM object" lock.
+  */
+ unsigned int // Offset 0x2c
+   busy:1,  /* page is in transit (O) */
+   wanted:1, /* someone is waiting for page (O) */
+   tabled:1, /* page is in VP table (O) */
+   hashed:1, /* page is in vm_page_buckets[]
+               (O) + the bucket lock */
+   fictitious:1, /* Physical page doesn't exist (O) */
+ /*
+  * IMPORTANT: the "pmapped", "xpmapped" and "clustered" bits can be modified while holding the
+  * VM object "shared" lock + the page lock provided through the pmap_lock_phys_page function.
+  * This is done in vm_fault_enter and the CONSUME_CLUSTERED macro.
+  * It's also ok to modify them behind just the VM object "exclusive" lock.
+  */
+   clustered:1, /* page is not the faulted page (O) or (O-shared AND pmap_page) */
+   pmapped:1,   /* page has been entered at some
+                 * point into a pmap (O) or (O-shared AND pmap_page) */
+   xpmapped:1,  /* page has been entered with execute permission (O)
+                   or (O-shared AND pmap_page) */
+
+   wpmapped:1,  /* page has been entered at some
+                 * point into a pmap for write (O) */
+   free_when_done:1, /* page is to be freed once cleaning is completed (O) */
+   absent:1, /* Data has been requested, but is
+              *  not yet available (O) */
+   error:1, /* Data manager was unable to provide
+             *  data due to error (O) */
+   dirty:1, /* Page must be cleaned (O) */
+   cleaning:1, /* Page clean has begun (O) */
+   precious:1, /* Page is precious; data must be
+                *  returned even if clean (O) */
+   overwriting:1,  /* Request to unlock has been made
+                    * without having data. (O)
+                    * [See vm_fault_page_overwrite] */
+   restart:1, /* Page was pushed higher in shadow
+                 chain by copy_call-related pagers;
+                 start again at top of chain */
+   unusual:1, /* Page is absent, error, restart or
+                 page locked */
+   cs_validated:1,    /* code-signing: page was checked */
+   cs_tainted:1,    /* code-signing: page is tainted */
+   cs_nx:1,    /* code-signing: page is nx */
+   reusable:1,
+   lopage:1,
+   slid:1,
+   written_by_kernel:1, /* page was written by kernel (i.e. decompressed) */
+   __unused_object_bits:7;  /* 7 bits available here */
+
+  ppnum_t  phys_page; /* Offset 0x30 */ /* Physical address of page, passed
+                                         *  to pmap_enter (read-only) */
+} *vm_page_fake_highsierra_t;
+
 // Modified from the Sierra xnu kernel's osfmk/vm/vm_page.h (begin)
 
 #define VM_PACKED_POINTER_ALIGNMENT 64  /* must be a power of 2 */
@@ -2003,7 +2102,7 @@ typedef struct vm_page_fake_sierra {
 
 vm_page_packed_t vm_page_pack_ptr(uintptr_t p)
 {
-  if (!p || !macOS_Sierra()) {
+  if (!p || (!macOS_Sierra() && !macOS_HighSierra())) {
     return 0;
   }
 
@@ -2042,7 +2141,7 @@ vm_page_packed_t vm_page_pack_ptr(uintptr_t p)
 
 uintptr_t vm_page_unpack_ptr(uintptr_t p)
 {
-  if (!p || !macOS_Sierra()) {
+  if (!p || (!macOS_Sierra() && !macOS_HighSierra())) {
     return 0;
   }
 
@@ -2077,7 +2176,7 @@ ppnum_t page_phys_page(vm_page_t page)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sierra()) {
+    if (macOS_Sierra() || macOS_HighSierra()) {
       offset_in_struct = offsetof(struct vm_page_fake_sierra, phys_page);
     } else if (OSX_ElCapitan()) {
       offset_in_struct = offsetof(struct vm_page_fake_elcapitan, phys_page);
@@ -2107,7 +2206,7 @@ bool page_is_wpmapped(vm_page_t page)
     return false;
   }
   bool retval = false;
-  if (macOS_Sierra()) {
+  if (macOS_Sierra() || macOS_HighSierra()) {
     vm_page_fake_sierra_t page_local = (vm_page_fake_sierra_t) page;
     retval = page_local->wpmapped;
   } else if (OSX_ElCapitan()) {
@@ -2128,7 +2227,7 @@ void page_set_wpmapped(vm_page_t page, bool flag)
   if (!page) {
     return;
   }
-  if (macOS_Sierra()) {
+  if (macOS_Sierra() || macOS_HighSierra()) {
     vm_page_fake_sierra_t page_local = (vm_page_fake_sierra_t) page;
     page_local->wpmapped = flag;
   } else if (OSX_ElCapitan()) {
@@ -2149,7 +2248,10 @@ bool page_is_cs_validated(vm_page_t page)
     return false;
   }
   bool retval = false;
-  if (macOS_Sierra()) {
+  if (macOS_HighSierra()) {
+    vm_page_fake_highsierra_t page_local = (vm_page_fake_highsierra_t) page;
+    retval = page_local->cs_validated;
+  } else if (macOS_Sierra()) {
     vm_page_fake_sierra_t page_local = (vm_page_fake_sierra_t) page;
     retval = page_local->cs_validated;
   } else if (OSX_ElCapitan()) {
@@ -2170,7 +2272,10 @@ void page_set_cs_validated(vm_page_t page, bool flag)
   if (!page) {
     return;
   }
-  if (macOS_Sierra()) {
+  if (macOS_HighSierra()) {
+    vm_page_fake_highsierra_t page_local = (vm_page_fake_highsierra_t) page;
+    page_local->cs_validated = flag;
+  } else if (macOS_Sierra()) {
     vm_page_fake_sierra_t page_local = (vm_page_fake_sierra_t) page;
     page_local->cs_validated = flag;
   } else if (OSX_ElCapitan()) {
@@ -2191,7 +2296,10 @@ bool page_is_cs_tainted(vm_page_t page)
     return false;
   }
   bool retval = false;
-  if (macOS_Sierra()) {
+  if (macOS_HighSierra()) {
+    vm_page_fake_highsierra_t page_local = (vm_page_fake_highsierra_t) page;
+    retval = page_local->cs_tainted;
+  } else if (macOS_Sierra()) {
     vm_page_fake_sierra_t page_local = (vm_page_fake_sierra_t) page;
     retval = page_local->cs_tainted;
   } else if (OSX_ElCapitan()) {
@@ -2212,7 +2320,10 @@ void page_set_cs_tainted(vm_page_t page, bool flag)
   if (!page) {
     return;
   }
-  if (macOS_Sierra()) {
+  if (macOS_HighSierra()) {
+    vm_page_fake_highsierra_t page_local = (vm_page_fake_highsierra_t) page;
+    page_local->cs_tainted = flag;
+  } else if (macOS_Sierra()) {
     vm_page_fake_sierra_t page_local = (vm_page_fake_sierra_t) page;
     page_local->cs_tainted = flag;
   } else if (OSX_ElCapitan()) {
@@ -2233,7 +2344,10 @@ bool page_is_cs_nx(vm_page_t page)
     return false;
   }
   bool retval = false;
-  if (macOS_Sierra()) {
+  if (macOS_HighSierra()) {
+    vm_page_fake_highsierra_t page_local = (vm_page_fake_highsierra_t) page;
+    retval = page_local->cs_nx;
+  } else if (macOS_Sierra()) {
     vm_page_fake_sierra_t page_local = (vm_page_fake_sierra_t) page;
     retval = page_local->cs_nx;
   } else if (OSX_ElCapitan()) {
@@ -2251,7 +2365,10 @@ void page_set_cs_nx(vm_page_t page, bool flag)
   if (!page) {
     return;
   }
-  if (macOS_Sierra()) {
+  if (macOS_HighSierra()) {
+    vm_page_fake_highsierra_t page_local = (vm_page_fake_highsierra_t) page;
+    page_local->cs_nx = flag;
+  } else if (macOS_Sierra()) {
     vm_page_fake_sierra_t page_local = (vm_page_fake_sierra_t) page;
     page_local->cs_nx = flag;
   } else if (OSX_ElCapitan()) {
@@ -2269,7 +2386,10 @@ bool page_is_slid(vm_page_t page)
     return false;
   }
   bool retval = false;
-  if (macOS_Sierra()) {
+  if (macOS_HighSierra()) {
+    vm_page_fake_highsierra_t page_local = (vm_page_fake_highsierra_t) page;
+    retval = page_local->slid;
+  } else if (macOS_Sierra()) {
     vm_page_fake_sierra_t page_local = (vm_page_fake_sierra_t) page;
     retval = page_local->slid;
   } else if (OSX_ElCapitan()) {
@@ -2290,7 +2410,10 @@ void page_set_slid(vm_page_t page, bool flag)
   if (!page) {
     return;
   }
-  if (macOS_Sierra()) {
+  if (macOS_HighSierra()) {
+    vm_page_fake_highsierra_t page_local = (vm_page_fake_highsierra_t) page;
+    page_local->slid = flag;
+  } else if (macOS_Sierra()) {
     vm_page_fake_sierra_t page_local = (vm_page_fake_sierra_t) page;
     page_local->slid = flag;
   } else if (OSX_ElCapitan()) {
@@ -2313,7 +2436,7 @@ vm_object_t page_object(vm_page_t page)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sierra()) {
+    if (macOS_Sierra() || macOS_HighSierra()) {
       offset_in_struct = offsetof(struct vm_page_fake_sierra, vm_page_object);
     } else if (OSX_ElCapitan()) {
       offset_in_struct = offsetof(struct vm_page_fake_elcapitan, object);
@@ -2326,7 +2449,7 @@ vm_object_t page_object(vm_page_t page)
 
   vm_object_t retval = NULL;
   if (offset_in_struct != -1) {
-    if (macOS_Sierra()) {
+    if (macOS_Sierra() || macOS_HighSierra()) {
       vm_page_object_t packed =
         *((vm_page_object_t *)((vm_map_offset_t)page + offset_in_struct));
       retval = (vm_object_t) vm_page_unpack_ptr(packed);
@@ -2346,7 +2469,7 @@ vm_object_offset_t page_object_offset(vm_page_t page)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sierra()) {
+    if (macOS_Sierra() || macOS_HighSierra()) {
       offset_in_struct = offsetof(struct vm_page_fake_sierra, offset);
     } else if (OSX_ElCapitan()) {
       offset_in_struct = offsetof(struct vm_page_fake_elcapitan, offset);
@@ -2596,6 +2719,84 @@ typedef struct _vm_object_fake_sierra_dev_debug {
     __object2_unused_bits:7; /* for expansion */
 } *vm_object_fake_sierra_dev_debug_t;
 
+typedef struct _vm_object_fake_highsierra {
+  uint64_t pad1[1];
+  lck_rw_t Lock;
+  uint64_t pad2[5];
+  vm_object_t shadow; // Offset 0x40
+  union {
+    vm_object_offset_t vou_shadow_offset; /* Offset into shadow */
+    clock_sec_t vou_cache_ts; /* age of an external object
+                               * present in cache
+                               */
+    task_t vou_purgeable_owner; /* If the purg'a'ble bits below are set
+                                 * to volatile/emtpy, this is the task
+                                 * that owns this purgeable object.
+                                 */
+    struct vm_shared_region_slide_info *vou_slide_info;
+  } vo_un2;
+  uint64_t pad3[11];
+  /* hold object lock when altering */
+  unsigned int // Offset 0xa8
+    wimg_bits:8,    /* cache WIMG bits         */
+    code_signed:1,  /* pages are signed and should be
+                       validated; the signatures are stored
+                       with the pager */
+    transposed:1,   /* object was transposed with another */
+    mapping_in_progress:1, /* pager being mapped/unmapped */
+    phantom_isssd:1,
+    volatile_empty:1,
+    volatile_fault:1,
+    all_reusable:1,
+    blocked_access:1,
+    set_cache_attr:1,
+    object_slid:1,
+    purgeable_queue_type:2,
+    purgeable_queue_group:3,
+    io_tracking:1,
+    no_tag_update:1,
+    __object2_unused_bits:7; /* for expansion */
+} *vm_object_fake_highsierra_t;
+
+typedef struct _vm_object_fake_highsierra_dev_debug {
+  uint64_t pad1[1];
+  lck_rw_t Lock;
+  uint64_t pad2[6];
+  vm_object_t shadow; // Offset 0x48
+  union {
+    vm_object_offset_t vou_shadow_offset; /* Offset into shadow */
+    clock_sec_t vou_cache_ts; /* age of an external object
+                               * present in cache
+                               */
+    task_t vou_purgeable_owner; /* If the purg'a'ble bits below are set
+                                 * to volatile/emtpy, this is the task
+                                 * that owns this purgeable object.
+                                 */
+    struct vm_shared_region_slide_info *vou_slide_info;
+  } vo_un2;
+  uint64_t pad3[11];
+  /* hold object lock when altering */
+  unsigned int // Offset 0xb0
+    wimg_bits:8,    /* cache WIMG bits         */
+    code_signed:1,  /* pages are signed and should be
+                       validated; the signatures are stored
+                       with the pager */
+    transposed:1,   /* object was transposed with another */
+    mapping_in_progress:1, /* pager being mapped/unmapped */
+    phantom_isssd:1,
+    volatile_empty:1,
+    volatile_fault:1,
+    all_reusable:1,
+    blocked_access:1,
+    set_cache_attr:1,
+    object_slid:1,
+    purgeable_queue_type:2,
+    purgeable_queue_group:3,
+    io_tracking:1,
+    no_tag_update:1,
+    __object2_unused_bits:7; /* for expansion */
+} *vm_object_fake_highsierra_dev_debug_t;
+
 bool object_is_code_signed(vm_object_t object)
 {
   if (!object) {
@@ -2622,6 +2823,18 @@ bool object_is_code_signed(vm_object_t object)
     {
       vm_object_fake_sierra_dev_debug_t object_local =
         (vm_object_fake_sierra_dev_debug_t) object;
+      retval = object_local->code_signed;
+    }
+  } else if (macOS_HighSierra()) {
+    if (kernel_type_is_release()) {
+      vm_object_fake_highsierra_t object_local =
+        (vm_object_fake_highsierra_t) object;
+      retval = object_local->code_signed;
+    } else if (kernel_type_is_development() ||
+               kernel_type_is_debug())
+    {
+      vm_object_fake_highsierra_dev_debug_t object_local =
+        (vm_object_fake_highsierra_dev_debug_t) object;
       retval = object_local->code_signed;
     }
   } else {
@@ -2667,6 +2880,18 @@ void object_set_code_signed(vm_object_t object, bool flag)
         (vm_object_fake_sierra_dev_debug_t) object;
       object_local->code_signed = flag;
     }
+  } else if (macOS_HighSierra()) {
+    if (kernel_type_is_release()) {
+      vm_object_fake_highsierra_t object_local =
+        (vm_object_fake_highsierra_t) object;
+      object_local->code_signed = flag;
+    } else if (kernel_type_is_development() ||
+               kernel_type_is_debug())
+    {
+      vm_object_fake_highsierra_dev_debug_t object_local =
+        (vm_object_fake_highsierra_dev_debug_t) object;
+      object_local->code_signed = flag;
+    }
   } else {
     if (kernel_type_is_release()) {
       vm_object_fake_yosemite_t object_local =
@@ -2710,6 +2935,18 @@ bool object_is_slid(vm_object_t object)
         (vm_object_fake_sierra_dev_debug_t) object;
       retval = object_local->object_slid;
     }
+  } else if (macOS_HighSierra()) {
+    if (kernel_type_is_release()) {
+      vm_object_fake_highsierra_t object_local =
+        (vm_object_fake_highsierra_t) object;
+      retval = object_local->object_slid;
+    } else if (kernel_type_is_development() ||
+               kernel_type_is_debug())
+    {
+      vm_object_fake_highsierra_dev_debug_t object_local =
+        (vm_object_fake_highsierra_dev_debug_t) object;
+      retval = object_local->object_slid;
+    }
   } else {
     if (kernel_type_is_release()) {
       vm_object_fake_yosemite_t object_local =
@@ -2732,7 +2969,7 @@ vm_object_t object_get_shadow(vm_object_t object)
     return NULL;
   }
   vm_object_t retval = NULL;
-  if (macOS_Sierra()) {
+  if (macOS_Sierra() || macOS_HighSierra()) {
     if (kernel_type_is_release()) {
       vm_object_fake_sierra_t object_local =
         (vm_object_fake_sierra_t) object;
@@ -2758,7 +2995,7 @@ vm_object_offset_t object_get_shadow_offset(vm_object_t object)
     return 0;
   }
   vm_object_offset_t retval = 0;
-  if (macOS_Sierra()) {
+  if (macOS_Sierra() || macOS_HighSierra()) {
     if (kernel_type_is_release()) {
       vm_object_fake_sierra_t object_local =
         (vm_object_fake_sierra_t) object;
@@ -2784,7 +3021,7 @@ vm_object_offset_t object_get_shadow_offset(vm_object_t object)
 
 void vm_object_unlock(vm_object_t object)
 {
-  if (macOS_Sierra()) {
+  if (macOS_Sierra() || macOS_HighSierra()) {
     vm_object_unlock_ptr(object);
     return;
   }
@@ -2882,7 +3119,7 @@ static task_t proc_task(proc_t proc)
 
 static bool IS_64BIT_PROCESS(proc_t proc)
 {
-  if (macOS_Sierra() || OSX_ElCapitan()) {
+  if (macOS_HighSierra() || macOS_Sierra() || OSX_ElCapitan()) {
     proc_fake_elcapitan_t p = (proc_fake_elcapitan_t) proc;
     return (p && (p->p_flag & P_LP64));
   } else {
@@ -2902,7 +3139,7 @@ u_short get_acflag(proc_t proc)
   } else if (OSX_Yosemite()) {
     proc_fake_yosemite_t p = (proc_fake_yosemite_t) proc;
     return p->p_acflag;
-  } else { // ElCapitan or Sierra
+  } else { // ElCapitan or Sierra or HighSierra
     proc_fake_elcapitan_t p = (proc_fake_elcapitan_t) proc;
     return p->p_acflag;
   }
@@ -2913,7 +3150,7 @@ unsigned int get_lflag(proc_t proc)
   if (!proc) {
     return 0;
   }
-  if (macOS_Sierra() || OSX_ElCapitan()) {
+  if (macOS_HighSierra() || macOS_Sierra() || OSX_ElCapitan()) {
     proc_fake_elcapitan_t p = (proc_fake_elcapitan_t) proc;
     return p->p_lflag;
   } else {
@@ -2927,7 +3164,7 @@ unsigned int get_flag(proc_t proc)
   if (!proc) {
     return 0;
   }
-  if (macOS_Sierra() || OSX_ElCapitan()) {
+  if (macOS_HighSierra() || macOS_Sierra() || OSX_ElCapitan()) {
     proc_fake_elcapitan_t p = (proc_fake_elcapitan_t) proc;
     return p->p_flag;
   } else {
@@ -2966,7 +3203,7 @@ typedef struct x86_fx_thread_state_fake
   uint64_t pad1[20];
   unsigned short fx_XMM_reg[8][16];
   uint64_t pad2[10];
-  unsigned int fp_valid;
+  unsigned int fp_valid; // Offset 0x1f0
   fp_save_layout_t fp_save_layout;
 } x86_fx_thread_state_fake_t;
 
@@ -2975,11 +3212,50 @@ typedef struct x86_avx_thread_state_fake
   uint64_t pad1[20];
   unsigned short fx_XMM_reg[8][16];
   uint64_t pad2[10];
-  unsigned int fp_valid;
+  unsigned int fp_valid; // Offset 0x1f0
   fp_save_layout_t fp_save_layout;
   uint64_t pad3[8];
   unsigned int x_YMMH_reg[4][16];
 } x86_avx_thread_state_fake_t;
+
+typedef struct thread_fake_highsierra
+{
+  uint32_t pad1[14];
+  integer_t options;    // Offset 0x38
+  uint32_t pad2[193];
+  vm_map_t map;         // Offset 0x340
+  uint32_t pad3[58];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0x430
+  uint32_t pad4[30];
+  int iotier_override;  // Offset 0x4b0
+} thread_fake_highsierra_t;
+
+typedef struct thread_fake_highsierra_development
+{
+  uint32_t pad1[16];
+  integer_t options;    // Offset 0x40
+  uint32_t pad2[193];
+  vm_map_t map;         // Offset 0x348
+  uint32_t pad3[62];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0x448
+  uint32_t pad4[30];
+  int iotier_override;  // Offset 0x4c8
+} thread_fake_highsierra_development_t;
+
+typedef struct thread_fake_highsierra_debug
+{
+  uint32_t pad1[48];
+  integer_t options;    // Offset 0xc0
+  uint32_t pad2[227];
+  vm_map_t map;         // Offset 0x450
+  uint32_t pad3[62];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0x550
+  uint32_t pad4[46];
+  int iotier_override;  // Offset 0x610
+} thread_fake_highsierra_debug_t;
 
 typedef struct thread_fake_sierra
 {
@@ -3140,7 +3416,17 @@ wait_interrupt_t thread_interrupt_level(wait_interrupt_t new_level)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sierra()) {
+    if (macOS_HighSierra()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct = offsetof(struct thread_fake_highsierra, options);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct thread_fake_highsierra_development, options);
+      } else if (kernel_type_is_debug()) {
+        offset_in_struct =
+          offsetof(struct thread_fake_highsierra_debug, options);
+      }
+    } else if (macOS_Sierra()) {
       if (kernel_type_is_release()) {
         offset_in_struct = offsetof(struct thread_fake_sierra, options);
       } else if (kernel_type_is_development()) {
@@ -3205,7 +3491,17 @@ x86_fx_thread_state_fake_t *get_fp_thread_state()
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sierra()) {
+    if (macOS_HighSierra()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct = offsetof(struct thread_fake_highsierra, ifps);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct thread_fake_highsierra_development, ifps);
+      } else if (kernel_type_is_debug()) {
+        offset_in_struct =
+          offsetof(struct thread_fake_highsierra_debug, ifps);
+      }
+    } else if (macOS_Sierra()) {
       if (kernel_type_is_release()) {
         offset_in_struct = offsetof(struct thread_fake_sierra, ifps);
       } else if (kernel_type_is_development()) {
@@ -3262,7 +3558,17 @@ vm_map_t thread_map(thread_t thread)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sierra()) {
+    if (macOS_HighSierra()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct = offsetof(struct thread_fake_highsierra, map);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct thread_fake_highsierra_development, map);
+      } else if (kernel_type_is_debug()) {
+        offset_in_struct =
+          offsetof(struct thread_fake_highsierra_debug, map);
+      }
+    } else if (macOS_Sierra()) {
       if (kernel_type_is_release()) {
         offset_in_struct = offsetof(struct thread_fake_sierra, map);
       } else if (kernel_type_is_development()) {
@@ -3337,7 +3643,18 @@ extern "C" void reset_iotier_override()
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sierra()) {
+    if (macOS_HighSierra()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct =
+          offsetof(struct thread_fake_highsierra, iotier_override);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct thread_fake_highsierra_development, iotier_override);
+      } else if (kernel_type_is_debug()) {
+        offset_in_struct =
+          offsetof(struct thread_fake_highsierra_debug, iotier_override);
+      }
+    } else if (macOS_Sierra()) {
       if (kernel_type_is_release()) {
         offset_in_struct =
           offsetof(struct thread_fake_sierra, iotier_override);
@@ -3401,6 +3718,12 @@ extern "C" void restore_fp()
 // Possible value for uu_flag.
 #define UT_NOTCANCELPT 0x00000004  /* not a cancelation point */
 
+typedef struct uthread_fake_highsierra
+{
+  uint64_t pad[40];
+  int uu_flag;        // Offset 0x140
+} *uthread_fake_highsierra_t;
+
 typedef struct uthread_fake_sierra
 {
   uint64_t pad[41];
@@ -3433,7 +3756,9 @@ int get_uu_flag(uthread_t uthread)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sierra()) {
+    if (macOS_HighSierra()) {
+      offset_in_struct = offsetof(struct uthread_fake_highsierra, uu_flag);
+    } else if (macOS_Sierra()) {
       offset_in_struct = offsetof(struct uthread_fake_sierra, uu_flag);
     } else if (OSX_ElCapitan()) {
       offset_in_struct = offsetof(struct uthread_fake_elcapitan, uu_flag);
@@ -3452,10 +3777,13 @@ int get_uu_flag(uthread_t uthread)
   return retval;
 }
 
-void report_proc_thread_state(thread_t thread)
+void report_proc_thread_state(const char *header, thread_t thread)
 {
+  if (!header) {
+    return;
+  }
   if (!thread) {
-    printf("HookCase: report_proc_thread_state(): 'thread' is NULL!\n");
+    printf("%s: report_proc_thread_state(): 'thread' is NULL!\n", header);
     return;
   }
   uthread_t uthread = get_bsdthread_info(thread);
@@ -3463,6 +3791,9 @@ void report_proc_thread_state(thread_t thread)
   proc_t proc = NULL;
   if (task) {
     proc = (proc_t) get_bsdtask_info(task);
+  }
+  if (!proc) {
+    proc = current_proc();
   }
 
   pid_t pid = -1;
@@ -3487,19 +3818,21 @@ void report_proc_thread_state(thread_t thread)
     uu_flag = get_uu_flag(uthread);
   }
 
-  printf("HookCase: report_proc_thread_state(): proc %s[%d], acflag \'0x%x\', lflag \'0x%x\', flag \'0x%x\', tag \'0x%x\', uu_flag \'0x%x\'\n",
-         procname, pid, acflag, lflag, flag, tag, uu_flag);
+  printf("%s: report_proc_thread_state(): proc %s[%d], acflag \'0x%x\', lflag \'0x%x\', flag \'0x%x\', tag \'0x%x\', uu_flag \'0x%x\'\n",
+         header, procname, pid, acflag, lflag, flag, tag, uu_flag);
 }
 
-// Without this method, we sometimes get kernel panics caused by page faults
-// during a cmpxchg or cmpxchg16b instruction (when we're changing the sysent
-// table or the interrupt descriptor table, or just hooking a kernel method).
-// I've no idea why these happen.  It may have something to do with unsetting
-// the WP bit in CR0 beforehand ... if we do that, as we're currently not.  In
-// any case this method seems at least to substantially reduce the panics'
-// frequency.
-bool ensure_kernel_region_wired(vm_map_offset_t start, vm_map_offset_t end,
-                                vm_prot_t add_prot)
+// Change memory permissions, but only at the lowest level -- that of
+// kernel_pmap and of pmap_t structures, not that of kernel_map and of
+// vm_map_t and vm_map_entry_t structures.  In version 1 we worked at a higher
+// level, but as best I can tell that isn't necessary, and may even have been
+// harmful.  In any case, many of the relevant vm_map_entry_t variables (for
+// example 'protection') are kept blank for the parts of kernel memory that we
+// deal with.  In effect, that structure isn't used to manage permissions in
+// standard kernel memory (or in the double-mapped HIB segment that's used to
+// implement KPTI in recent versions of macOS and OS X).
+bool set_kernel_physmap_protection(vm_map_offset_t start, vm_map_offset_t end,
+                                   vm_prot_t new_prot, bool use_pmap_protect)
 {
   vm_map_offset_t start_fixed =
     vm_map_trunc_page(start, vm_map_page_mask(kernel_map));
@@ -3510,236 +3843,42 @@ bool ensure_kernel_region_wired(vm_map_offset_t start, vm_map_offset_t end,
     return false;
   }
 
+  // Though we don't access kernel_map here, holding a lock on it seems to
+  // help prevent weirdness.
   vm_map_lock(kernel_map);
 
-  vm_map_entry_t first_entry;
-  if (!vm_map_lookup_entry(kernel_map, start_fixed, &first_entry)) {
-    vm_map_unlock(kernel_map);
-    return false;
-  }
-
-  kern_return_t rv = KERN_SUCCESS;
-  vm_map_entry_t entry = first_entry;
-  vm_map_offset_t entry_start = start_fixed;
-  bool already = true;
-
-  while ((entry != vm_map_to_entry(kernel_map)) && (entry_start < end_fixed)) {
-    vm_map_entry_fake_t an_entry = (vm_map_entry_fake_t) entry;
-
-    if (an_entry->is_sub_map || an_entry->in_transition) {
-      entry = map_entry_next(entry);
-      entry_start = map_entry_start(entry);
-      continue;
-    }
-
-    vm_prot_t entry_prot = an_entry->protection;
-    if (!an_entry->wired_count || ((entry_prot & add_prot) != add_prot)) {
-      already = false;
-
-      vm_map_clip_start(kernel_map, entry, entry_start);
-      vm_map_clip_end(kernel_map, entry, end_fixed);
-
-      entry_start = map_entry_start(entry);
-      struct _vm_map_entry_fake tmp_entry = *an_entry;
-
-      vm_map_lock_write_to_read(kernel_map);
-      vm_map_t lookup_map = kernel_map;
-      vm_map_version_t version;
-      vm_object_t object;
-      vm_object_offset_t offset;
-      vm_prot_t prot;
-      boolean_t wired;
-      vm_map_t real_map;
-      rv = vm_map_lookup_locked(&lookup_map, entry_start, entry_prot,
-                                OBJECT_LOCK_EXCLUSIVE, &version, &object,
-                                &offset, &prot, &wired, NULL, &real_map);
-      vm_map_unlock_read(kernel_map);
-      if (rv != KERN_SUCCESS) {
-        vm_map_lock(kernel_map);
-        break;
-      }
-      if (real_map != lookup_map) {
-        vm_map_unlock(real_map);
-      }
-
-      if (!vm_page_lookup(object, offset)) {
-        vm_page_alloc(object, offset);
-      }
-
-      vm_map_lock(kernel_map);
-      vm_object_unlock(object);
-      if (!vm_map_lookup_entry(kernel_map, tmp_entry.vme_start, &entry)) {
-        rv = KERN_FAILURE;
-        break;
-      }
-      vm_map_clip_start(kernel_map, entry, map_entry_start(entry));
-      vm_map_clip_end(kernel_map, entry, end_fixed);
-    }
-
-    entry = map_entry_next(entry);
-    entry_start = map_entry_start(entry);
-  }
-
-  vm_map_unlock(kernel_map);
-
-  if (rv != KERN_SUCCESS) {
-    return false;
-  }
-
-  vm_map_offset_t region_size = end - start;
-  char *buffer = (char *) IOMalloc(region_size);
-  if (buffer) {
-    memcpy(buffer, (char *) start, region_size);
-    IOFree(buffer, region_size);
-  }
-
-  if (already) {
-    return true;
-  }
-
-  vm_map_lock(kernel_map);
-
-  if (!vm_map_lookup_entry(kernel_map, start_fixed, &first_entry)) {
-    vm_map_unlock(kernel_map);
-    return false;
-  }
-
-  entry = first_entry;
-  entry_start = start_fixed;
-
-  vm_prot_t prot = 0;
-  ppnum_t page_num = 0;
-  vm_page_t page = NULL;
-  unsigned short wired_count = 0;
-  vm_object_t object = NULL;
-  vm_object_offset_t offset = 0;
-  vm_map_offset_t last_entry_start = 0;
-  vm_map_offset_t entry_end = 0;
-
-  while ((entry != vm_map_to_entry(kernel_map)) && (entry_start < end_fixed)) {
-    vm_map_entry_fake_t an_entry = (vm_map_entry_fake_t) entry;
-    last_entry_start = entry_start;
-    entry_end = map_entry_end(entry);
-
-    if (an_entry->is_sub_map || an_entry->in_transition) {
-      entry = map_entry_next(entry);
-      entry_start = map_entry_start(entry);
-      continue;
-    }
-
-    wired_count = an_entry->wired_count;
-    prot = an_entry->protection;
-    if (!wired_count || ((prot & add_prot) != add_prot)) {
-      object = an_entry->vme_object.vmo_object;
-      offset = an_entry->vme_offset;
-      page_num = pmap_find_phys(kernel_pmap, entry_start);
-
-      if (!object || !page_num) {
-        rv = KERN_FAILURE;
-        break;
-      }
-
-      vm_object_lock(object);
-
-      page = vm_page_lookup(object, offset);
-      if (!page) {
-        rv = KERN_FAILURE;
-        vm_object_unlock(object);
-        break;
-      }
-
-      if (!wired_count) {
-        ++an_entry->wired_count;
-
-        vm_page_lockspin_queues();
-        vm_page_wire(page, VM_KERN_MEMORY_OSFMK, false);
-        vm_page_unlock_queues();
-
-        pmap_change_wiring(kernel_pmap, entry_start, true);
-      }
-
-      if (add_prot) {
-        an_entry->protection |= add_prot;
-        pmap_protect(kernel_pmap, entry_start, entry_end,
-                     an_entry->protection);
-      }
-
-      vm_object_unlock(object);
-    }
-
-    entry = map_entry_next(entry);
-    entry_start = map_entry_start(entry);
-  }
-
-  vm_map_unlock(kernel_map);
-
-  //printf("HookCase: ensure_kernel_region_wired(): rv \'%d\', wired_count \'%d\', entry_start \'0x%08llx%08llx\', entry_end \'0x%08llx%08llx\', page_num \'%d\', page \'0x%08llx%08llx\', object \'0x%08llx%08llx\', offset \'0x%08llx%08llx\'\n",
-  //       rv, wired_count, last_entry_start >> 32, last_entry_start & 0xffffffff,
-  //       entry_end >> 32, entry_end & 0xffffffff, page_num,
-  //       (uint64_t) page >> 32, (uint64_t) page & 0xffffffff, (uint64_t) object >> 32, (uint64_t) object & 0xffffffff,
-  //       offset >> 32, offset & 0xffffffff);
-  return (rv == KERN_SUCCESS);
-}
-
-bool set_kernel_region_protection(vm_map_offset_t start, vm_map_offset_t end,
-                                  vm_prot_t new_prot)
-{
-  // VM_PROT_NONE has a special meaning to pmap_protect() -- it's a signal to
-  // unmap the region.  So we can't set VM_PROT_NONE, even if we wanted to.
-  if (!new_prot) {
-    return false;
-  }
-
-  vm_map_offset_t start_fixed =
-    vm_map_trunc_page(start, vm_map_page_mask(kernel_map));
-  vm_map_offset_t end_fixed =
-    vm_map_round_page(end, vm_map_page_mask(kernel_map));
-
-  if (start_fixed >= end_fixed) {
-    return false;
-  }
-
-  vm_map_lock(kernel_map);
-
-  vm_map_entry_t first_entry;
-  if (!vm_map_lookup_entry(kernel_map, start_fixed, &first_entry)) {
-    vm_map_unlock(kernel_map);
-    return false;
-  }
-
-  kern_return_t rv = KERN_SUCCESS;
-  vm_map_entry_t entry = first_entry;
-  vm_map_offset_t entry_start = start_fixed;
-  vm_map_offset_t entry_end = 0;
-
-  while ((entry != vm_map_to_entry(kernel_map)) && (entry_start < end_fixed)) {
-    vm_map_entry_fake_t an_entry = (vm_map_entry_fake_t) entry;
-    entry_end = map_entry_end(entry);
-
-    if (an_entry->is_sub_map || an_entry->in_transition) {
-      entry = map_entry_next(entry);
-      entry_start = map_entry_start(entry);
-      continue;
-    }
-
-    if (an_entry->protection != new_prot) {
-      ppnum_t page_num = pmap_find_phys(kernel_pmap, entry_start);
+  // Apple's comments in their xnu kernel source code claim that
+  // pmap_protect() can't be used to increase permissions, and that one should
+  // use pmap_enter() for that purpose.  This isn't true.  But there do seem
+  // to be some limitations on pmap_protect().  For example, it sometimes
+  // fails to add execute permissions where they previously weren't granted.
+  // In those cases we need to use pmap_enter().  However, pmap_protect() is
+  // much less "invasive" that pmap_enter(), so we should use pmap_protect()
+  // where we can.
+  bool retval = true;
+  if (use_pmap_protect) {
+    pmap_protect(kernel_pmap, start_fixed, end_fixed, new_prot);
+  } else {
+    vm_map_offset_t page_offset = start_fixed;
+    while (page_offset < end_fixed) {
+      ppnum_t page_num = pmap_find_phys(kernel_pmap, page_offset);
       if (!page_num) {
-        rv = KERN_FAILURE;
+        retval = false;
         break;
       }
-      an_entry->protection = new_prot;
-      pmap_protect(kernel_pmap, entry_start, entry_end,
-                   an_entry->protection);
+      kern_return_t rv = pmap_enter(kernel_pmap, page_offset, page_num,
+                                    new_prot, VM_PROT_NONE, 0, false);
+      if (rv != KERN_SUCCESS) {
+        retval = false;
+        break;
+      }
+      page_offset += vm_map_page_size(kernel_map);
     }
-
-    entry = map_entry_next(entry);
-    entry_start = map_entry_start(entry);
   }
 
   vm_map_unlock(kernel_map);
 
-  return (rv == KERN_SUCCESS);
+  return retval;
 }
 
 typedef void (*vm_map_iterator_t)(vm_map_t map, vm_map_entry_t entry,
@@ -3987,15 +4126,14 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
     len_rounded += page_size;
   }
 
-  // When we write to kernel memory, elsewhere in this kernel extension,
-  // we don't bother with altering existing write permissions -- we just
-  // temporarily unset the "write protect" bit of the CR0 register (CR0_WP).
-  // Doing that here, though, has very bad side effects.  The "DYLD shared
-  // cache" gets altered permanently, for all processes.  These changes even
-  // survive a reboot!  (Though they can be cleared by running
-  // update_dyld_shared_cache.)  Even changes to dyld happen to a global
-  // copy in RAM, shared by all processes.  Using vm_protect() somehow avoids
-  // all this trouble.
+  // It's possible to write to kernel memory without altering existing write
+  // permissions -- just temporarily unset the "write protect" bit of the CR0
+  // register (CR0_WP).  Doing that here, though, has very bad side effects.
+  // The "DYLD shared cache" gets altered permanently, for all processes.
+  // These changes even survive a reboot!  (Though they can be cleared by
+  // running update_dyld_shared_cache.)  Even changes to dyld happen to a
+  // global copy in RAM, shared by all processes.  Using vm_protect() somehow
+  // avoids all this trouble.
   bool prot_needs_restore = false;
   vm_prot_t prot = vm_map_get_protection(proc_map, dest);
   if (!(prot & VM_PROT_WRITE)) {
@@ -4190,7 +4328,9 @@ char *basename(const char *path)
 // probably best just to implement this method on ElCapitan (and above).
 pid_t get_xpc_parent(pid_t possible_child)
 {
-  if (!possible_child || (!OSX_ElCapitan() && !macOS_Sierra())) {
+  if (!possible_child ||
+      (!OSX_ElCapitan() && !macOS_Sierra() && !macOS_HighSierra()))
+  {
     return 0;
   }
 
@@ -4302,7 +4442,7 @@ bool get_proc_info(int32_t pid, char **path,
   uint32_t p_argslen = 0;
   int32_t p_argc = 0;
   user_addr_t user_stack = 0;
-  if (OSX_ElCapitan() || macOS_Sierra()) {
+  if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra()) {
     proc_fake_elcapitan_t p = (proc_fake_elcapitan_t) our_proc;
     if (p) {
       p_argslen = p->p_argslen;
@@ -4432,7 +4572,7 @@ typedef struct _task_fake_mavericks {
   volatile uint32_t t_flags; /* Offset 0x300, general-purpose task flags protected by task_lock (TL) */
   uint32_t pad3[1];
   mach_vm_address_t all_image_info_addr; // Offset 0x308
-  mach_vm_size_t  all_image_info_size;   // Offset 0x310
+  mach_vm_size_t all_image_info_size;    // Offset 0x310
 } *task_fake_mavericks_t;
 
 typedef struct _task_fake_yosemite {
@@ -4443,7 +4583,7 @@ typedef struct _task_fake_yosemite {
   volatile uint32_t t_flags; /* Offset 0x310, general-purpose task flags protected by task_lock (TL) */
   uint32_t pad3[1];
   mach_vm_address_t all_image_info_addr; // Offset 0x318
-  mach_vm_size_t  all_image_info_size;   // Offset 0x320
+  mach_vm_size_t all_image_info_size;    // Offset 0x320
 } *task_fake_yosemite_t;
 
 typedef struct _task_fake_elcapitan {
@@ -4454,7 +4594,7 @@ typedef struct _task_fake_elcapitan {
   volatile uint32_t t_flags; /* Offset 0x330, general-purpose task flags protected by task_lock (TL) */
   uint32_t pad3[1];
   mach_vm_address_t all_image_info_addr; // Offset 0x338
-  mach_vm_size_t  all_image_info_size;   // Offset 0x340
+  mach_vm_size_t all_image_info_size;    // Offset 0x340
 } *task_fake_elcapitan_t;
 
 typedef struct _task_fake_sierra {
@@ -4465,8 +4605,19 @@ typedef struct _task_fake_sierra {
   volatile uint32_t t_flags; /* Offset 0x3b8, general-purpose task flags protected by task_lock (TL) */
   uint32_t pad3[1];
   mach_vm_address_t all_image_info_addr; // Offset 0x3c0
-  mach_vm_size_t  all_image_info_size;   // Offset 0x3c8
+  mach_vm_size_t all_image_info_size;    // Offset 0x3c8
 } *task_fake_sierra_t;
+
+typedef struct _task_fake_highsierra {
+  lck_mtx_t lock;       // Size 0x10
+  uint64_t pad1[7];
+  queue_head_t threads; // Size 0x10, offset 0x48
+  uint64_t pad2[110];
+  volatile uint32_t t_flags; /* Offset 0x3c8, general-purpose task flags protected by task_lock (TL) */
+  uint32_t pad3[1];
+  mach_vm_address_t all_image_info_addr; // Offset 0x3d0
+  mach_vm_size_t all_image_info_size;    // Offset 0x3d8
+} *task_fake_highsierra_t;
 
 void task_lock(task_t task)
 {
@@ -4494,7 +4645,10 @@ mach_vm_address_t task_all_image_info_addr(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sierra()) {
+    if (macOS_HighSierra()) {
+      offset_in_struct =
+        offsetof(struct _task_fake_highsierra, all_image_info_addr);
+    } else if (macOS_Sierra()) {
       offset_in_struct =
         offsetof(struct _task_fake_sierra, all_image_info_addr);
     } else if (OSX_ElCapitan()) {
@@ -4526,7 +4680,10 @@ mach_vm_size_t task_all_image_info_size(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sierra()) {
+    if (macOS_HighSierra()) {
+      offset_in_struct =
+        offsetof(struct _task_fake_highsierra, all_image_info_size);
+    } else if (macOS_Sierra()) {
       offset_in_struct =
         offsetof(struct _task_fake_sierra, all_image_info_size);
     } else if (OSX_ElCapitan()) {
@@ -4558,7 +4715,9 @@ uint32_t task_flags(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sierra()) {
+    if (macOS_HighSierra()) {
+      offset_in_struct = offsetof(struct _task_fake_highsierra, t_flags);
+    } else if (macOS_Sierra()) {
       offset_in_struct = offsetof(struct _task_fake_sierra, t_flags);
     } else if (OSX_ElCapitan()) {
       offset_in_struct = offsetof(struct _task_fake_elcapitan, t_flags);
@@ -4756,6 +4915,7 @@ typedef struct _symbol_table {
   vm_size_t stubs_table_size;
   user_addr_t stubs_table_addr;
   vm_offset_t slide;
+  vm_offset_t module_size;
   // If symbol_type == symbol_type_defined, symbol_index and symbol_count
   // refer to the symbol table itself.  But for symbol_type_undef, they
   // refer to the indirect symbol table.
@@ -4763,6 +4923,7 @@ typedef struct _symbol_table {
   uint32_t symbol_count; // Number of "interesting" symbols
   symbol_type_t symbol_type;
   bool is_64bit;
+  bool is_in_shared_cache;
 } symbol_table_t;
 
 typedef struct _module_info {
@@ -4859,6 +5020,7 @@ bool copyin_symbol_table(module_info_t *module_info,
   bool found_lazy_ptr_table = false;
   bool found_stubs_table = false;
 
+  vm_offset_t module_size = mh_size + cmds_size;
   uint32_t num_commands = mh_local.ncmds;
   const struct load_command *load_command =
     (struct load_command *) cmds_local;
@@ -4869,12 +5031,9 @@ bool copyin_symbol_table(module_info_t *module_info,
     switch (cmd) {
       case LC_SEGMENT:
       case LC_SEGMENT_64: {
-        if (found_linkedit_segment) {
-          i = num_commands + 1;
-          break;
-        }
         char *segname;
         uint64_t vmaddr;
+        uint64_t vmsize;
         uint64_t fileoff;
         uint64_t filesize;
         uint64_t sections_offset;
@@ -4884,6 +5043,7 @@ bool copyin_symbol_table(module_info_t *module_info,
             (struct segment_command_64 *) load_command;
           segname = command->segname;
           vmaddr = command->vmaddr;
+          vmsize = command->vmsize;
           fileoff = command->fileoff;
           filesize = command->filesize;
           sections_offset =
@@ -4894,6 +5054,7 @@ bool copyin_symbol_table(module_info_t *module_info,
             (struct segment_command *) load_command;
           segname = command->segname;
           vmaddr = command->vmaddr;
+          vmsize = command->vmsize;
           fileoff = command->fileoff;
           filesize = command->filesize;
           sections_offset =
@@ -4902,6 +5063,14 @@ bool copyin_symbol_table(module_info_t *module_info,
         }
         if (!is_in_shared_cache && !fileoff && filesize) {
           slide = module_info->load_address - vmaddr;
+        }
+        if (strcmp(segname, "__PAGEZERO")) {
+          vm_offset_t segment_end = vmaddr + slide + vmsize;
+          vm_offset_t size_to_segment_end =
+            segment_end - module_info->load_address;
+          if (size_to_segment_end > module_size) {
+            module_size = size_to_segment_end;
+          }
         }
         if (!strcmp(segname, "__DATA")) {
           data_sections_offset = sections_offset;
@@ -4914,10 +5083,6 @@ bool copyin_symbol_table(module_info_t *module_info,
         break;
       }
       case LC_SYMTAB: {
-        if (!found_linkedit_segment) {
-          i = num_commands + 1;
-          break;
-        }
         struct symtab_command *command =
           (struct symtab_command *) load_command;
         symbol_table_offset =
@@ -4930,10 +5095,6 @@ bool copyin_symbol_table(module_info_t *module_info,
         break;
       }
       case LC_DYSYMTAB: {
-        if (!found_linkedit_segment) {
-          i = num_commands + 1;
-          break;
-        }
         struct dysymtab_command *command =
           (struct dysymtab_command *) load_command;
         if (symbol_type == symbol_type_defined) {
@@ -4957,7 +5118,6 @@ bool copyin_symbol_table(module_info_t *module_info,
         found_dysymtab_segment && total_symbol_count && string_table_size)
     {
       found_symbol_table = true;
-      break;
     }
     load_command = (struct load_command *)
       ((vm_offset_t)load_command + load_command->cmdsize);
@@ -5123,10 +5283,12 @@ bool copyin_symbol_table(module_info_t *module_info,
   symbol_table->stubs_table_size = stubs_table_size;
   symbol_table->stubs_table_addr = stubs_table_offset;
   symbol_table->slide = slide;
+  symbol_table->module_size = module_size;
   symbol_table->symbol_index = interesting_symbol_index;
   symbol_table->symbol_count = interesting_symbol_count;
   symbol_table->symbol_type = symbol_type;
   symbol_table->is_64bit = is_64bit;
+  symbol_table->is_in_shared_cache = is_in_shared_cache;
   return true;
 }
 
@@ -5644,6 +5806,7 @@ void do_report(sm_report_t report)
 
 #endif // #ifdef DEBUG_LOG
 
+#if (0)
 typedef struct report_region_info {
   uint32_t entry_count;
 } *report_region_info_t;
@@ -5736,7 +5899,7 @@ void report_region_iterator(vm_map_t map, vm_map_entry_t entry,
 
 void report_region(vm_map_t map, vm_map_offset_t start, vm_map_offset_t end)
 {
-  if (!map) {
+  if (!map || (map == kernel_map)) {
     return;
   }
 
@@ -5745,6 +5908,7 @@ void report_region(vm_map_t map, vm_map_offset_t start, vm_map_offset_t end)
 
   vm_map_iterate_entries(map, start, end, report_region_iterator, &info);
 }
+#endif
 
 typedef struct user_region_codesigned_info {
   bool is_signed;
@@ -5797,7 +5961,7 @@ void user_region_codesigned_iterator(vm_map_t map, vm_map_entry_t entry,
 bool user_region_codesigned(vm_map_t map, vm_map_offset_t start,
                             vm_map_offset_t end)
 {
-  if (!map) {
+  if (!map || (map == kernel_map)) {
     return false;
   }
 
@@ -5877,6 +6041,7 @@ void sign_user_pages(vm_map_t map, vm_map_offset_t start,
   vm_map_iterate_entries(map, start, end, sign_user_pages_iterator, NULL);
 }
 
+#if (0)
 typedef struct ensure_user_region_wired_info {
   bool retval;
 } *ensure_user_region_wired_info_t;
@@ -5974,6 +6139,7 @@ bool ensure_user_region_wired(vm_map_t map, vm_map_offset_t start,
 
   return info.retval;
 }
+#endif
 
 // At the heart of HookCase.kext's infrastructure is a lock-protected linked
 // list of hook_t structures.  Think of these as something like fish hooks.
@@ -6042,8 +6208,8 @@ bool ensure_user_region_wired(vm_map_t map, vm_map_offset_t start,
 // We've hit the breakpoint a third time, and the call to
 // _dyld_register_func_for_add_image() has happened (we don't know whether it
 // succeeded or failed).  In process_hook_landed() we've unset the breakpoint
-// we set in maybe_cast_hook().  Our hook_t structure is being kept alive for
-// future reference.
+// we set in maybe_cast_hook().  Our cast hook is being kept alive for future
+// reference.
 
 // Every patch hook has two legal states it may be in at any given time
 //
@@ -6069,16 +6235,26 @@ bool ensure_user_region_wired(vm_map_t map, vm_map_offset_t start,
 // it's what runs first (starting from _dyld_start in dyld's
 // src/dyldStartup.s) as a new process starts up.  Not coincidentally, dyld is
 // what implements Apple's support for the DYLD_INSERT_LIBRARIES environment
-// variable.  dyld::InitializeMainExecutable() is called (from _main()) after
+// variable.  dyld::initializeMainExecutable() is called (from _main()) after
 // all the automatically linked shared libraries (including those specified by
 // DYLD_INSERT_LIBRARIES) are loaded, but before any of those libraries' C++
-// initializers have run (which happens in dyld::InitializeMainExecutable()
+// initializers have run (which happens in dyld::initializeMainExecutable()
 // itself).  This seems an ideal place to intervene.
+//
+// As of macOS 10.13, dyld has an alternate way of launching 64-bit executables
+// that bypasses dyld::initializeMainExecutable() -- dyld::launchWithClosure().
+// But dyld::launchWithClosure() fails over to dyld's "traditional" code path,
+// which does use dyld::initializeMainExecutable().  So, in a 64-bit process
+// where we might want to set hooks on macOS 10.13, we patch
+// dyld::launchWithClosure() to "return false" unconditionally.  Future
+// versions of HookCase.kext may need to know more about how this closure
+// subsystem works.
 //
 // maybe_cast_hook() is called just before the new process's execution begins
 // at _dyld_start.  There, if appropriate, we write an "int 0x20" breakpoint
-// to the beginning of dyld::InitializeMainExecutable(), and wait for the
-// breakpoint to be hit.
+// to the beginning of dyld::initializeMainExecutable(), and wait for the
+// breakpoint to be hit.  When dealing with a 64-bit process on macOS 10.13,
+// we also patch dyld::launchWithClosure() to always "return false".
 //
 // Hitting the breakpoint (for the first time) triggers a call to
 // process_hook_cast().  There we set up a call to dlopen() to load our
@@ -6090,8 +6266,8 @@ bool ensure_user_region_wired(vm_map_t map, vm_map_offset_t start,
 // "restored" when we return from process_hook_cast(), we
 //   1) Change RSP/ESP to make room on the user stack
 //   2) Copy the value of HC_INSERT_LIBRARY to the user stack
-//   3) Set registers or stack locations to dlopen's 'path' and 'mode'
-//   4) Set the stack's "return address" to dyld::InitializeMainExecutable()
+//   3) Set registers or stack locations to dlopen's 'path' and 'mode' args
+//   4) Set the stack's "return address" to dyld::initializeMainExecutable()
 //   5) Set RIP/EIP to dlopen()
 //
 // Later, in process_hook_landed(), we may set up another call, to
@@ -6101,12 +6277,12 @@ bool ensure_user_region_wired(vm_map_t map, vm_map_offset_t start,
 // instruction).  Then we remap that page into the user process and set the
 // 'func' argument accordingly.  We also set RIP/EIP to
 // _dyld_register_func_for_add_image() and the "return address" to
-// dyld::InitializeMainExecutable().  Our int 0x21 handler calls
+// dyld::initializeMainExecutable().  Our int 0x21 handler calls
 // on_add_image().
 //
 // When we're all done, we return the thread state to what it was before the
-// first call to dyld::InitializeMainExecutable(), remove our breakpoint, set
-// RIP/EIP to dyld::InitializeMainExecutable(), and allow that call to happen
+// first call to dyld::initializeMainExecutable(), remove our breakpoint, set
+// RIP/EIP to dyld::initializeMainExecutable(), and allow that call to happen
 // as originally intended.
 
 // HookCase.kext is compatible with DYLD_INSERT_LIBRARIES, and doesn't stomp
@@ -6196,6 +6372,7 @@ typedef struct _hook {
   uint32_t num_call_orig_funcs;         // Only used in cast hook
   uint32_t num_patch_hooks;             // Only used in cast hook
   uint32_t num_interpose_hooks;         // Only used in cast hook
+  bool no_numerical_addrs;              // Only used in cast hook
   uint16_t orig_code;
 } hook_t;
 
@@ -6242,6 +6419,13 @@ typedef struct _hook {
 // unsigned char[] = {0xcd, 0x23} when stored in little endian format
 #define INT_0x23_OPCODE_SHORT 0x23cd
 
+// xor   %rax, %rax
+// ret
+
+// 48 31 C0 C3
+
+#define RETURN_FALSE_64BIT_INT 0xC3C03148
+
 //push   %rbp
 //mov    %rsp, %rbp
 //pop    %rbp
@@ -6286,10 +6470,10 @@ typedef struct _hook {
 // below.
 
 const char *g_call_orig_func_64bit =
-  "4C 8D 15 F9 0F 00 00 4D 8B 12 49 83 C2 04 55 48 89 E5 41 FF E2 ";
+  "55 48 89 E5 4C 8D 15 F5 0F 00 00 4D 8B 12 49 83 C2 04 41 FF E2 ";
 
 const char *g_call_orig_func_32bit =
-  "E8 00 00 00 00 58 8D 80 FB 0F 00 00 8B 00 83 C0 03 55 89 E5 FF E0 ";
+  "55 89 E5 E8 00 00 00 00 58 8D 80 F8 0F 00 00 8B 00 83 C0 03 FF E0 ";
 
 bool g_locks_inited = false;
 
@@ -6366,6 +6550,7 @@ void free_hook(hook_t *hookp)
   if (!hookp) {
     return;
   }
+  hookp->state = hook_state_broken;
   if (hookp->patch_hook_lock) {
     IORecursiveLockFree(hookp->patch_hook_lock);
   }
@@ -6447,6 +6632,25 @@ hook_t *find_hook_with_add_image_func(uint64_t unique_pid)
   return hookp;
 }
 
+hook_t *find_hook_with_dyld_runInitializers(user_addr_t runInitializers_addr,
+                                            uint64_t unique_pid)
+{
+  if (!check_init_locks() || !runInitializers_addr || !unique_pid) {
+    return NULL;
+  }
+  all_hooks_lock();
+  hook_t *hookp = NULL;
+  LIST_FOREACH(hookp, &g_all_hooks, list_entry) {
+    if ((hookp->dyld_runInitializers == runInitializers_addr) &&
+        (hookp->unique_pid == unique_pid))
+    {
+      break;
+    }
+  }
+  all_hooks_unlock();
+  return hookp;
+}
+
 void remove_process_hooks(uint64_t unique_pid)
 {
   if (!check_init_locks() || !unique_pid) {
@@ -6482,6 +6686,7 @@ bool process_has_hooks(uint64_t unique_pid)
   return retval;
 }
 
+#if (0)
 // This is unsafe -- proc_find() sometimes hangs, possibly when its pid_t
 // parameter is itself a zombie process.  Until we find a safe way to do it,
 // we can't remove "dead" hooks.
@@ -6502,6 +6707,7 @@ void remove_zombie_hooks()
   }
   all_hooks_unlock();
 }
+#endif
 
 void destroy_locks()
 {
@@ -6572,17 +6778,20 @@ void unlock_hook(IORecursiveLock *a_lock)
   }
 }
 
-// Check if 'proc' (or its XPC parent) has an HC_INSERT_LIBRARY or HC_NOKIDS
-// environment variable that we should pay attention to.
+// Check if 'proc' (or its XPC parent) has an HC_INSERT_LIBRARY, HC_NOKIDS or
+// HC_NO_NUMERICAL_ADDRS environment variable that we should pay attention to.
 bool get_cast_info(proc_t proc, hc_path_t proc_path, hc_path_t dylib_path,
-                   pid_t *hooked_parent)
+                   pid_t *hooked_parent, bool *no_numerical_addrs)
 {
-  if (!proc || !proc_path || !dylib_path || !hooked_parent) {
+  if (!proc || !proc_path || !dylib_path ||
+      !hooked_parent || !no_numerical_addrs)
+  {
     return false;
   }
   proc_path[0] = 0;
   dylib_path[0] = 0;
   *hooked_parent = 0;
+  *no_numerical_addrs = false;
 
   char *path_ptr = NULL;
   char **envp = NULL;
@@ -6624,6 +6833,9 @@ bool get_cast_info(proc_t proc, hc_path_t proc_path, hc_path_t dylib_path,
       } else if (!strcmp(key, HC_NOKIDS_ENV_VAR)) {
         no_kids = true;
         found_trigger_variable = true;
+      } else if (!strcmp(key, HC_NO_NUMERICAL_ADDRS_ENV_VAR)) {
+        *no_numerical_addrs = true;
+        found_trigger_variable = true;
       }
     }
   }
@@ -6644,7 +6856,8 @@ bool get_cast_info(proc_t proc, hc_path_t proc_path, hc_path_t dylib_path,
             char *key = strsep(&value, "=");
             if (key && value && value[0]) {
               if (!strcmp(key, HC_INSERT_LIBRARY_ENV_VAR) ||
-                  !strcmp(key, HC_NOKIDS_ENV_VAR))
+                  !strcmp(key, HC_NOKIDS_ENV_VAR) ||
+                  !strcmp(key, HC_NO_NUMERICAL_ADDRS_ENV_VAR))
               {
                 is_child = true;
                 *hooked_parent = normal_parent;
@@ -6677,6 +6890,10 @@ bool get_cast_info(proc_t proc, hc_path_t proc_path, hc_path_t dylib_path,
                 no_kids = true;
                 is_child = true;
                 *hooked_parent = xpc_parent;
+              } else if (!strcmp(key, HC_NO_NUMERICAL_ADDRS_ENV_VAR)) {
+                *no_numerical_addrs = true;
+                is_child = true;
+                *hooked_parent = xpc_parent;
               }
             }
           }
@@ -6697,14 +6914,29 @@ bool get_cast_info(proc_t proc, hc_path_t proc_path, hc_path_t dylib_path,
 // the process's copy of the dyld module.
 bool maybe_cast_hook(proc_t proc)
 {
+  // maybe_cast_hook() won't work properly if current_proc() is the kernel
+  // process (pid 0).
   if (!proc || (proc == kernproc)) {
+    return false;
+  }
+
+  // maybe_cast_hook() may legitimately be called more than once on a given
+  // process -- for example after another binary has been loaded into it
+  // using POSIX_SPAWN_SETEXEC.  But in that case remove_process_hooks() must
+  // be called beforehand to remove all existing hooks.  If any hooks do
+  // still exist in 'proc', maybe_cast_hook() must accidentally have been
+  // more than once on it.
+  if (process_has_hooks(proc_uniqueid(proc))) {
     return false;
   }
 
   hc_path_t proc_path;
   hc_path_t dylib_path;
   pid_t hooked_parent;
-  if (!get_cast_info(proc, proc_path, dylib_path, &hooked_parent)) {
+  bool no_numerical_addrs;
+  if (!get_cast_info(proc, proc_path, dylib_path,
+                     &hooked_parent, &no_numerical_addrs))
+  {
     return false;
   }
 
@@ -6741,6 +6973,7 @@ bool maybe_cast_hook(proc_t proc)
   // This seems an ideal place to intervene.
   user_addr_t initializeMainExecutable = 0;
   user_addr_t dyld_runInitializers = 0;
+  user_addr_t dyld_launchWithClosure = 0;
   module_info_t module_info;
   symbol_table_t symbol_table;
   if (get_module_info(proc, "dyld", 0, &module_info)) {
@@ -6751,6 +6984,11 @@ bool maybe_cast_hook(proc_t proc)
         find_symbol("__ZN4dyld24initializeMainExecutableEv", &symbol_table);
       dyld_runInitializers =
         find_symbol("__ZN4dyld15runInitializersEP11ImageLoader", &symbol_table);
+      if (IS_64BIT_PROCESS(proc)) {
+        dyld_launchWithClosure =
+          find_symbol("__ZN4dyldL17launchWithClosureEPKN5dyld312launch_cache13binary_format7ClosureEPK15DyldSharedCachePK11mach_headermiPPKcSE_SE_PmSF_",
+                      &symbol_table);
+      }
       free_symbol_table(&symbol_table);
     }
   }
@@ -6784,34 +7022,47 @@ bool maybe_cast_hook(proc_t proc)
   hookp->orig_addr = initializeMainExecutable;
   hookp->orig_code = orig_code;
   hookp->dyld_runInitializers = dyld_runInitializers;
+  hookp->no_numerical_addrs = no_numerical_addrs;
 
-  // Suspend the parent process if we might have hooks in it.  Our
-  // initialization can take a while (especially if debug logging is on), and
+  // If debug logging is on, suspend the parent process if we might have hooks
+  // in it.  Our initialization can take a while if debug logging is on, and
   // might confuse timers running in our parent.  (Suspending the parent also
   // suspends its timers, of course.)  If it hasn't already happened by other
   // means, the parent gets resumed when our cast hook is deleted.
   if (hooked_parent) {
     hookp->hooked_parent = hooked_parent;
+#ifdef DEBUG_LOG
     proc_t parent_proc = proc_find(hooked_parent);
     if (parent_proc) {
       task_t parent_task = proc_task(parent_proc);
       proc_rele(parent_proc);
       if (parent_task) {
         task_reference(parent_task);
-        // Normally we'd call task_wait() after task_hold(), but as best I can
-        // tell we don't need to worry here about the parent task's threads
-        // stopping immediately.
         task_hold(parent_task);
+        task_wait(parent_task, false);
         hookp->held_parent_task = parent_task;
       }
     }
+#endif
   }
 
   uint16_t new_code = INT_0x20_OPCODE_SHORT;
-  bool rv = proc_copyout(proc_map, &new_code, initializeMainExecutable,
-                         sizeof(new_code), true, false);
+  bool rv1 = proc_copyout(proc_map, &new_code, initializeMainExecutable,
+                          sizeof(new_code), true, false);
+  bool rv2 = true;
+  // If a 64-bit process is being launched on macOS 10.13, dyld might call
+  // dyld::launchWithClosure(), and take a code path that never calls
+  // dyld::initializeMainExecutable().  To prevent this we patch
+  // dyld::launchWithClosure() to make it always "return false".  This makes
+  // dyld fail over to the code path that calls
+  // dyld::initializeMainExecutable().
+  if (dyld_launchWithClosure) {
+    uint32_t new_lwc = RETURN_FALSE_64BIT_INT;
+    rv2 = proc_copyout(proc_map, &new_lwc, dyld_launchWithClosure,
+                       sizeof(new_lwc), true, false);
+  }
   vm_map_deallocate(proc_map);
-  if (!rv) {
+  if (!rv1 || !rv2) {
     free_hook(hookp);
     return false;
   }
@@ -6984,6 +7235,19 @@ void on_dyld_runInitializers(x86_saved_state_t *intr_state)
   }
 
   proc_t proc = current_proc();
+
+  // Sanity check
+  user_addr_t orig_addr;
+  if (intr_state->flavor == x86_SAVED_STATE64) {
+    orig_addr = intr_state->ss_64.isf.rip - 2;
+  } else { // flavor == x86_SAVED_STATE32
+    orig_addr = intr_state->ss_32.eip - 2;
+  }
+  hook_t *hookp = find_hook_with_dyld_runInitializers(orig_addr,
+                                                      proc_uniqueid(proc));
+  if (!hookp) {
+    return;
+  }
 
   vm_map_t proc_map = task_map_for_proc(proc);
   if (!proc_map) {
@@ -7448,7 +7712,7 @@ bool get_user_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
 
 // Transcribe code_string into actual machine code.  Must call IOFree() on
 // '*buffer' when done.
-bool get_code_buffer(const char *code_string, char **buffer,
+bool get_code_buffer(const char *code_string, unsigned char **buffer,
                      size_t *buf_len)
 {
   if (!code_string || !buffer || !buf_len) {
@@ -7470,7 +7734,7 @@ bool get_code_buffer(const char *code_string, char **buffer,
   strncpy(code_string_local, code_string, string_len);
 
   size_t buf_len_local = (string_len / 3) + 1;
-  char *buffer_local = (char *) IOMalloc(buf_len_local);
+  unsigned char *buffer_local = (unsigned char *) IOMalloc(buf_len_local);
   if (!buffer_local) {
     IOFree(code_string_local, string_len);
     return false;
@@ -7484,7 +7748,7 @@ bool get_code_buffer(const char *code_string, char **buffer,
     if (!code_byte) {
       break;
     }
-    buffer_local[i] = (char) strtol(code_byte, NULL, 16);
+    buffer_local[i] = (unsigned char) strtoul(code_byte, NULL, 16);
   }
 
   IOFree(code_string_local, string_len);
@@ -7500,7 +7764,7 @@ bool get_code_buffer(const char *code_string, char **buffer,
 // expects a pointer to the address to be PAGE_SIZE bytes after its own
 // beginning.  See call_orig.s for more information.  We must call IOFree()
 // on '*buffer' when done.
-bool get_call_orig_func(proc_t proc, char **buffer, size_t *buf_len)
+bool get_call_orig_func(proc_t proc, unsigned char **buffer, size_t *buf_len)
 {
   if (!proc || !buffer || !buf_len) {
     return false;
@@ -7556,7 +7820,7 @@ bool set_call_orig_func(proc_t proc, vm_map_t proc_map,
     return false;
   }
 
-  char *code_buffer = NULL;
+  unsigned char *code_buffer = NULL;
   size_t code_buffer_len = 0;
   if (!get_call_orig_func(proc, &code_buffer, &code_buffer_len)) {
     return false;
@@ -7603,7 +7867,7 @@ bool setup_call_orig_func_block(vm_map_t proc_map, hook_t *cast_hookp)
     return false;
   }
 
-  char *page_buffer = (char *) IOMallocAligned(2 * PAGE_SIZE, PAGE_SIZE);
+  char *page_buffer = (char *) IOMallocPageable(2 * PAGE_SIZE, PAGE_SIZE);
   if (!page_buffer) {
     return false;
   }
@@ -7618,11 +7882,42 @@ bool setup_call_orig_func_block(vm_map_t proc_map, hook_t *cast_hookp)
                VM_PROT_READ);
     cast_hookp->call_orig_func_block = block;
   } else {
-    IOFreeAligned(page_buffer, 2 * PAGE_SIZE);
+    IOFreePageable(page_buffer, 2 * PAGE_SIZE);
     rv = false;
   }
 
   return rv;
+}
+
+#define NUM_ADDR_HEADER "_sub_"
+#define NUM_ADDR_HEADER_LEN 5
+
+// Check if a 'function_name' follows our convention to specify a numerical
+// address, and if so return that numerical address.
+bool function_name_to_numerical_addr(char *function_name,
+                                     user_addr_t *numerical_addr)
+{
+  if (!function_name || !numerical_addr) {
+    return false;
+  }
+
+  *numerical_addr = 0;
+
+  if (strlen(function_name) <= NUM_ADDR_HEADER_LEN) {
+    return false;
+  }
+  if (strncasecmp(function_name, NUM_ADDR_HEADER, NUM_ADDR_HEADER_LEN)) {
+    return false;
+  }
+
+  char *endptr = NULL;
+  user_addr_t addr = strtoul(function_name + NUM_ADDR_HEADER_LEN, &endptr, 16);
+  if (!endptr || *endptr) {
+    return false;
+  }
+
+  *numerical_addr = addr;
+  return true;
 }
 
 void set_patch_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
@@ -7660,22 +7955,32 @@ void set_patch_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
     user_addr_t orig_addr = 0;
     module_info_t module_info;
     symbol_table_t symbol_table;
+    bool is_numerical_addr = false;
+    user_addr_t numerical_addr = 0;
     if (get_module_info(proc, patch_hooks[i].orig_module_name, 0,
                         &module_info))
     {
-      if (copyin_symbol_table(&module_info, &symbol_table,
-                              symbol_type_defined))
+      if (!cast_hookp->no_numerical_addrs &&
+          function_name_to_numerical_addr(patch_hooks[i].orig_function_name,
+                                          &numerical_addr))
       {
-        orig_addr =
-          find_symbol(patch_hooks[i].orig_function_name, &symbol_table);
-        free_symbol_table(&symbol_table);
+        orig_addr = numerical_addr + module_info.load_address;
+        is_numerical_addr = true;
+      } else {
+        if (copyin_symbol_table(&module_info, &symbol_table,
+                                symbol_type_defined))
+        {
+          orig_addr =
+            find_symbol(patch_hooks[i].orig_function_name, &symbol_table);
+          free_symbol_table(&symbol_table);
+        }
       }
     } else {
       printf("HookCase(%s[%d]): set_patch_hooks(%s): Module \"%s\" not (yet) present/loaded in process\n",
              procname, proc_pid(proc), cast_hookp->inserted_dylib_path, patch_hooks[i].orig_module_name);
       continue;
     }
-    if (!orig_addr) {
+    if (!is_numerical_addr && !orig_addr) {
       printf("HookCase(%s[%d]): set_patch_hooks(%s): Function \"%s\" not found in module \"%s\"\n",
              procname, proc_pid(proc), cast_hookp->inserted_dylib_path, patch_hooks[i].orig_function_name, patch_hooks[i].orig_module_name);
       patch_hooks[i].hook_function = 0;
@@ -7690,6 +7995,11 @@ void set_patch_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
 
     uint32_t prologue = 0;
     if (!proc_copyin(proc_map, orig_addr, &prologue, sizeof(prologue))) {
+      if (is_numerical_addr) {
+        printf("HookCase(%s[%d]): set_patch_hooks(%s): The address \'0x%llx\' of function \"%s\" in \"%s\" is invalid\n",
+               procname, proc_pid(proc), cast_hookp->inserted_dylib_path, orig_addr, patch_hooks[i].orig_function_name, patch_hooks[i].orig_module_name);
+        patch_hooks[i].hook_function = 0;
+      }
       continue;
     }
     uint16_t orig_code = (uint16_t) (prologue & 0xffff);
@@ -7739,10 +8049,13 @@ void set_patch_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
       continue;
     }
 
+#if (0)
+    // I'm not sure this really helps.
     if (use_call_orig_func) {
       ensure_user_region_wired(proc_map, orig_addr,
                                orig_addr + sizeof(new_code));
     }
+#endif
 
     hookp->pid = cast_hookp->pid;
     hookp->unique_pid = cast_hookp->unique_pid;
@@ -7818,6 +8131,8 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
         continue;
       }
       if (!strcmp(string_table_item, interpose_hooks[j].orig_function_name)) {
+        user_addr_t module_begin = module_info->load_address;
+        user_addr_t module_end = module_begin + symbol_table.module_size;
         uint32_t target_index = i - symbol_table.symbol_index;
         if (symbol_table.lazy_ptr_table) {
           if (is_64bit) {
@@ -7827,8 +8142,14 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
             user_addr_t old_lazy_ptr_offset = symbol_table.lazy_ptr_table_addr +
               target_index * sizeof(old_lazy_ptr);
             // Don't change 'old_lazy_ptr' if it's already been changed --
-            // presumably via DYLD_INSERT_LIBRARIES.
-            if (!interpose_hooks[j].orig_function ||
+            // presumably via DYLD_INSERT_LIBRARIES.  But note that it won't
+            // be NULL if it's not yet been initialized -- it will point to a
+            // local method for lazily setting it to the correct (external)
+            // value.
+            bool uninitialized = (!symbol_table.is_in_shared_cache &&
+                                 (old_lazy_ptr > module_begin) &&
+                                 (old_lazy_ptr < module_end));
+            if (!interpose_hooks[j].orig_function || uninitialized ||
                 (old_lazy_ptr == interpose_hooks[j].orig_function))
             {
               proc_copyout(proc_map, &new_lazy_ptr, old_lazy_ptr_offset,
@@ -7842,8 +8163,14 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
             user_addr_t old_lazy_ptr_offset = symbol_table.lazy_ptr_table_addr +
               target_index * sizeof(old_lazy_ptr);
             // Don't change 'old_lazy_ptr' if it's already been changed --
-            // presumably via DYLD_INSERT_LIBRARIES.
-            if (!interpose_hooks[j].orig_function ||
+            // presumably via DYLD_INSERT_LIBRARIES.  But note that it won't
+            // be NULL if it's not yet been initialized -- it will point to a
+            // local method for lazily setting it to the correct (external)
+            // value.
+            bool uninitialized = (!symbol_table.is_in_shared_cache &&
+                                 (old_lazy_ptr > module_begin) &&
+                                 (old_lazy_ptr < module_end));
+            if (!interpose_hooks[j].orig_function || uninitialized ||
                 (old_lazy_ptr == (uint32_t) interpose_hooks[j].orig_function))
             {
               proc_copyout(proc_map, &new_lazy_ptr, old_lazy_ptr_offset,
@@ -7872,8 +8199,14 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
           *opcodeAddr = 0xE9;
 
           // Don't change 'old_function' if it's already been changed --
-          // presumably via DYLD_INSERT_LIBRARIES.
-          if (!interpose_hooks[j].orig_function ||
+          // presumably via DYLD_INSERT_LIBRARIES.  But note that it won't
+          // be NULL if it's not yet been initialized -- it will point to a
+          // local method for lazily setting it to the correct (external)
+          // value.
+          bool uninitialized = (!symbol_table.is_in_shared_cache &&
+                                (old_function > module_begin) &&
+                                (old_function < module_end));
+          if (!interpose_hooks[j].orig_function || uninitialized ||
               (old_function == (uint32_t) interpose_hooks[j].orig_function))
           {
             proc_copyout(proc_map, new_entry, old_entry_offset,
@@ -8153,7 +8486,7 @@ void process_hook_flying(hook_t *hookp, x86_saved_state_t *intr_state)
   // code (which contains an "int 0x21" instruction).  Then remap that block
   // into the current user process.
   vm_map_offset_t on_add_image = 0;
-  uint64_t *func_buffer = (uint64_t *) IOMallocAligned(PAGE_SIZE, PAGE_SIZE);
+  uint64_t *func_buffer = (uint64_t *) IOMallocPageable(PAGE_SIZE, PAGE_SIZE);
   if (func_buffer) {
     bzero(func_buffer, PAGE_SIZE);
     if (intr_state->flavor == x86_SAVED_STATE64) {
@@ -8166,7 +8499,7 @@ void process_hook_flying(hook_t *hookp, x86_saved_state_t *intr_state)
                  VM_PROT_READ | VM_PROT_EXECUTE);
       hookp->add_image_func_addr = on_add_image;
     } else {
-      IOFreeAligned(func_buffer, PAGE_SIZE);
+      IOFreePageable(func_buffer, PAGE_SIZE);
     }
   }
 
@@ -8710,18 +9043,21 @@ int hook_execve(proc_t p, struct execve_args *uap, int *retv)
     proc_name(proc_pid(proc), procname, sizeof(procname));
     printf("HookCase: hook_execve(%s[%d])\n",
            procname, proc_pid(proc));
-    report_proc_thread_state(current_thread());
+    report_proc_thread_state("HookCase: hook_execve()", current_thread());
 #endif
     // On all versions of OS X before Sierra, at this point the current
     // process is the user process that has just been "exec"-ed and is about
     // to start for the first time.  So we should call maybe_cast_hook() now.
-    // But on Sierra the current process is still the kernel process, so we
-    // shouldn't call maybe_cast_hook().  Fortunately we can still call it
-    // from thread_bootstrap_return_hook() below on Sierra, by which time
-    // the current process will be the current user process.
-    if (!macOS_Sierra()) {
+    // But on Sierra and above the current process is still the kernel
+    // process, so we can't call maybe_cast_hook() here.  Fortunately we can
+    // still call it from thread_bootstrap_return_hook() below on Sierra and
+    // above, by which time the current process will be the current user
+    // process.
+#ifndef DEBUG_PROCESS_START
+    if (!macOS_Sierra() && !macOS_HighSierra()) {
       maybe_cast_hook(current_proc());
     }
+#endif
   }
   return retval;
 }
@@ -8783,28 +9119,30 @@ int hook_posix_spawn(proc_t p, struct posix_spawn_args *uap, int *retv)
       proc_name(proc_pid(proc), procname, sizeof(procname));
       printf("HookCase: hook_posix_spawn(%s[%d])\n",
              procname, proc_pid(proc));
-      report_proc_thread_state(current_thread());
+      report_proc_thread_state("HookCase: hook_posix_spawn()", current_thread());
 #endif
       remove_process_hooks(proc_uniqueid(proc));
       // On all versions of OS X, thread_bootstrap_return_hook() has already
-      // been called once from g_posix_spawn_orig, and we've already ignored
-      // the call (because UT_NOTCANCELPT is set in the current thread's
-      // uu_flag, which happens during all Unix syscalls like execve() and
-      // posix_spawn()).  On Sierra another call will be made to
-      // thread_bootstrap_return_hook(), without any way for us to tell that
-      // we should ignore it.  This extra call doesn't happen on other
-      // versions of OS X.  So on Sierra we wait for maybe_cast_hook() to be
-      // called from thread_bootstrap_return_hook(), while on other versions
-      // of OS X we call maybe_cast_hook() here.
-      if (!macOS_Sierra()) {
+      // been called as the first thread started of the original process.
+      // We've called maybe_cast_hook() from it, and possibly set hooks in it
+      // (which were just removed in the call to remove_process_hooks()).  On
+      // Sierra and above, thread_bootstrap_return_hook() will be called again
+      // as the main thread of the "new" process restarts.  But this doesn't
+      // happen on ElCapitan and below (or maybe it happens too late).  So on
+      // ElCapitan and below we should call maybe_cast_hook() here.  But on
+      // Sierra and above we should wait to call it in
+      // thread_bootstrap_return_hook().
+#ifndef DEBUG_PROCESS_START
+      if (!macOS_Sierra() && !macOS_HighSierra()) {
         maybe_cast_hook(proc);
       }
+#endif
     }
   }
   return retval;
 }
 
-// As of Sierra, this method doesn't seem ever to be used.  So maybe we
+// As of HighSierra, this method doesn't seem ever to be used.  So maybe we
 // shouldn't use it ourselves.  But in the meantime we do use it, and assume
 // that it works like execve() above.
 int hook_mac_execve(proc_t p, struct mac_execve_args *uap, int *retv)
@@ -8818,11 +9156,13 @@ int hook_mac_execve(proc_t p, struct mac_execve_args *uap, int *retv)
     proc_name(proc_pid(proc), procname, sizeof(procname));
     printf("HookCase: hook_mac_execve(%s[%d])\n",
            procname, proc_pid(proc));
-    report_proc_thread_state(current_thread());
+    report_proc_thread_state("HookCase: hook_mac_execve()", current_thread());
 #endif
-    if (!macOS_Sierra()) {
+#ifndef DEBUG_PROCESS_START
+    if (!macOS_Sierra() && !macOS_HighSierra()) {
       maybe_cast_hook(current_proc());
     }
+#endif
   }
   return retval;
 }
@@ -8897,10 +9237,11 @@ uint32_t thread_bootstrap_return_begin = 0;
 // "continue" handler in this case, or to have been called from the actual
 // continue handler (like proc_wait_to_return() on ElCapitan and below or
 // task_wait_to_return() on Sierra and above).  But we do need to distinguish
-// this case from all other cases of a thread being "continued".  We also need
-// to only call maybe_cast_hook() here if it hasn't also been (or won't also
+// this case from all other cases of a thread being "continued".  We should
+// also only call maybe_cast_hook() here if it hasn't also been (or won't also
 // be) called from one of our other hooks (like hook_execve() and
-// hook_posix_spawn() above).
+// hook_posix_spawn() above).  But, thanks to our checks in maybe_cast_hook(),
+// this isn't an absolute requirement.
 void thread_bootstrap_return_hook(x86_saved_state_t *intr_state)
 {
   // The original thread_bootstrap_return() calls dtrace_thread_bootstrap()
@@ -8911,28 +9252,24 @@ void thread_bootstrap_return_hook(x86_saved_state_t *intr_state)
   proc_t proc = current_proc();
   bool forked_only = forked_but_not_execd(proc);
   bool start_funcs_registered = (get_lflag(proc) & P_LREGISTER);
-  int uu_flag = 0;
-  uthread_t uthread = get_bsdthread_info(current_thread());
-  if (uthread) {
-    uu_flag = get_uu_flag(uthread);
-  }
-  bool in_unix_syscall = (uu_flag & UT_NOTCANCELPT);
   task_thread_info info;
   get_task_thread_info(current_task(), &info);
 #ifdef DEBUG_PROCESS_START
   if ((info.num_threads == 1) && info.main_thread) {
     char procname[PATH_MAX];
     proc_name(proc_pid(proc), procname, sizeof(procname));
-    printf("HookCase: thread_bootstrap_return_hook(%s[%d])\n",
-           procname, proc_pid(proc));
-    report_proc_thread_state(current_thread());
+    printf("HookCase: thread_bootstrap_return(%s[%d]): forked_only %d, start_funcs_registered %d\n",
+           procname, proc_pid(proc), forked_only, start_funcs_registered);
+    report_proc_thread_state("HookCase: thread_bootstrap_return()", current_thread());
   }
 #endif
+#ifndef DEBUG_PROCESS_START
   if ((info.num_threads == 1) && info.main_thread &&
-      !forked_only && !start_funcs_registered && !in_unix_syscall)
+      !forked_only && !start_funcs_registered)
   {
     maybe_cast_hook(proc);
   }
+#endif
 }
 
 // Set an "int 0x20" breakpoint at the beginning of thread_bootstrap_return(),
@@ -8951,9 +9288,18 @@ bool hook_thread_bootstrap_return()
       return false;
     }
   }
+  // In some debug kernels, thread_bootstrap_return() falls through to
+  // thread_exception_return_internal(), and there's a separate (and
+  // inappropriate) thread_exception_return() method.  So we look first
+  // for a thread_exception_return_internal() method, and if we don't
+  // find it fall back to looking for thread_exception_return().
   if (!thread_exception_return) {
     thread_exception_return = (thread_exception_return_t)
-      kernel_dlsym("_thread_exception_return");
+      kernel_dlsym("_thread_exception_return_internal");
+    if (!thread_exception_return) {
+      thread_exception_return = (thread_exception_return_t)
+        kernel_dlsym("_thread_exception_return");
+    }
     if (!thread_exception_return) {
       return false;
     }
@@ -8975,27 +9321,20 @@ bool hook_thread_bootstrap_return()
   new_begin &= 0xffff0000;
   new_begin |= INT_0x20_OPCODE_SHORT;
 
-  if (!ensure_kernel_region_wired((vm_map_offset_t) target,
-                                  (vm_map_offset_t) target + sizeof(uint32_t),
-                                  VM_PROT_ALL))
+  if (!set_kernel_physmap_protection((vm_map_offset_t) target,
+                                     (vm_map_offset_t) target + sizeof(uint32_t),
+                                     VM_PROT_ALL, true))
   {
     return false;
   }
 
-#ifdef UNSET_WP_FOR_KERNEL_WRITES
-  uintptr_t org_cr0 = get_cr0();
-  set_cr0(org_cr0 & ~CR0_WP);
-#endif
   if (!OSCompareAndSwap(thread_bootstrap_return_begin, new_begin, target)) {
     retval = false;
   }
-#ifdef UNSET_WP_FOR_KERNEL_WRITES
-  set_cr0(org_cr0);
-#endif
 
-  set_kernel_region_protection((vm_map_offset_t) target,
-                               (vm_map_offset_t) target + sizeof(uint32_t),
-                               VM_PROT_READ | VM_PROT_EXECUTE);
+  set_kernel_physmap_protection((vm_map_offset_t) target,
+                                (vm_map_offset_t) target + sizeof(uint32_t),
+                                VM_PROT_READ | VM_PROT_EXECUTE, true);
 
   return retval;
 }
@@ -9011,24 +9350,17 @@ bool unhook_thread_bootstrap_return()
   uint32_t *target = (uint32_t *) thread_bootstrap_return;
   uint32_t current_value = target[0];
 
-  ensure_kernel_region_wired((vm_map_offset_t) target,
-                             (vm_map_offset_t) target + sizeof(uint32_t),
-                             VM_PROT_ALL);
+  set_kernel_physmap_protection((vm_map_offset_t) target,
+                                (vm_map_offset_t) target + sizeof(uint32_t),
+                                VM_PROT_ALL, true);
 
-#ifdef UNSET_WP_FOR_KERNEL_WRITES
-  uintptr_t org_cr0 = get_cr0();
-  set_cr0(org_cr0 & ~CR0_WP);
-#endif
   if (!OSCompareAndSwap(current_value, thread_bootstrap_return_begin, target)) {
     retval = false;
   }
-#ifdef UNSET_WP_FOR_KERNEL_WRITES
-  set_cr0(org_cr0);
-#endif
 
-  set_kernel_region_protection((vm_map_offset_t) target,
-                               (vm_map_offset_t) target + sizeof(uint32_t),
-                               VM_PROT_READ | VM_PROT_EXECUTE);
+  set_kernel_physmap_protection((vm_map_offset_t) target,
+                                (vm_map_offset_t) target + sizeof(uint32_t),
+                                VM_PROT_READ | VM_PROT_EXECUTE, true);
 
   thread_bootstrap_return_begin = 0;
 
@@ -9042,13 +9374,13 @@ uint32_t vm_page_validate_cs_begin = 0;
 
 // Under circumstance that I haven't been able to figure out, we sometimes get
 // kernel panics in vm_page_validate_cs() with the message "page is slid", at
-// least on ElCapitan.  Though these only happen when HookCase.kext is loaded,
-// I figure this has to be some kind of Apple bug.  To work around it we need
-// to hook vm_page_validate_cs().  Since this method has a standard C/C++
-// prologue, we can use vm_page_validate_cs_caller() to call the original
-// method from the hook (without having to unset the breakpoint temporarily).
-// Page and object exist, and object is already locked ... but it's probably
-// wise not to assume this.
+// least on ElCapitan.  Though these only happen when HookCase.kext is (or has
+// been) loaded, I figure this has to be some kind of Apple bug.  To work
+// around it we need to hook vm_page_validate_cs().  Since this method has a
+// standard C/C++ prologue, we can use vm_page_validate_cs_caller() to call
+// the original method from the hook (without having to unset the breakpoint
+// temporarily).  Page and object exist, and object is already locked ... but
+// it's probably wise not to assume this.
 void vm_page_validate_cs_hook(x86_saved_state_t *intr_state)
 {
   vm_page_t page = (vm_page_t) intr_state->ss_64.rdi;
@@ -9065,7 +9397,7 @@ void vm_page_validate_cs_hook(x86_saved_state_t *intr_state)
       object_slid = object_is_slid(object);
     }
   }
-  
+
   if (page_slid && !object_slid) {
     page_set_slid(page, false);
     page_slid = false;
@@ -9073,6 +9405,16 @@ void vm_page_validate_cs_hook(x86_saved_state_t *intr_state)
 
   if (object_code_signed && !page_slid) {
     vm_page_validate_cs_caller(page);
+  } else {
+    // The following line fixes a bug that can be reproduced as follows:
+    // 1) Load HookCase.kext into the kernel.
+    // 2) Run Safari or Chrome with HC_INSERT_LIBRARY set, for example from
+    //    Terminal, to make the app load a hook library.
+    // 3) Quit the app.
+    // 4) Unload HookCase.kext from the kernel.
+    // 5) Run the app from step 2 again in exactly the same way.  Without the
+    //    following line, this will result in a "page is slid" kernel panic.
+    page_set_cs_validated(page, true);
   }
 
   uint64_t return_address = *((uint64_t *)(intr_state->ss_64.isf.rsp));
@@ -9107,27 +9449,20 @@ bool hook_vm_page_validate_cs()
   new_begin &= 0xffff0000;
   new_begin |= INT_0x21_OPCODE_SHORT;
 
-  if (!ensure_kernel_region_wired((vm_map_offset_t) target,
-                                  (vm_map_offset_t) target + sizeof(uint32_t),
-                                  VM_PROT_ALL))
+  if (!set_kernel_physmap_protection((vm_map_offset_t) target,
+                                     (vm_map_offset_t) target + sizeof(uint32_t),
+                                     VM_PROT_ALL, true))
   {
     return false;
   }
 
-#ifdef UNSET_WP_FOR_KERNEL_WRITES
-  uintptr_t org_cr0 = get_cr0();
-  set_cr0(org_cr0 & ~CR0_WP);
-#endif
   if (!OSCompareAndSwap(vm_page_validate_cs_begin, new_begin, target)) {
     retval = false;
   }
-#ifdef UNSET_WP_FOR_KERNEL_WRITES
-  set_cr0(org_cr0);
-#endif
 
-  set_kernel_region_protection((vm_map_offset_t) target,
-                               (vm_map_offset_t) target + sizeof(uint32_t),
-                               VM_PROT_READ | VM_PROT_EXECUTE);
+  set_kernel_physmap_protection((vm_map_offset_t) target,
+                                (vm_map_offset_t) target + sizeof(uint32_t),
+                                VM_PROT_READ | VM_PROT_EXECUTE, true);
 
   return retval;
 }
@@ -9143,24 +9478,17 @@ bool unhook_vm_page_validate_cs()
   uint32_t *target = (uint32_t *) vm_page_validate_cs;
   uint32_t current_value = target[0];
 
-  ensure_kernel_region_wired((vm_map_offset_t) target,
-                             (vm_map_offset_t) target + sizeof(uint32_t),
-                             VM_PROT_ALL);
+  set_kernel_physmap_protection((vm_map_offset_t) target,
+                                (vm_map_offset_t) target + sizeof(uint32_t),
+                                VM_PROT_ALL, true);
 
-#ifdef UNSET_WP_FOR_KERNEL_WRITES
-  uintptr_t org_cr0 = get_cr0();
-  set_cr0(org_cr0 & ~CR0_WP);
-#endif
   if (!OSCompareAndSwap(current_value, vm_page_validate_cs_begin, target)) {
     retval = false;
   }
-#ifdef UNSET_WP_FOR_KERNEL_WRITES
-  set_cr0(org_cr0);
-#endif
 
-  set_kernel_region_protection((vm_map_offset_t) target,
-                               (vm_map_offset_t) target + sizeof(uint32_t),
-                               VM_PROT_READ | VM_PROT_EXECUTE);
+  set_kernel_physmap_protection((vm_map_offset_t) target,
+                                (vm_map_offset_t) target + sizeof(uint32_t),
+                                VM_PROT_READ | VM_PROT_EXECUTE, true);
 
   vm_page_validate_cs_begin = 0;
 
@@ -9177,19 +9505,21 @@ extern "C" mac_file_check_library_validation_t
 
 uint32_t mac_file_check_library_validation_begin = 0;
 
-// On macOS Sierra Apple has recently (with macOS 10.12.4?) started preventing
-// unsigned hook libraries (or those with non-Apple signatures) from being
-// loaded into certain applications (like Safari) that are signed by Apple.
-// This happens even with rootless mode off (which is required for
-// HookCase.kext to load), and is definitely excessive.  We need to work around
-// it for our own hook libraries.
+// On macOS Sierra (as of macOS 10.12.4?) Apple started preventing unsigned
+// hook libraries (or those with non-Apple signatures) from being loaded into
+// certain applications (like Safari) that are signed by Apple.  This happens
+// even with rootless mode off (which is required for HookCase.kext to load),
+// and is definitely excessive.  It continues in HighSierra, and has now (as
+// of Apple's implementation of KPTI in ElCapitan and above) been backported
+// to ElCapitan.  We need to work around it for our own hook libraries.
 //
 // This behavior is implemented in the AppleMobileFileIntegrity kernel
 // extension, which (like the Sandbox kernel extension) is a MAC Framework --
-// specifically in methods that check for "file_check_library_validation" and
-// "file_check_mmap".  We can prevent these checks from running on our hook
-// libraries by hooking mac_file_check_library_validation() and
-// mac_file_check_mmap() in the kernel.
+// specifically in methods that check for "file_check_library_validation" (on
+// Sierra and above) and "file_check_mmap" (on ElCapitan and above).  We can
+// prevent these checks from running on our hook libraries by hooking
+// mac_file_check_library_validation() and/or mac_file_check_mmap() in the
+// kernel.
 void mac_file_check_library_validation_hook(x86_saved_state_t *intr_state)
 {
   proc_t proc = (proc_t) intr_state->ss_64.rdi;
@@ -9235,29 +9565,22 @@ bool hook_mac_file_check_library_validation()
   new_begin &= 0xffff0000;
   new_begin |= INT_0x22_OPCODE_SHORT;
 
-  if (!ensure_kernel_region_wired((vm_map_offset_t) target,
-                                  (vm_map_offset_t) target + sizeof(uint32_t),
-                                  VM_PROT_ALL))
+  if (!set_kernel_physmap_protection((vm_map_offset_t) target,
+                                     (vm_map_offset_t) target + sizeof(uint32_t),
+                                     VM_PROT_ALL, true))
   {
     return false;
   }
 
-#ifdef UNSET_WP_FOR_KERNEL_WRITES
-  uintptr_t org_cr0 = get_cr0();
-  set_cr0(org_cr0 & ~CR0_WP);
-#endif
   if (!OSCompareAndSwap(mac_file_check_library_validation_begin,
                         new_begin, target))
   {
     retval = false;
   }
-#ifdef UNSET_WP_FOR_KERNEL_WRITES
-  set_cr0(org_cr0);
-#endif
 
-  set_kernel_region_protection((vm_map_offset_t) target,
-                               (vm_map_offset_t) target + sizeof(uint32_t),
-                               VM_PROT_READ | VM_PROT_EXECUTE);
+  set_kernel_physmap_protection((vm_map_offset_t) target,
+                                (vm_map_offset_t) target + sizeof(uint32_t),
+                                VM_PROT_READ | VM_PROT_EXECUTE, true);
 
   return retval;
 }
@@ -9273,27 +9596,20 @@ bool unhook_mac_file_check_library_validation()
   uint32_t *target = (uint32_t *) mac_file_check_library_validation;
   uint32_t current_value = target[0];
 
-  ensure_kernel_region_wired((vm_map_offset_t) target,
-                             (vm_map_offset_t) target + sizeof(uint32_t),
-                             VM_PROT_ALL);
+  set_kernel_physmap_protection((vm_map_offset_t) target,
+                                (vm_map_offset_t) target + sizeof(uint32_t),
+                                VM_PROT_ALL, true);
 
-#ifdef UNSET_WP_FOR_KERNEL_WRITES
-  uintptr_t org_cr0 = get_cr0();
-  set_cr0(org_cr0 & ~CR0_WP);
-#endif
   if (!OSCompareAndSwap(current_value,
                         mac_file_check_library_validation_begin,
                         target))
   {
     retval = false;
   }
-#ifdef UNSET_WP_FOR_KERNEL_WRITES
-  set_cr0(org_cr0);
-#endif
 
-  set_kernel_region_protection((vm_map_offset_t) target,
-                               (vm_map_offset_t) target + sizeof(uint32_t),
-                               VM_PROT_READ | VM_PROT_EXECUTE);
+  set_kernel_physmap_protection((vm_map_offset_t) target,
+                                (vm_map_offset_t) target + sizeof(uint32_t),
+                                VM_PROT_READ | VM_PROT_EXECUTE, true);
 
   mac_file_check_library_validation_begin = 0;
 
@@ -9351,27 +9667,20 @@ bool hook_mac_file_check_mmap()
   new_begin &= 0xffff0000;
   new_begin |= INT_0x23_OPCODE_SHORT;
 
-  if (!ensure_kernel_region_wired((vm_map_offset_t) target,
-                                  (vm_map_offset_t) target + sizeof(uint32_t),
-                                  VM_PROT_ALL))
+  if (!set_kernel_physmap_protection((vm_map_offset_t) target,
+                                     (vm_map_offset_t) target + sizeof(uint32_t),
+                                     VM_PROT_ALL, true))
   {
     return false;
   }
 
-#ifdef UNSET_WP_FOR_KERNEL_WRITES
-  uintptr_t org_cr0 = get_cr0();
-  set_cr0(org_cr0 & ~CR0_WP);
-#endif
   if (!OSCompareAndSwap(mac_file_check_mmap_begin, new_begin, target)) {
     retval = false;
   }
-#ifdef UNSET_WP_FOR_KERNEL_WRITES
-  set_cr0(org_cr0);
-#endif
 
-  set_kernel_region_protection((vm_map_offset_t) target,
-                               (vm_map_offset_t) target + sizeof(uint32_t),
-                               VM_PROT_READ | VM_PROT_EXECUTE);
+  set_kernel_physmap_protection((vm_map_offset_t) target,
+                                (vm_map_offset_t) target + sizeof(uint32_t),
+                                VM_PROT_READ | VM_PROT_EXECUTE, true);
 
   return retval;
 }
@@ -9387,24 +9696,17 @@ bool unhook_mac_file_check_mmap()
   uint32_t *target = (uint32_t *) mac_file_check_mmap;
   uint32_t current_value = target[0];
 
-  ensure_kernel_region_wired((vm_map_offset_t) target,
-                             (vm_map_offset_t) target + sizeof(uint32_t),
-                             VM_PROT_ALL);
+  set_kernel_physmap_protection((vm_map_offset_t) target,
+                                (vm_map_offset_t) target + sizeof(uint32_t),
+                                VM_PROT_ALL, true);
 
-#ifdef UNSET_WP_FOR_KERNEL_WRITES
-  uintptr_t org_cr0 = get_cr0();
-  set_cr0(org_cr0 & ~CR0_WP);
-#endif
   if (!OSCompareAndSwap(current_value, mac_file_check_mmap_begin, target)) {
     retval = false;
   }
-#ifdef UNSET_WP_FOR_KERNEL_WRITES
-  set_cr0(org_cr0);
-#endif
 
-  set_kernel_region_protection((vm_map_offset_t) target,
-                               (vm_map_offset_t) target + sizeof(uint32_t),
-                               VM_PROT_READ | VM_PROT_EXECUTE);
+  set_kernel_physmap_protection((vm_map_offset_t) target,
+                                (vm_map_offset_t) target + sizeof(uint32_t),
+                                VM_PROT_READ | VM_PROT_EXECUTE, true);
 
   mac_file_check_mmap_begin = 0;
 
@@ -9413,6 +9715,12 @@ bool unhook_mac_file_check_mmap()
 
 boolean_t *g_no_shared_cr3_ptr = (boolean_t *) -1;
 boolean_t *g_pmap_smap_enabled_ptr = (boolean_t *) -1;
+
+boolean_t g_kpti_enabled = (boolean_t) -1;
+
+uint64_t g_cpu_kernel_cr3_offset = (uint64_t) -1;
+uint64_t g_cpu_task_cr3_nokernel_offset = (uint64_t) -1;
+uint64_t g_cpu_user_stack_offset = (uint64_t) -1;
 
 typedef struct __attribute__((packed)) {
   uint16_t size;
@@ -9439,68 +9747,572 @@ typedef struct {
 } idt64_entry;
 
 idt64_entry old_0x20_idt_entry;
-idt64_entry our_0x20_idt_entry;
+char old_0x20_stub[16];
 
 idt64_entry old_0x21_idt_entry;
-idt64_entry our_0x21_idt_entry;
+char old_0x21_stub[16];
 
 idt64_entry old_0x22_idt_entry;
-idt64_entry our_0x22_idt_entry;
+char old_0x22_stub[16];
 
 idt64_entry old_0x23_idt_entry;
-idt64_entry our_0x23_idt_entry;
+char old_0x23_stub[16];
 
 bool s_installed_0x20_handler = false;
 bool s_installed_0x21_handler = false;
 bool s_installed_0x22_handler = false;
 bool s_installed_0x23_handler = false;
 
-bool install_intr_handler(int intr_num, idt64_entry *new_value,
-                          idt64_entry *previous_value)
+// In the macOS 10.13.2 release Apple implemented KPTI (kernel page-table
+// isolation) as a workaround for Intel's Meltdown bug
+// (https://meltdownattack.com/).  They've now also backported it to Sierra
+// and ElCapitan.  With KPTI, the user-mode page table (stored in the CR3
+// register) no longer includes any memory in the kernel's standard range.
+// Instead, Apple has mapped part of the kernel (the HIB segment) twice --
+// once at an address in the standard kernel range, and a second time at a
+// lower address that isn't part of user space, but is included in the
+// user-mode page table.  The HIB segment is where the IDT lives.  This means
+// that IDT entries can no longer point to handlers in kernel code (or in any
+// kernel extension).  Instead each entry now points to a "stub" in the HIB
+// segment, which in turn jumps to other code (still in the HIB segment) that
+// plays the tricks needed (for example changing the CR3 register) to jump to
+// code in the kernel proper.  We need a workaround to continue hooking
+// software interrupts.
+//
+// The one I've adopted is to put handler code into empty space in the HIB
+// segment (at the end of the idt64_hndl_table0 array), and to rewrite the
+// appropriate "stubs" to jump to that code (instead of to Apple code).  My
+// code is closely modeled on Apple's, and uses the same tricks to get to
+// kernel code (or more correctly kernel extension code) and back from it.
+
+bool is_kpti_enabled(idt64_entry **idt_base)
+{
+  idt_info info;
+  if ((g_kpti_enabled == (boolean_t) -1) || idt_base) {
+    sidt(&info);
+  }
+  if (idt_base) {
+    *idt_base = (idt64_entry *) info.ptr;
+  }
+
+  if (g_kpti_enabled != (boolean_t) -1) {
+    return g_kpti_enabled;
+  }
+
+  vm_map_offset_t idt_addr_fixed =
+    vm_map_trunc_page((vm_map_offset_t) info.ptr, PAGE_MASK);
+
+  // The HIB kernel's non-kernel (second) address range is included in
+  // kernel_pmap but not in kernel_map.  So we can detect KPTI by
+  // checking whether the IDT is in kernel_map or not.
+  vm_map_entry_t first_entry;
+  g_kpti_enabled =
+    !vm_map_lookup_entry(kernel_map, idt_addr_fixed, &first_entry);
+  return g_kpti_enabled;
+}
+
+void initialize_cpu_data_offsets()
+{
+  if (!find_kernel_private_functions()) {
+    return;
+  }
+  g_cpu_kernel_cr3_offset =
+    offsetof(cpu_data_fake_t, cpu_kernel_cr3);
+  if (macOS_HighSierra()) {
+    if (is_kpti_enabled(NULL)) {
+      g_cpu_kernel_cr3_offset =
+        offsetof(cpu_data_fake_t, cpu_kernel_cr3_kpti);
+    }
+    g_cpu_task_cr3_nokernel_offset =
+      offsetof(cpu_data_fake_t, cpu_task_cr3_nokernel);
+    g_cpu_user_stack_offset =
+      offsetof(cpu_data_fake_t, cpu_user_stack);
+  } else {
+    g_cpu_task_cr3_nokernel_offset =
+      offsetof(cpu_data_fake_t, cpu_task_cr3_nokernel_bp);
+    g_cpu_user_stack_offset =
+      offsetof(cpu_data_fake_t, cpu_user_stack_bp);
+  }
+}
+
+#define RETURN_FROM_KEXT_PAGE_OFFSET 0xFA8
+#define DISPATCH_TO_KEXT_PAGE_OFFSET 0xFC0
+#define STUB_HANDLER_ADDR_PAGE_OFFSET 0xFF0
+
+int64_t g_doublemap_distance = 0;
+
+// Addresses in the copy of the HIB segment mapped outside the kernel.
+vm_offset_t g_idt64_hndl_table0_addr = 0;
+vm_offset_t g_return_from_kext_addr = 0;
+vm_offset_t g_dispatch_to_kext_addr = 0;
+
+// Addresses in the copy of the HIB segment mapped inside the kernel.
+vm_offset_t g_kernel_idt64_hndl_table0_addr = -1;
+vm_offset_t g_kernel_return_from_kext_addr = 0;
+vm_offset_t g_kernel_dispatch_to_kext_addr = 0;
+
+vm_offset_t get_stub_address(int intr_num, bool in_kernel)
+{
+  idt_info info;
+  sidt(&info);
+  idt64_entry *idt = (idt64_entry *) info.ptr;
+  idt64_entry *entry = &idt[intr_num];
+  vm_offset_t retval = (entry->offset_low16 |
+                        ((uint64_t) entry->offset_high16 << 16) |
+                        ((uint64_t) entry->offset_top32 << 32));
+  if (in_kernel) {
+    retval += g_doublemap_distance;
+  }
+  return retval;
+}
+
+bool g_stub_dispatcher_installed = false;
+
+// Install our HIB segment handler code to empty space at the end of the
+// idt64_hndl_table0 array.  Note that since the HIB segment is mapped twice,
+// we can write to (and read from) addresses in either range (inside or
+// outside of the kernel proper).
+bool install_stub_dispatcher()
+{
+  if (g_stub_dispatcher_installed) {
+    return true;
+  }
+
+  idt64_entry *master_idt64;
+  if (!is_kpti_enabled(&master_idt64)) {
+    return true;
+  }
+  vm_offset_t master_idt64_addr = (vm_offset_t) master_idt64;
+
+  if (g_kernel_idt64_hndl_table0_addr == -1) {
+    g_kernel_idt64_hndl_table0_addr =
+      (vm_offset_t) kernel_dlsym("_idt64_hndl_table0");
+    if (!g_kernel_idt64_hndl_table0_addr) {
+      return false;
+    }
+  }
+  static vm_offset_t kernel_master_idt64_addr = -1;
+  if (kernel_master_idt64_addr == -1) {
+    kernel_master_idt64_addr =
+      (vm_offset_t) kernel_dlsym("_master_idt64");
+    if (!kernel_master_idt64_addr) {
+      return false;
+    }
+  }
+  static vm_offset_t kernel_gIOHibernateRestoreStack_addr = -1;
+  if (kernel_gIOHibernateRestoreStack_addr == -1) {
+    kernel_gIOHibernateRestoreStack_addr =
+      (vm_offset_t) kernel_dlsym("_gIOHibernateRestoreStack");
+    if (!kernel_gIOHibernateRestoreStack_addr) {
+      return false;
+    }
+  }
+
+  // On versions of macOS/OS X that support KPTI, idt64_hndl_table0 is either
+  // just before gIOHibernateRestoreStack (ElCapitan and the HighSierra debug
+  // kernel) or master_idt64 (all the rest).  I don't know the reason for the
+  // variation.  Our main concern here is to ensure that there's enough empty
+  // space at the end of idt64_hndl_table0.  We try to do that by ensuring
+  // that idt64_hndl_table0 and the "next" label in the symbol table are page-
+  // aligned and one page apart.  (idt64_hndl_table1, which isn't in all
+  // kernels' symbol tables, is counted as part of idt64_hndl_table0.)
+  int64_t idt64_hndl_table0_size =
+    kernel_master_idt64_addr - g_kernel_idt64_hndl_table0_addr;
+  if (idt64_hndl_table0_size != PAGE_SIZE) {
+    idt64_hndl_table0_size =
+      kernel_gIOHibernateRestoreStack_addr - g_kernel_idt64_hndl_table0_addr;
+  }
+  if ((idt64_hndl_table0_size != PAGE_SIZE) ||
+      (g_kernel_idt64_hndl_table0_addr & PAGE_MASK))
+  {
+    kprintf("HookCase: install_stub_dispatcher(): idt64_hndl_table0 must be 4096 bytes long and page-aligned\n");
+    return false;
+  }
+
+  g_doublemap_distance =
+    kernel_master_idt64_addr - master_idt64_addr;
+
+  g_idt64_hndl_table0_addr =
+    g_kernel_idt64_hndl_table0_addr - g_doublemap_distance;
+  g_return_from_kext_addr =
+    g_idt64_hndl_table0_addr + RETURN_FROM_KEXT_PAGE_OFFSET;
+  g_dispatch_to_kext_addr =
+    g_idt64_hndl_table0_addr + DISPATCH_TO_KEXT_PAGE_OFFSET;
+
+  g_kernel_return_from_kext_addr =
+    g_kernel_idt64_hndl_table0_addr + RETURN_FROM_KEXT_PAGE_OFFSET;
+  g_kernel_dispatch_to_kext_addr =
+    g_kernel_idt64_hndl_table0_addr + DISPATCH_TO_KEXT_PAGE_OFFSET;
+
+  set_kernel_physmap_protection(g_idt64_hndl_table0_addr,
+                                g_idt64_hndl_table0_addr + PAGE_SIZE,
+                                VM_PROT_ALL, false);
+
+  char return_from_kext_bytecodes[24];
+  memset(return_from_kext_bytecodes, 0x90,
+         sizeof(return_from_kext_bytecodes));
+
+  // 58
+  return_from_kext_bytecodes[0]  = 0x58; //    pop   %rax
+
+  // 65 48 8B 00
+  return_from_kext_bytecodes[1]  = 0x65; //    mov   %gs:(%rax), %rax
+  return_from_kext_bytecodes[2]  = 0x48;
+  return_from_kext_bytecodes[3]  = 0x8B;
+  return_from_kext_bytecodes[4]  = 0x00;
+
+  // 0F 22 D8
+  return_from_kext_bytecodes[5]  = 0x0F; //    mov   %rax, %cr3
+  return_from_kext_bytecodes[6]  = 0x22;
+  return_from_kext_bytecodes[7]  = 0xD8;
+
+  // 0F 01 F8
+  return_from_kext_bytecodes[8]  = 0x0F; //    swapgs
+  return_from_kext_bytecodes[9]  = 0x01;
+  return_from_kext_bytecodes[10] = 0xF8;
+
+  // 58
+  return_from_kext_bytecodes[11] = 0x58; //    pop   %rax
+
+  // 48 CF
+  return_from_kext_bytecodes[12] = 0x48; //    iretq
+  return_from_kext_bytecodes[13] = 0xCF;
+
+  memcpy((void *) g_kernel_return_from_kext_addr, return_from_kext_bytecodes,
+         sizeof(return_from_kext_bytecodes));
+
+  vm_offset_t *stub_handler_addr = (vm_offset_t *)
+    (g_kernel_idt64_hndl_table0_addr + STUB_HANDLER_ADDR_PAGE_OFFSET);
+  *stub_handler_addr = (vm_offset_t) stub_handler;
+
+  char dispatch_to_kext_bytecodes[48];
+
+  // 48 83 7C 24 18 08
+  dispatch_to_kext_bytecodes[0]  = 0x48; //    cmpq  $KERNEL64_CS, 0x18(%rsp)
+  dispatch_to_kext_bytecodes[1]  = 0x83;
+  dispatch_to_kext_bytecodes[2]  = 0x7C; //    (interrupt CS is on stack at
+  dispatch_to_kext_bytecodes[3]  = 0x24; //    offset 0x18)
+  dispatch_to_kext_bytecodes[4]  = 0x18;
+  dispatch_to_kext_bytecodes[5]  = 0x08;
+
+  // 74 1C
+  dispatch_to_kext_bytecodes[6]  = 0x74; //    je    1f
+  dispatch_to_kext_bytecodes[7]  = 0x1C;
+
+  // 0F 01 F8
+  dispatch_to_kext_bytecodes[8]  = 0x0F; //    swapgs
+  dispatch_to_kext_bytecodes[9]  = 0x01;
+  dispatch_to_kext_bytecodes[10] = 0xF8;
+
+  // 48 8D 05 00 00 00 00
+  dispatch_to_kext_bytecodes[11] = 0x48; //    lea   _idt64_hndl_table0(%rip), %rax
+  dispatch_to_kext_bytecodes[12] = 0x8D;
+  dispatch_to_kext_bytecodes[13] = 0x05;
+
+  int32_t *displacement_addr = (int32_t *) &dispatch_to_kext_bytecodes[14];
+  // 'ip' is the address of the beginning of the next instruction after our
+  // 'lea' instruction.
+  vm_offset_t ip = g_dispatch_to_kext_addr + 18;
+  vm_offset_t displacement = g_idt64_hndl_table0_addr - ip;
+  displacement_addr[0] = (int32_t) displacement;
+
+  // 48 8B 40 10
+  dispatch_to_kext_bytecodes[18] = 0x48; //    mov   0x10(%rax), %rax
+  dispatch_to_kext_bytecodes[19] = 0x8B;
+  dispatch_to_kext_bytecodes[20] = 0x40;
+  dispatch_to_kext_bytecodes[21] = 0x10;
+
+  // 65 48 8B 80 10 01 00 00
+  dispatch_to_kext_bytecodes[22] = 0x65; //    mov   %gs:CPU_TASK_CR3(%rax), %rax
+  dispatch_to_kext_bytecodes[23] = 0x48;
+  dispatch_to_kext_bytecodes[24] = 0x8B;
+  dispatch_to_kext_bytecodes[25] = 0x80;
+  dispatch_to_kext_bytecodes[26] = 0x10;
+  dispatch_to_kext_bytecodes[27] = 0x01;
+  dispatch_to_kext_bytecodes[28] = 0x00;
+  dispatch_to_kext_bytecodes[29] = 0x00;
+
+  // 0F 22 D8
+  dispatch_to_kext_bytecodes[30] = 0x0F; //    mov   %rax, %cr3
+  dispatch_to_kext_bytecodes[31] = 0x22;
+  dispatch_to_kext_bytecodes[32] = 0xD8;
+
+  // 0F 01 F8
+  dispatch_to_kext_bytecodes[33] = 0x0F; //    swapgs
+  dispatch_to_kext_bytecodes[34] = 0x01;
+  dispatch_to_kext_bytecodes[35] = 0xF8;
+
+  // 48 8D 05 05 00 00 00
+  dispatch_to_kext_bytecodes[36] = 0x48; // 1: lea   _kext_handler(%rip), %rax
+  dispatch_to_kext_bytecodes[37] = 0x8D;
+  dispatch_to_kext_bytecodes[38] = 0x05;
+  dispatch_to_kext_bytecodes[39] = 0x05;
+  dispatch_to_kext_bytecodes[40] = 0x00;
+  dispatch_to_kext_bytecodes[41] = 0x00;
+  dispatch_to_kext_bytecodes[42] = 0x00;
+
+  // 48 8B 00
+  dispatch_to_kext_bytecodes[43] = 0x48; //    mov   (%rax), %rax
+  dispatch_to_kext_bytecodes[44] = 0x8B;
+  dispatch_to_kext_bytecodes[45] = 0x00;
+
+  // FF E0
+  dispatch_to_kext_bytecodes[46] = 0xFF; //    jmp   *%rax
+  dispatch_to_kext_bytecodes[47] = 0xE0;
+
+  memcpy((void *) g_kernel_dispatch_to_kext_addr, dispatch_to_kext_bytecodes,
+         sizeof(dispatch_to_kext_bytecodes));
+
+  g_stub_dispatcher_installed = true;
+
+  return true;
+}
+
+void remove_stub_dispatcher()
+{
+  if (!g_stub_dispatcher_installed) {
+    return;
+  }
+
+  set_kernel_physmap_protection(g_idt64_hndl_table0_addr,
+                                g_idt64_hndl_table0_addr + PAGE_SIZE,
+                                VM_PROT_READ | VM_PROT_WRITE, false);
+
+  bzero((void *) g_kernel_return_from_kext_addr,
+        PAGE_SIZE - RETURN_FROM_KEXT_PAGE_OFFSET);
+
+  g_stub_dispatcher_installed = false;
+}
+
+bool install_intr_blob(int intr_num, void *new_value,
+                       void *previous_value, bool is_stub)
 {
   if (!new_value) {
     return false;
   }
 
-  idt_info info;
-  sidt(&info);
-  idt64_entry *idt = (idt64_entry *) info.ptr;
+  idt64_entry *idt;
+  bool kpti_enabled = is_kpti_enabled(&idt);
   idt64_entry *entry = &idt[intr_num];
+  vm_offset_t prev_offset = (entry->offset_low16 |
+                             ((uint64_t) entry->offset_high16 << 16) |
+                             ((uint64_t) entry->offset_top32 << 32));
+  char *stub = (char *) prev_offset;
 
+  void *target;
+  size_t target_size;
+  if (is_stub) {
+    target = stub;
+    target_size = sizeof(char[16]);
+  } else {
+    target = entry;
+    target_size = sizeof(idt64_entry);
+  }
+  vm_map_offset_t target_offset = (vm_map_offset_t) target;;
   if (previous_value) {
-    memcpy(previous_value, entry, sizeof(idt64_entry));
+    memcpy(previous_value, target, target_size);
   }
 
-  if (!ensure_kernel_region_wired((vm_map_offset_t) entry,
-                                  (vm_map_offset_t) entry + sizeof(idt64_entry),
-                                  VM_PROT_READ | VM_PROT_WRITE))
+  if (kpti_enabled && !is_stub) {
+    idt64_entry *new_entry = (idt64_entry *) new_value;
+    new_entry->offset_low16 = entry->offset_low16;
+    new_entry->offset_high16 = entry->offset_high16;
+    new_entry->offset_top32 = entry->offset_top32;
+  }
+
+  vm_prot_t new_prot = VM_PROT_READ | VM_PROT_WRITE;
+  if (is_stub) {
+    new_prot |= VM_PROT_EXECUTE;
+  }
+  if (!set_kernel_physmap_protection(target_offset, target_offset + target_size,
+                                     new_prot, true))
   {
     return false;
   }
 
   bool retval = true;
-#ifdef UNSET_WP_FOR_KERNEL_WRITES
-  uintptr_t org_cr0 = get_cr0();
-  set_cr0(org_cr0 & ~CR0_WP);
-#endif
+
   if ((cpuid_features_ptr() & CPUID_FEATURE_CX16)) {
-    __uint128_t *target = (__uint128_t *) entry;
-    __uint128_t old_value = target[0];
-    if (!OSCompareAndSwap128(old_value, ((__uint128_t *)new_value)[0], target)) {
+    __uint128_t *target_int128 = (__uint128_t *) target_offset;
+    __uint128_t old_value = target_int128[0];
+    if (!OSCompareAndSwap128(old_value, ((__uint128_t *)new_value)[0],
+                             target_int128))
+    {
       retval = false;
     }
   } else {
-    memcpy(entry, new_value, sizeof(idt64_entry));
+    memcpy((void *) target_offset, new_value, target_size);
   }
-#ifdef UNSET_WP_FOR_KERNEL_WRITES
-  set_cr0(org_cr0);
-#endif
 
-  set_kernel_region_protection((vm_map_offset_t) entry,
-                               (vm_map_offset_t) entry + sizeof(idt64_entry),
-                               VM_PROT_READ);
+  vm_prot_t old_prot = VM_PROT_READ;
+  if (is_stub) {
+    old_prot |= VM_PROT_EXECUTE;
+  }
+  set_kernel_physmap_protection(target_offset, target_offset + target_size,
+                                old_prot, true);
 
   return retval;
+}
+
+bool install_intr_handler(int intr_num)
+{
+  idt64_entry *old_idt_entry;
+  char *old_stub;
+  vm_offset_t raw_handler;
+  switch(intr_num) {
+    case 0x20:
+      if (s_installed_0x20_handler) {
+        return true;
+      }
+      old_idt_entry = &old_0x20_idt_entry;
+      old_stub = old_0x20_stub;
+      raw_handler = (vm_offset_t) intr_0x20_raw_handler;
+      break;
+    case 0x21:
+      if (s_installed_0x21_handler) {
+        return true;
+      }
+      old_idt_entry = &old_0x21_idt_entry;
+      old_stub = old_0x21_stub;
+      raw_handler = (vm_offset_t) intr_0x21_raw_handler;
+      break;
+    case 0x22:
+      if (s_installed_0x22_handler) {
+        return true;
+      }
+      old_idt_entry = &old_0x22_idt_entry;
+      old_stub = old_0x22_stub;
+      raw_handler = (vm_offset_t) intr_0x22_raw_handler;
+      break;
+    case 0x23:
+      if (s_installed_0x23_handler) {
+        return true;
+      }
+      old_idt_entry = &old_0x23_idt_entry;
+      old_stub = old_0x23_stub;
+      raw_handler = (vm_offset_t) intr_0x23_raw_handler;
+      break;
+    default:
+      return false;
+  }
+
+  idt64_entry our_idt_entry;
+  bzero(&our_idt_entry, sizeof(idt64_entry));
+  our_idt_entry.selector16 = KERNEL64_CS;
+  our_idt_entry.access8 = U_INTR_GATE;
+  vm_offset_t offset = (vm_offset_t) raw_handler;
+  our_idt_entry.offset_low16 = (offset & 0xffff);
+  our_idt_entry.offset_high16 = ((offset >> 16) & 0xffff);
+  our_idt_entry.offset_top32 = ((offset >> 32) & 0xffffffff);
+
+  if (!install_intr_blob(intr_num, &our_idt_entry, old_idt_entry, false)) {
+    return false;
+  }
+
+  bool retval = true;
+
+  if (is_kpti_enabled(NULL)) {
+    // Copy our stub code over Apple's, to make the intr_num interrupts use
+    // our handlers.
+    char our_stub[16];
+    memset(our_stub, 0x90, sizeof(our_stub));
+
+    // 50
+    our_stub[0]  = 0x50;     //   push   %rax
+    // 6A NN
+    our_stub[1]  = 0x6A;     //   pushq  $(0x2N)
+    our_stub[2]  = intr_num; //   (Do *not* use the 0x68 form of this instruction)
+    // E9 00 00 00 00
+    our_stub[3]  = 0xE9;     //   jmp    _dispatch_to_kext
+
+    int32_t *displacement_addr = (int32_t *) &our_stub[4];
+    // 'ip' is the address of the beginning of the next instruction after our
+    // 'jmp' instruction.
+    vm_offset_t ip = get_stub_address(intr_num, false) + 8;
+    vm_offset_t displacement = g_dispatch_to_kext_addr - ip;
+    displacement_addr[0] = (int32_t) displacement;
+
+    retval = install_intr_blob(intr_num, &our_stub, old_stub, true);
+  }
+
+  switch(intr_num) {
+    case 0x20:
+      s_installed_0x20_handler = true;
+      break;
+    case 0x21:
+      s_installed_0x21_handler = true;
+      break;
+    case 0x22:
+      s_installed_0x22_handler = true;
+      break;
+    case 0x23:
+      s_installed_0x23_handler = true;
+      break;
+    default:
+      break;
+  }
+
+  return retval;
+}
+
+void remove_intr_handler(int intr_num)
+{
+  idt64_entry *old_idt_entry;
+  char *old_stub;
+  switch(intr_num) {
+    case 0x20:
+      if (!s_installed_0x20_handler) {
+        return;
+      }
+      old_idt_entry = &old_0x20_idt_entry;
+      old_stub = old_0x20_stub;
+      break;
+    case 0x21:
+      if (!s_installed_0x21_handler) {
+        return;
+      }
+      old_idt_entry = &old_0x21_idt_entry;
+      old_stub = old_0x21_stub;
+      break;
+    case 0x22:
+      if (!s_installed_0x22_handler) {
+        return;
+      }
+      old_idt_entry = &old_0x22_idt_entry;
+      old_stub = old_0x22_stub;
+      break;
+    case 0x23:
+      if (!s_installed_0x23_handler) {
+        return;
+      }
+      old_idt_entry = &old_0x23_idt_entry;
+      old_stub = old_0x23_stub;
+      break;
+    default:
+      return;
+  }
+
+  install_intr_blob(intr_num, old_idt_entry, NULL, false);
+  if (is_kpti_enabled(NULL)) {
+    install_intr_blob(intr_num, old_stub, NULL, true);
+  }
+
+  switch(intr_num) {
+    case 0x20:
+      s_installed_0x20_handler = false;
+      break;
+    case 0x21:
+      s_installed_0x21_handler = false;
+      break;
+    case 0x22:
+      s_installed_0x22_handler = false;
+      break;
+    case 0x23:
+      s_installed_0x23_handler = false;
+      break;
+    default:
+      break;
+  }
 }
 
 bool install_intr_handlers()
@@ -9518,65 +10330,32 @@ bool install_intr_handlers()
     g_pmap_smap_enabled_ptr = (boolean_t *) kernel_dlsym("_pmap_smap_enabled");
   }
 
-  bzero(&our_0x20_idt_entry, sizeof(idt64_entry));
-  our_0x20_idt_entry.selector16 = KERNEL64_CS;
-  our_0x20_idt_entry.access8 = U_INTR_GATE;
-  vm_offset_t offset = (vm_offset_t) intr_0x20_raw_handler;
-  our_0x20_idt_entry.offset_low16 = (offset & 0xffff);
-  our_0x20_idt_entry.offset_high16 = ((offset >> 16) & 0xffff);
-  our_0x20_idt_entry.offset_top32 = ((offset >> 32) & 0xffffffff);
-
-  if (!install_intr_handler(0x20, &our_0x20_idt_entry, &old_0x20_idt_entry)) {
+  if (!install_stub_dispatcher()) {
     return false;
   }
-  s_installed_0x20_handler = true;
 
-  bzero(&our_0x21_idt_entry, sizeof(idt64_entry));
-  our_0x21_idt_entry.selector16 = KERNEL64_CS;
-  our_0x21_idt_entry.access8 = U_INTR_GATE;
-  offset = (vm_offset_t) intr_0x21_raw_handler;
-  our_0x21_idt_entry.offset_low16 = (offset & 0xffff);
-  our_0x21_idt_entry.offset_high16 = ((offset >> 16) & 0xffff);
-  our_0x21_idt_entry.offset_top32 = ((offset >> 32) & 0xffffffff);
-
-  if (!install_intr_handler(0x21, &our_0x21_idt_entry, &old_0x21_idt_entry)) {
+  if (!install_intr_handler(0x20)) {
     return false;
   }
-  s_installed_0x21_handler = true;
-
-  bzero(&our_0x22_idt_entry, sizeof(idt64_entry));
-  our_0x22_idt_entry.selector16 = KERNEL64_CS;
-  our_0x22_idt_entry.access8 = U_INTR_GATE;
-  offset = (vm_offset_t) intr_0x22_raw_handler;
-  our_0x22_idt_entry.offset_low16 = (offset & 0xffff);
-  our_0x22_idt_entry.offset_high16 = ((offset >> 16) & 0xffff);
-  our_0x22_idt_entry.offset_top32 = ((offset >> 32) & 0xffffffff);
-
-  if (!install_intr_handler(0x22, &our_0x22_idt_entry, &old_0x22_idt_entry)) {
+  if (!install_intr_handler(0x21)) {
     return false;
   }
-  s_installed_0x22_handler = true;
-
-  bzero(&our_0x23_idt_entry, sizeof(idt64_entry));
-  our_0x23_idt_entry.selector16 = KERNEL64_CS;
-  our_0x23_idt_entry.access8 = U_INTR_GATE;
-  offset = (vm_offset_t) intr_0x23_raw_handler;
-  our_0x23_idt_entry.offset_low16 = (offset & 0xffff);
-  our_0x23_idt_entry.offset_high16 = ((offset >> 16) & 0xffff);
-  our_0x23_idt_entry.offset_top32 = ((offset >> 32) & 0xffffffff);
-
-  if (!install_intr_handler(0x23, &our_0x23_idt_entry, &old_0x23_idt_entry)) {
+  if (!install_intr_handler(0x22)) {
     return false;
   }
-  s_installed_0x23_handler = true;
+  if (!install_intr_handler(0x23)) {
+    return false;
+  }
 
   if (!hook_vm_page_validate_cs()) {
     return false;
   }
-  if (macOS_Sierra()) {
+  if (macOS_HighSierra() || macOS_Sierra()) {
     if (!hook_mac_file_check_library_validation()) {
       return false;
     }
+  }
+  if (macOS_HighSierra() || macOS_Sierra() || OSX_ElCapitan()) {
     if (!hook_mac_file_check_mmap()) {
       return false;
     }
@@ -9593,56 +10372,49 @@ void remove_intr_handlers()
   unhook_mac_file_check_mmap();
   unhook_mac_file_check_library_validation();
   unhook_vm_page_validate_cs();
-  if (s_installed_0x20_handler) {
-    install_intr_handler(0x20, &old_0x20_idt_entry, NULL);
-  }
-  if (s_installed_0x21_handler) {
-    install_intr_handler(0x21, &old_0x21_idt_entry, NULL);
-  }
-  if (s_installed_0x22_handler) {
-    install_intr_handler(0x22, &old_0x22_idt_entry, NULL);
-  }
-  if (s_installed_0x23_handler) {
-    install_intr_handler(0x23, &old_0x23_idt_entry, NULL);
-  }
+  remove_intr_handler(0x20);
+  remove_intr_handler(0x21);
+  remove_intr_handler(0x22);
+  remove_intr_handler(0x23);
+  remove_stub_dispatcher();
 }
 
-extern "C" void handle_user_0x20_intr(x86_saved_state_t *intr_state, cpu_data_fake_t *cpu_data)
+extern "C" void handle_user_0x20_intr(x86_saved_state_t *intr_state)
 {
   check_hook_state(intr_state);
 }
 
-extern "C" void handle_user_0x21_intr(x86_saved_state_t *intr_state, cpu_data_fake_t *cpu_data)
+extern "C" void handle_user_0x21_intr(x86_saved_state_t *intr_state)
 {
   on_add_image(intr_state);
 }
 
-extern "C" void handle_user_0x22_intr(x86_saved_state_t *intr_state, cpu_data_fake_t *cpu_data)
+extern "C" void handle_user_0x22_intr(x86_saved_state_t *intr_state)
 {
   reset_hook(intr_state);
 }
 
-extern "C" void handle_user_0x23_intr(x86_saved_state_t *intr_state, cpu_data_fake_t *cpu_data)
+extern "C" void handle_user_0x23_intr(x86_saved_state_t *intr_state)
 {
   on_dyld_runInitializers(intr_state);
 }
 
-extern "C" void handle_kernel_0x20_intr(x86_saved_state_t *intr_state, cpu_data_fake_t *cpu_data)
+extern "C" void handle_kernel_0x20_intr(x86_saved_state_t *intr_state)
 {
   thread_bootstrap_return_hook(intr_state);
 }
 
-extern "C" void handle_kernel_0x21_intr(x86_saved_state_t *intr_state, cpu_data_fake_t *cpu_data)
+extern "C" void handle_kernel_0x21_intr(x86_saved_state_t *intr_state)
 {
   vm_page_validate_cs_hook(intr_state);
 }
 
-extern "C" void handle_kernel_0x22_intr(x86_saved_state_t *intr_state, cpu_data_fake_t *cpu_data)
+extern "C" void handle_kernel_0x22_intr(x86_saved_state_t *intr_state)
 {
   mac_file_check_library_validation_hook(intr_state);
 }
 
-extern "C" void handle_kernel_0x23_intr(x86_saved_state_t *intr_state, cpu_data_fake_t *cpu_data)
+extern "C" void handle_kernel_0x23_intr(x86_saved_state_t *intr_state)
 {
   mac_file_check_mmap_hook(intr_state);
 }
@@ -9653,15 +10425,42 @@ extern "C" kern_return_t HookCase_stop(kmod_info_t *ki, void *d);
 kern_return_t HookCase_start(kmod_info_t * ki, void *d)
 {
   if (OSX_Version_Unsupported()) {
-    printf("HookCase requires OS X Mavericks (10.9), Yosemite (10.10), El Capitan (10.11) or macOS Sierra (10.12): current version %s\n",
-           gOSVersionString ? gOSVersionString : "null");
+    // We use kprintf() for error messages for conditions under which we must
+    // fail HookCase_start().  The reason for this is an Apple bug that
+    // effects the new logging subsystem used by macOS 10.12 and up:  Neither
+    // the Console app nor the log app will ever display messages sent by an
+    // extension that fails its start() method.  The workaround is to use
+    // kprintf() for these error messages, because kprintf() can (under
+    // certain circumstances) write to a serial port, and we can tell people
+    // to look for output from that port.  For more information on the bug see
+    // Examples/kernel-logging.
+    //
+    // Though Macs haven't included a serial port for ages, macOS and OSX
+    // still support them.  Many kinds of VM software allow you to add a
+    // serial port to their virtual machines.  In VMware Fusion, everything
+    // written to such a serial port shows up in a file on the virtual
+    // machine's host.
+    //
+    // macOS/OSX supports serial ports in user-mode and the kernel, but not
+    // in both at the same time.  You can make the kernel send output from
+    // kprintf() to a serial port by doing 'nvram boot-args="debug=0x8"', then
+    // rebooting.  But this makes the kernel "capture" the serial port -- it's
+    // no longer available to user-mode code, and drivers for it no longer show
+    // up in the /dev directory.
+    kprintf("HookCase requires OS X Mavericks (10.9), Yosemite (10.10), El Capitan (10.11) or macOS Sierra (10.12): current version %s\n",
+            gOSVersionString ? gOSVersionString : "null");
     if (gOSVersionString) {
       IOFree(gOSVersionString, gOSVersionStringLength);
     }
     return KERN_NOT_SUPPORTED;
   }
 
+  if (!find_kernel_private_functions()) {
+    return KERN_FAILURE;
+  }
+
   get_kernel_type();
+  initialize_cpu_data_offsets();
   if (!install_intr_handlers()) {
     remove_intr_handlers();
     return KERN_FAILURE;

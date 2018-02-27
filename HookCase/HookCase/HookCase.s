@@ -1,6 +1,6 @@
 /* The MIT License (MIT)
  *
- * Copyright (c) 2017 Steven Michaud
+ * Copyright (c) 2018 Steven Michaud
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -116,20 +116,28 @@
 #define SS_64                 15
 
 /* Offsets of cpu_data_fake_t fields in cpu_data_fake_t */
-#define CPU_PREEMPTION_LEVEL   24
-#define CPU_NUMBER             28
-#define CPU_INT_STATE          32
-#define CPU_ACTIVE_STACK       40
-#define CPU_KERNEL_STACK       48
-#define CPU_INT_STACK_TOP      56
-#define CPU_INTERRUPT_LEVEL    64
-#define CPU_ACTIVE_CR3         256
-#define CPU_TLB_INVALID        264
-#define CPU_TLB_INVALID_LOCAL  264
-#define CPU_TLB_INVALID_GLOBAL 266
-#define CPU_TASK_MAP           268
-#define CPU_TASK_CR3           272
-#define CPU_KERNEL_CR3         280
+#define CPU_PREEMPTION_LEVEL       24
+#define CPU_NUMBER                 28
+#define CPU_INT_STATE              32
+#define CPU_ACTIVE_STACK           40
+#define CPU_KERNEL_STACK           48
+#define CPU_INT_STACK_TOP          56
+#define CPU_INTERRUPT_LEVEL        64
+#define CPU_ACTIVE_CR3             256
+#define CPU_TLB_INVALID            264
+#define CPU_TLB_INVALID_LOCAL      264
+#define CPU_TLB_INVALID_GLOBAL     266
+#define CPU_TASK_MAP               268
+#define CPU_TASK_CR3               272
+#define CPU_KERNEL_CR3             280
+#define CPU_TASK_CR3_NOKERNEL      280
+#define CPU_KERNEL_CR3_KPTI        288
+#define CPU_UBER_ISF               304
+#define CPU_UBER_TMP               312
+#define CPU_USER_STACK             328
+#define CPU_KERNEL_CR3_KPTI_BP     280
+#define CPU_TASK_CR3_NOKERNEL_BP   288
+#define CPU_USER_STACK_BP          336
 
 /* On getting an interrupt, the Intel processor first ORs RSP with
  * 0xFFFFFFFFFFFFFFF0, to make it 16-byte aligned.  Then it pushes the
@@ -154,15 +162,15 @@
  * The original value of IF is restored (along with all the other flags in
  * the flags register) by calling IRET.
  */
-#define SETUP(trapno)                                                        \
-   pushq   $0             /* err */                                         ;\
-   sub     $8, %rsp                                                         ;\
-   push    %rax                                                             ;\
-   lea     EXT(user_trampoline)(%rip), %rax                                 ;\
-   mov     %rax, 8(%rsp)  /* trapfn */                                      ;\
-   pop     %rax                                                             ;\
-   pushq   $(trapno)      /* trapno, cpu, pad */                            ;\
-   jmp     EXT(setup_continues)
+#define SETUP(trapno)                                \
+   pushq   $0             /* err */                 ;\
+   sub     $8, %rsp                                 ;\
+   push    %rax                                     ;\
+   lea     EXT(user_trampoline)(%rip), %rax         ;\
+   mov     %rax, 8(%rsp)  /* trapfn */              ;\
+   pop     %rax                                     ;\
+   pushq   $(trapno)      /* trapno, cpu, pad */    ;\
+   jmp     EXT(setup_continues)                     ;
 
 Entry(setup_continues)
    /* Jump to kernel_trampoline if we have a kernel interrupt, after setting
@@ -208,9 +216,9 @@ Entry(setup_continues)
 
    /* Swap the GS register's current value with the value contained in the
     * IA32_KERNEL_GS_BASE MSR (machine-specific register) address.  This makes
-    * GS point to the 'cpu_data' structure (as defined in the xnu kernel's
-    * osfmk/i386/cpu_data.h).  We'll switch back before returning.  (In user
-    * space, GS is normally used for thread-local storage.)
+    * %gs: references point to the 'cpu_data' structure (as defined in the xnu
+    * kernel's osfmk/i386/cpu_data.h).  We'll switch back before returning.
+    * (In user space, GS is normally used for thread-local storage.)
     */
 1: swapgs
    push    %rax
@@ -223,10 +231,29 @@ Entry(setup_continues)
     * to the kernel stack.
     */
    cmpl    $(TASK_MAP_32BIT), %gs:CPU_TASK_MAP
-   je      2f
- 
+   je      3f
+
+   cmpl    $0, EXT(g_kpti_enabled)(%rip)
+   jz      2f
+   /* Deal with an interrupt coming in from our dispatcher in the HIB segment,
+    * with KPTI enabled.
+    */
+   mov     %rax, %gs:CPU_UBER_TMP
+   mov     %gs:CPU_UBER_ISF, %rax
+   add     $(ISF64_SIZE), %rax
+   xchg    %rsp, %rax
+   push    ISF64_SS(%rax)
+   push    ISF64_RSP(%rax)
+   push    ISF64_RFLAGS(%rax)
+   push    ISF64_CS(%rax)
+   push    ISF64_RIP(%rax)
+   push    ISF64_ERR(%rax)
+   push    ISF64_TRAPFN(%rax)
+   push    ISF64_TRAPNO(%rax) /* trapno, cpu, pad */
+   mov     %gs:CPU_UBER_TMP, %rax
+
    /* 64-bit user interrupt */
-   sub     $(ISS64_OFFSET), %rsp
+2: sub     $(ISS64_OFFSET), %rsp
    mov     %r15, R64_R15(%rsp)
    mov     %rsp, %r15
    movl    $(SS_64), SS_FLAVOR(%r15)
@@ -256,10 +283,10 @@ Entry(setup_continues)
    swapgs
 
    mov     R64_TRAPFN(%r15), %rdx /* RDX := trapfn for later */
-   jmp     3f
+   jmp     4f
 
    /* 32-bit user interrupt */
-2: sub     $(ISS64_OFFSET), %rsp
+3: sub     $(ISS64_OFFSET), %rsp
    mov     %rsp, %r15
    movl    $(SS_32), SS_FLAVOR(%r15)
    mov     %gs:CPU_KERNEL_STACK, %rsp /* Switch to kernel stack */
@@ -306,28 +333,32 @@ Entry(setup_continues)
    mov     R64_TRAPFN(%r15), %rdx  /* RDX := trapfn for later */
 
    /* Misc additional setup */
-3: cld
+4: cld
    xor     %rbp, %rbp
 
-   mov     %gs:CPU_KERNEL_CR3, %rcx
+   mov     EXT(g_cpu_kernel_cr3_offset)(%rip), %rcx
+   mov     %gs:(%rcx), %rcx
    mov     %rcx, %gs:CPU_ACTIVE_CR3
    /* Set kernel's CR3 if no_shared_cr3 is true */
-   cmpq    $0, EXT(g_no_shared_cr3_ptr)(%rip)
-   jle     4f
-   lea     EXT(g_no_shared_cr3_ptr)(%rip), %rax
-   cmpl    $0, (%rax)
-   je      4f
+   mov     EXT(g_no_shared_cr3_ptr)(%rip), %rax
+   cmp     $(-1), %rax
+   je      5f
+   test    %rax, %rax
+   jz      5f
+   mov     (%rax), %eax
+   test    %eax, %eax
+   jz      5f
    mov     %rcx, %cr3
-   jmp     6f
+   jmp     7f
    /* If the kernel and user-space share the same CR3, we need to check if the
     * kernel's memory mapping has changed since the kernel was last entered.
     */
-4: mov     %gs:CPU_TLB_INVALID, %ecx
+5: mov     %gs:CPU_TLB_INVALID, %ecx
    test    %ecx, %ecx     /* Invalid either globally or locally? */
-   jz      6f
+   jz      7f
    shr     $16, %ecx
    test    $1, %ecx       /* Invalid globally? */
-   jz      5f
+   jz      6f
    /* If invalid globally, play games with CR4_PGE */
    movl    $0, %gs:CPU_TLB_INVALID
    mov     %cr4, %rcx
@@ -335,22 +366,25 @@ Entry(setup_continues)
    mov     %rcx, %cr4
    or      $(CR4_PGE), %rcx
    mov     %rcx, %cr4
-   jmp     6f
+   jmp     7f
    /* If only invalid locally, just reset CR3 to the same value */
-5: movb    $0, %gs:CPU_TLB_INVALID_LOCAL
+6: movb    $0, %gs:CPU_TLB_INVALID_LOCAL
    mov     %cr3, %rcx
    mov     %rcx, %cr3
 
    /* Clear EFLAGS.AC if SMAP is present/enabled */
-6: cmpq    $0, EXT(g_pmap_smap_enabled_ptr)(%rip)
-   jle     7f
-   lea     EXT(g_pmap_smap_enabled_ptr)(%rip), %rax
-   cmpl    $0, (%rax)
-   je      7f
+7: mov     EXT(g_pmap_smap_enabled_ptr)(%rip), %rax
+   cmp     $(-1), %rax
+   je      8f
+   test    %rax, %rax
+   jz      8f
+   mov     (%rax), %eax
+   test    %eax, %eax
+   jz      8f
    clac
 
    /* Set the Task Switch bit in CR0 to keep floating point happy */
-7: mov     %cr0, %rax
+8: mov     %cr0, %rax
    or      $(CR0_TS), %eax
    mov     %rax, %cr0
 
@@ -366,7 +400,6 @@ Entry(setup_continues)
    jmp     *%rdx
 
 /* R15 == x86_saved_state_t */
-/* GS  == cpu_data */
 Entry(teardown)
    push    %r15
    mov     %rsp, %r15
@@ -386,15 +419,18 @@ Entry(teardown)
    /* Switch back to the user CR3, if appropriate */
    mov     %gs:CPU_TASK_CR3, %rcx
    mov     %rcx, %gs:CPU_ACTIVE_CR3
-   cmpq    $0, EXT(g_no_shared_cr3_ptr)(%rip)
-   jle     1f
-   lea     EXT(g_no_shared_cr3_ptr)(%rip), %rax
-   cmpl    $0, (%rax)
+   mov     EXT(g_no_shared_cr3_ptr)(%rip), %rax
+   cmp     $(-1), %rax
    je      1f
+   test    %rax, %rax
+   jz      1f
+   mov     (%rax), %eax
+   test    %eax, %eax
+   jz      1f
    mov     %rcx, %cr3
 
 1: cmpl    $(SS_32), SS_FLAVOR(%r15)
-   je      2f
+   je      3f
 
    /* Return from 64-bit user interrupt */
    /* Segment registers don't need restoring */
@@ -413,16 +449,47 @@ Entry(teardown)
    mov     R64_RBX(%r15), %rbx
    mov     R64_RAX(%r15), %rax
 
-   /* Switch back to user stack and restore R15 */
+   cmpl    $0, EXT(g_kpti_enabled)(%rip)
+   jz      2f
+
+   /* If KPTI is enabled, jump to our handler in the HIB segment.  We can't
+    * iretq directly from here -- that causes kernel panics.  I'm not entirely
+    * sure why, but I think it has something to do with returning from code
+    * that's no longer accessible from the user-mode CR3 (after we've changed
+    * to it).
+    */
+   mov     EXT(g_cpu_user_stack_offset)(%rip), %rax
+   mov     %gs:(%rax), %rsp
+   mov     R64_RAX(%r15), %rax
+   pushq   R64_SS(%r15)
+   pushq   R64_RSP(%r15)
+   pushq   R64_RFLAGS(%r15)
+   pushq   R64_CS(%r15)
+   pushq   R64_RIP(%r15)
+   mov     R64_R15(%r15), %r15
+
+   push    %rax
+   mov     EXT(g_cpu_task_cr3_nokernel_offset)(%rip), %rax
+   push    %rax
+   mov     EXT(g_return_from_kext_addr)(%rip), %rax
+   jmp     *%rax
+
+2: /* Switch back to user stack and restore R15 */
    mov     R64_R15(%r15), %rsp
    xchg    %r15, %rsp
 
    swapgs
 
-   jmp     3f
+   /* Restore RSP as of entry to raw interrupt handlers.  IRETQ will restore
+    * it to its original value, along with RFLAGS, SS, CS and RIP (or the
+    * 32-bit equivalents in that mode).
+    */
+   add     $(ISS64_OFFSET)+8+8+8, %rsp
+
+   iretq
 
    /* Return from 32-bit user interrupt */
-2: swapgs
+3: swapgs
 
    mov     R32_DS(%r15), %ds
    mov     R32_ES(%r15), %es
@@ -455,13 +522,12 @@ Entry(teardown)
     * it to its original value, along with RFLAGS, SS, CS and RIP (or the
     * 32-bit equivalents in that mode).
     */
-3: add     $(ISS64_OFFSET)+8+8+8, %rsp
+   add     $(ISS64_OFFSET)+8+8+8, %rsp
 
    iretq
 
 /* Calls one of our user interrupt handlers in HookCase.cpp.  Called with:
  *   R15 == x86_saved_state_t
- *   GS  == cpu_data
  *   RSP == kernel stack
  */
 Entry(user_trampoline)
@@ -483,7 +549,6 @@ Entry(user_trampoline)
    lea     EXT(handle_user_0x23_intr)(%rip), %rax
 
 4: mov     %r15, %rdi
-   mov     %gs, %rsi
 
    push    %r15
    sti
@@ -498,7 +563,6 @@ Entry(user_trampoline)
 
 /* Calls one of our kernel interrupt handlers in HookCase.cpp.  Called with:
  *   R15 == x86_saved_state_t
- *   GS  == cpu_data
  */
 Entry(kernel_trampoline)
    mov     R64_TRAPNO(%r15), %cx
@@ -519,7 +583,6 @@ Entry(kernel_trampoline)
    lea     EXT(handle_kernel_0x23_intr)(%rip), %rax
 
 4: mov     %r15, %rdi
-   mov     %gs, %rsi
 
    sti
    cld
@@ -535,7 +598,6 @@ Entry(kernel_trampoline)
 
 /* Called with:
  *   R15 == x86_saved_state_t
- *   GS  == cpu_data
  */
 Entry(kernel_teardown)
    /* IRETQ apparently doesn't restore RSP (and SS) when returning from intra-
@@ -686,19 +748,43 @@ Entry(OSCompareAndSwap128)
    pop     %rbp
    retq
 
+Entry(stub_handler)
+   pop     %rax
+   cmpq    $(0x20), %rax
+   jne     1f
+   pop     %rax
+   jmp     EXT(intr_0x20_raw_handler)
+1: cmpq    $(0x21), %rax
+   jne     2f
+   pop     %rax
+   jmp     EXT(intr_0x21_raw_handler)
+2: cmpq    $(0x22), %rax
+   jne     3f
+   pop     %rax
+   jmp     EXT(intr_0x22_raw_handler)
+3: cmpq    $(0x23), %rax
+   jne     4f
+   pop     %rax
+   jmp     EXT(intr_0x23_raw_handler)
+4: pop     %rax
+   iretq
+
 /* CALLER is for kernel methods we've breakpointed which have a standard C/C++
  * prologue.  We can use it to skip past the breakpoint and call the
  * "original" method, without having to unset and reset the breakpoint.
+ * A caller must, like the method it calls, have code equivalent to a C/C++
+ * prologue.  And it should be at its beginning, otherwise debugging and crash
+ * logging code can get confused.
  */
 
 #define CALLER(func)                  \
    Entry(func ## _caller)            ;\
+      push    %rbp                   ;\
+      mov     %rsp, %rbp             ;\
       lea     EXT(func)(%rip), %r10  ;\
       mov     (%r10), %r10           ;\
       add     $4, %r10               ;\
-      push    %rbp                   ;\
-      mov     %rsp, %rbp             ;\
-      jmp     *%r10                  ;\
+      jmp     *%r10                  ;
 
 CALLER(vm_page_validate_cs)
 

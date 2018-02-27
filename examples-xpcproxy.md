@@ -17,8 +17,9 @@ information in the hook library's comments.
 Once the hook library is built, you should use it with an application
 (like Safari) that uses XPC services.  Here's one way to do that, from
 a Terminal session.  Note that all the logging will go to the Console
-app, which on macOS 10.12 (Sierra) needs to be running before you do
-the following.  Use "xpcproxy" to filter the Console app's output.
+app, which on macOS 10.12 (Sierra) and above needs to be running
+before you do the following.  Use "xpcproxy" to filter the Console
+app's output.
 
         HC_INSERT_LIBRARY=/full/path/to/hook.dylib open /Applications/Safari.app
 

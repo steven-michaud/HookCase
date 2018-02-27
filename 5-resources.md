@@ -88,7 +88,7 @@ though.
 
 `lldb` is Apple's default command-line debugger on OS X 10.9.5 and up.
 It has even less documentation than `gdb`, and the internal
-documentation is very spotty.
+documentation only covers the basics.
 
 I find I rely heavily on the
 [LLDB to GDB Command Map](http://lldb.llvm.org/lldb-gdb.html)

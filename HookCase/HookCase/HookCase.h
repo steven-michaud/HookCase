@@ -1,6 +1,6 @@
 /* The MIT License (MIT)
  *
- * Copyright (c) 2017 Steven Michaud
+ * Copyright (c) 2018 Steven Michaud
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -145,6 +145,10 @@ typedef enum {
 
 /* From the xnu kernel's osfmk/mach/i386/thread_status.h (end) */
 
+/* These are the two GS bases that get swapped by the 'swapgs' instruction */
+#define MSR_IA32_GS_BASE 0xC0000101 /* Current GS base -- kernel or user */
+#define MSR_IA32_KERNEL_GS_BASE 0xC0000102 /* "Stored" GS base */
+
 #ifndef __ASSEMBLER__
 
 /* From the xnu kernel's osfmk/i386/thread_status.h (begin) */
@@ -277,20 +281,45 @@ typedef struct cpu_data_fake
     };
   };
   volatile task_map_t cpu_task_map;   // Offset 0x10c
-  volatile addr64_t cpu_task_cr3;
-  addr64_t cpu_kernel_cr3;            // Offset 0x118
+  // User-mode (per-task) CR3 with kernel mapped in
+  volatile addr64_t cpu_task_cr3;     // Offset 0x110
+  union {
+    // KPTI not supported
+    struct {
+      addr64_t cpu_kernel_cr3;          // Offset 0x118
+    };
+    // KPTI enabled, 10.13.2 and above
+    struct {
+      // User-mode (per-task) CR3 with kernel unmapped
+      volatile addr64_t cpu_task_cr3_nokernel;    // Offset 0x118
+      addr64_t cpu_kernel_cr3_kpti;               // Offset 0x120
+      boolean_t cpu_pagezero_mapped;              // Offset 0x128
+      addr64_t cpu_uber_isf;                      // Offset 0x130
+      uint64_t cpu_uber_tmp;                      // Offset 0x138
+      addr64_t cpu_uber_user_gs_base;             // Offset 0x140
+      addr64_t cpu_user_stack;                    // Offset 0x148
+    };
+    // KPTI enabled, backported to 10.12.6 and 10.11.6
+    struct {
+      addr64_t cpu_kernel_cr3_kpti_bp;            // Offset 0x118
+      // User-mode (per-task) CR3 with kernel unmapped
+      volatile addr64_t cpu_task_cr3_nokernel_bp; // Offset 0x120
+      uint64_t pad3[5];
+      addr64_t cpu_user_stack_bp;                 // Offset 0x150
+    };
+  };
 } cpu_data_fake_t;
 
-#define CPU_DATA_GET(member,type)              \
+#define CPU_DATA_GET_FUNC_BODY(member,type)    \
   type ret;                                    \
   __asm__ volatile ("mov %%gs:%P1,%0"          \
     : "=r" (ret)                               \
     : "i" (offsetof(cpu_data_fake_t,member))); \
   return ret;
 
-static inline int cpu_number(void)
+static inline int get_cpu_number(void)
 {
-  CPU_DATA_GET(cpu_number,int)
+  CPU_DATA_GET_FUNC_BODY(cpu_number,int)
 }
 
 /* Derived from the xnu kernel's osfmk/i386/cpu_data.h (end) */
@@ -299,6 +328,8 @@ extern "C" void intr_0x20_raw_handler(void);
 extern "C" void intr_0x21_raw_handler(void);
 extern "C" void intr_0x22_raw_handler(void);
 extern "C" void intr_0x23_raw_handler(void);
+
+extern "C" void stub_handler(void);
 
 extern "C" Boolean OSCompareAndSwap_fixed(UInt32 oldValue, UInt32 newValue,
                                           volatile UInt32 *address);

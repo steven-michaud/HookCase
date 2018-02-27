@@ -35,12 +35,15 @@ wish to hook in 32-bit mode, you'll need to use a disassembler (like
 not it uses `fastcc`.  One also needs to build hook libraries with tools
 that are as compatible as possible with those used to build the OS
 itself.  I've had good luck with the
-[LLVM 3.9.0 Clang download](http://releases.llvm.org/3.9.0/clang+llvm-3.9.0-x86_64-apple-darwin.tar.xz).
+[LLVM 3.9.0 Clang download](http://releases.llvm.org/3.9.0/clang+llvm-3.9.0-x86_64-apple-darwin.tar.xz)
+on OS X 10.11 and macOS 10.12, and the
+[LLVM 4.0.0 Clang download](http://releases.llvm.org/4.0.0/clang+llvm-4.0.0-x86_64-apple-darwin.tar.xz)
+on macOS 10.13.
 
 Do the following (with various applications) to see the events hook
-library in action.  As always, on OS X 10.12 (Sierra) you'll want to
-run the Console app before starting.  Filter on "events".  Most output
-should be visible in the Terminal window, though.
+library in action.  As always, on OS X 10.12 (Sierra) and above you'll
+want to run the Console app before starting.  Filter on "events".
+Most output should be visible in the Terminal window, though.
 
         HC_INSERT_LIBRARY=/full/path/to/hook.dylib /Applications/Safari.app/Contents/MacOS/Safari
 

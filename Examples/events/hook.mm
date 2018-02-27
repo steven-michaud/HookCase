@@ -1,6 +1,6 @@
 // The MIT License (MIT)
 //
-// Copyright (c) 2017 Steven Michaud
+// Copyright (c) 2018 Steven Michaud
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -37,7 +37,7 @@
 // B) From gdb:
 //    1) set HC_INSERT_LIBRARY /full/path/to/hook.dylib
 //    2) run
-// 
+//
 // C) From lldb:
 //    1) env HC_INSERT_LIBRARY=/full/path/to/hook.dylib
 //    2) run
@@ -82,48 +82,29 @@ void basic_init()
   }
 }
 
-// Hooked methods are sometimes called before the CoreFoundation framework is
-// initialized.  Once libobjc.dylib is initialized, we can hurry the process
-// along by calling __CFInitialize() ourselves.  But before then, trying to
-// use CF methods (even after __CFInitialize()) leads to mysterious crashes.
+bool sCFInitialized = false;
 
-extern "C" void __CFInitialize();
+void (*__CFInitialize_caller)() = NULL;
 
-bool sObjcInited = false;
-
-void (*_objc_init_caller)() = NULL;
-
-// 64-bit only on OS X 10.11 (ElCapitan) and below, but for both 64-bit and
-// 32-bit code on OS X 10.12 (Sierra) and up.
-static void Hooked__objc_init()
+static void Hooked___CFInitialize()
 {
-  _objc_init_caller();
-  sObjcInited = true;
-}
-
-void (*_ZL10_objc_initv_caller)() = NULL;
-
-// 32-bit only on OS X 10.11 (ElCapitan) and below.
-static void Hooked__ZL10_objc_initv()
-{
-  _ZL10_objc_initv_caller();
-  sObjcInited = true;
+  __CFInitialize_caller();
+  if (!sCFInitialized) {
+    basic_init();
+  }
+  sCFInitialized = true;
 }
 
 bool CanUseCF()
 {
-  if (!sObjcInited) {
-    return false;
-  }
-  basic_init();
-  __CFInitialize();
-  return true;
+  return sCFInitialized;
 }
 
 #define MAC_OS_X_VERSION_10_9_HEX  0x00000A90
 #define MAC_OS_X_VERSION_10_10_HEX 0x00000AA0
 #define MAC_OS_X_VERSION_10_11_HEX 0x00000AB0
 #define MAC_OS_X_VERSION_10_12_HEX 0x00000AC0
+#define MAC_OS_X_VERSION_10_13_HEX 0x00000AD0
 
 char gOSVersionString[PATH_MAX] = {0};
 
@@ -194,6 +175,11 @@ bool macOS_Sierra()
   return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_12_HEX);
 }
 
+bool macOS_HighSierra()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_13_HEX);
+}
+
 class nsAutoreleasePool {
 public:
     nsAutoreleasePool()
@@ -237,33 +223,71 @@ static void GetThreadName(char *name, size_t size)
   pthread_getname_np(pthread_self(), name, size);
 }
 
-static void LogWithFormatV(bool decorate, CFStringRef format, va_list args)
+// Though Macs haven't included a serial port for ages, macOS and OSX still
+// support them.  Many kinds of VM software allow you to add a serial port to
+// their virtual machines.  When you do this, /dev/tty.serial1 and
+// /dev/cu.serial1 appear on reboot.  In VMware Fusion, everything written to
+// such a serial port shows up in a file on the virtual machine's host.
+//
+// Note that macOS/OSX supports serial ports in user-mode and the kernel, but
+// not in both at the same time.  You can make the kernel send output from
+// kprintf() to a serial port by doing 'nvram boot-args="debug=0x8"', then
+// rebooting.  But this makes the kernel "capture" the serial port -- it's no
+// longer available to user-mode code, and drivers for it no longer show up in
+// the /dev directory.
+
+bool g_serial1_checked = false;
+int g_serial1 = -1;
+FILE *g_serial1_FILE = NULL;
+
+static void LogWithFormatV(bool decorate, const char *format, va_list args)
 {
   MaybeGetProcPath();
 
-  CFStringRef message = CFStringCreateWithFormatAndArguments(kCFAllocatorDefault, NULL,
-                                                             format, args);
+  if (!format || !format[0]) {
+    return;
+  }
 
-  int msgLength = CFStringGetMaximumSizeForEncoding(CFStringGetLength(message),
-                                                    kCFStringEncodingUTF8);
-  char *msgUTF8 = (char *) calloc(msgLength + 1, 1);
-  CFStringGetCString(message, msgUTF8, msgLength, kCFStringEncodingUTF8);
-  CFRelease(message);
+  char *message;
+  if (CanUseCF()) {
+    CFStringRef formatCFSTR =
+      CFStringCreateWithCString(kCFAllocatorDefault, format,
+                                kCFStringEncodingUTF8);
+    CFStringRef messageCFSTR =
+      CFStringCreateWithFormatAndArguments(kCFAllocatorDefault, NULL,
+                                           formatCFSTR, args);
+    CFRelease(formatCFSTR);
+    int length =
+      CFStringGetMaximumSizeForEncoding(CFStringGetLength(messageCFSTR),
+                                        kCFStringEncodingUTF8);
+    message = (char *) calloc(length + 1, 1);
+    CFStringGetCString(messageCFSTR, message, length, kCFStringEncodingUTF8);
+    CFRelease(messageCFSTR);
+  } else {
+    vasprintf(&message, format, args);
+  }
 
-  char *finished = (char *) calloc(msgLength + 1024, 1);
-  const time_t currentTime = time(NULL);
+  char *finished = (char *) calloc(strlen(message) + 1024, 1);
   char timestamp[30] = {0};
-  ctime_r(&currentTime, timestamp);
-  timestamp[strlen(timestamp) - 1] = 0;
+  if (CanUseCF()) {
+    const time_t currentTime = time(NULL);
+    ctime_r(&currentTime, timestamp);
+    timestamp[strlen(timestamp) - 1] = 0;
+  }
   if (decorate) {
     char threadName[PROC_PIDPATHINFO_MAXSIZE] = {0};
     GetThreadName(threadName, sizeof(threadName) - 1);
-    sprintf(finished, "(%s) %s[%u] %s[%p] %s\n",
-            timestamp, gProcPath, getpid(), threadName, pthread_self(), msgUTF8);
+    if (CanUseCF()) {
+      sprintf(finished, "(%s) %s[%u] %s[%p] %s\n",
+              timestamp, gProcPath, getpid(), threadName, pthread_self(), message);
+    } else {
+      sprintf(finished, "%s[%u] %s[%p] %s\n",
+              gProcPath, getpid(), threadName, pthread_self(), message);
+    }
   } else {
-    sprintf(finished, "%s\n", msgUTF8);
+    sprintf(finished, "%s\n", message);
   }
-  free(msgUTF8);
+  free(message);
 
   char stdout_path[PATH_MAX] = {0};
   fcntl(STDOUT_FILENO, F_GETPATH, stdout_path);
@@ -271,13 +295,27 @@ static void LogWithFormatV(bool decorate, CFStringRef format, va_list args)
   if (!strcmp("/dev/console", stdout_path) ||
       !strcmp("/dev/null", stdout_path))
   {
-    aslclient asl = asl_open(NULL, "com.apple.console", ASL_OPT_NO_REMOTE);
-    aslmsg msg = asl_new(ASL_TYPE_MSG);
-    asl_set(msg, ASL_KEY_LEVEL, "4"); // kCFLogLevelWarning, used by NSLog()
-    asl_set(msg, ASL_KEY_MSG, finished);
-    asl_send(asl, msg);
-    asl_free(msg);
-    asl_close(asl);
+    if (CanUseCF()) {
+      aslclient asl = asl_open(NULL, "com.apple.console", ASL_OPT_NO_REMOTE);
+      aslmsg msg = asl_new(ASL_TYPE_MSG);
+      asl_set(msg, ASL_KEY_LEVEL, "3"); // kCFLogLevelError
+      asl_set(msg, ASL_KEY_MSG, finished);
+      asl_send(asl, msg);
+      asl_free(msg);
+      asl_close(asl);
+    } else {
+      if (!g_serial1_checked) {
+        g_serial1_checked = true;
+        g_serial1 =
+          open("/dev/tty.serial1", O_WRONLY | O_NONBLOCK | O_NOCTTY);
+        if (g_serial1 >= 0) {
+          g_serial1_FILE = fdopen(g_serial1, "w");
+        }
+      }
+      if (g_serial1_FILE) {
+        fputs(finished, g_serial1_FILE);
+      }
+    }
   } else {
     fputs(finished, stdout);
   }
@@ -292,78 +330,44 @@ static void LogWithFormatV(bool decorate, CFStringRef format, va_list args)
           stdout_stat.st_size, stdout_stat.st_blocks, stdout_stat.st_blksize,
           stdout_stat.st_flags, stdout_stat.st_gen);
 
-  aslclient asl = asl_open(NULL, "com.apple.console", ASL_OPT_NO_REMOTE);
-  aslmsg msg = asl_new(ASL_TYPE_MSG);
-  asl_set(msg, ASL_KEY_LEVEL, "4"); // kCFLogLevelWarning, used by NSLog()
-  asl_set(msg, ASL_KEY_MSG, stdout_info);
-  asl_send(asl, msg);
-  asl_free(msg);
-  asl_close(asl);
+  if (CanUseCF()) {
+    aslclient asl = asl_open(NULL, "com.apple.console", ASL_OPT_NO_REMOTE);
+    aslmsg msg = asl_new(ASL_TYPE_MSG);
+    asl_set(msg, ASL_KEY_LEVEL, "3"); // kCFLogLevelError
+    asl_set(msg, ASL_KEY_MSG, stdout_info);
+    asl_send(asl, msg);
+    asl_free(msg);
+    asl_close(asl);
+  } else {
+    if (!g_serial1_checked) {
+      g_serial1_checked = true;
+      g_serial1 =
+        open("/dev/tty.serial1", O_WRONLY | O_NONBLOCK | O_NOCTTY);
+      if (g_serial1 >= 0) {
+        g_serial1_FILE = fdopen(g_serial1, "w");
+      }
+    }
+    if (g_serial1_FILE) {
+      fputs(stdout_info, g_serial1_FILE);
+    }
+  }
   free(stdout_info);
 #endif
 
   free(finished);
 }
 
-// A (shared) copy of dyld is loaded into every Mach executable, and code in
-// it (starting from _dyld_start) initializes the executable before jumping
-// to main().  Because the code in dyld needs to be able to run before any
-// other modules have been linked in, it's entirely self-contained -- it has
-// no external dependencies.  So methods in it can be used from any hook, no
-// matter how early it runs.  Here we're interested in the
-// internal dyld::vlog(char const*, __va_list_tag*) method, which we can use
-// for logging before the CoreFoundation framework has finished
-// initialization.  The output from dyld::vlog() goes to stderr if it's
-// available, and otherwise to the system log.
-
-extern "C" void *module_dlsym(const char *module_name, const char *symbol);
-
-void (*dyld_vlog_caller)(const char *format, va_list list) = NULL;
-
-static void dyld_vlog(const char *format, va_list list)
-{
-  if (!dyld_vlog_caller) {
-    dyld_vlog_caller = (void (*)(const char*, va_list))
-      module_dlsym("dyld", "__ZN4dyld4vlogEPKcP13__va_list_tag");
-    if (!dyld_vlog_caller) {
-      return;
-    }
-  }
-  size_t len = strlen(format) + 2;
-  char *holder = (char *) calloc(len, 1);
-  if (!holder) {
-    return;
-  }
-  snprintf(holder, len, "%s\n", format);
-  dyld_vlog_caller(holder, list);
-  free(holder);
-}
-
 static void LogWithFormat(bool decorate, const char *format, ...)
 {
   va_list args;
   va_start(args, format);
-  if (CanUseCF()) {
-    CFStringRef formatCFSTR = CFStringCreateWithCString(kCFAllocatorDefault, format,
-                                                        kCFStringEncodingUTF8);
-    LogWithFormatV(decorate, formatCFSTR, args);
-    CFRelease(formatCFSTR);
-  } else {
-    dyld_vlog(format, args);
-  }
+  LogWithFormatV(decorate, format, args);
   va_end(args);
 }
 
 extern "C" void hooklib_LogWithFormatV(bool decorate, const char *format, va_list args)
 {
-  if (CanUseCF()) {
-    CFStringRef formatCFSTR = CFStringCreateWithCString(kCFAllocatorDefault, format,
-                                                        kCFStringEncodingUTF8);
-    LogWithFormatV(decorate, formatCFSTR, args);
-    CFRelease(formatCFSTR);
-  } else {
-    dyld_vlog(format, args);
-  }
+  LogWithFormatV(decorate, format, args);
 }
 
 extern "C" void hooklib_PrintStackTrace()
@@ -371,7 +375,8 @@ extern "C" void hooklib_PrintStackTrace()
   PrintStackTrace();
 }
 
-extern "C" const struct dyld_all_image_infos *_dyld_get_all_image_infos();
+const struct dyld_all_image_infos *(*_dyld_get_all_image_infos)() = NULL;
+bool s_dyld_get_all_image_infos_initialized = false;
 
 // Bit in mach_header.flags that indicates whether or not the (dylib) module
 // is in the shared cache.
@@ -391,7 +396,7 @@ uintptr_t GetImageSlide(const struct mach_header *mh)
 
   uintptr_t retval = 0;
 
-  if ((mh->flags & MH_SHAREDCACHE) != 0) {
+  if (_dyld_get_all_image_infos && ((mh->flags & MH_SHAREDCACHE) != 0)) {
     const struct dyld_all_image_infos *info = _dyld_get_all_image_infos();
     if (info) {
       retval = info->sharedCacheSlide;
@@ -462,7 +467,7 @@ void GetModuleHeaderAndSlide(const char *moduleName,
 
   // If moduleName's base name is "dyld", we take it to mean the copy of dyld
   // that's present in every Mach executable.
-  if (strcmp(basename_local, "dyld") == 0) {
+  if (_dyld_get_all_image_infos && (strcmp(basename_local, "dyld") == 0)) {
     const struct dyld_all_image_infos *info = _dyld_get_all_image_infos();
     if (!info || !info->dyldImageLoadAddress) {
       return;
@@ -586,6 +591,12 @@ GetSegment(const struct mach_header* mh,
 // don't have any underscore prefix, even in the symbol table.
 extern "C" void *module_dlsym(const char *module_name, const char *symbol)
 {
+  if (!s_dyld_get_all_image_infos_initialized) {
+    s_dyld_get_all_image_infos_initialized = true;
+    _dyld_get_all_image_infos = (const struct dyld_all_image_infos *(*)())
+      module_dlsym("/usr/lib/system/libdyld.dylib", "__dyld_get_all_image_infos");
+  }
+
 #ifdef __LP64__
   const struct mach_header_64 *mh = NULL;
 #else
@@ -729,7 +740,7 @@ class loadHandler
 {
 public:
   loadHandler();
-  ~loadHandler() {}
+  ~loadHandler();
 };
 
 // In Apple's 32-bit mode code, internal (non-exported) methods often use a
@@ -741,8 +752,10 @@ public:
 // internal use, and is deliberately non-standardized.  So using it can be
 // tricky.  One needs to build the hook library with tools that are as
 // compatible as possible with those used to build the OS itself.  I've had
-// good luck with the LLVM 3.9.0 Clang download:
+// good luck up through Sierra with the LLVM 3.9.0 Clang download:
 // http://releases.llvm.org/3.9.0/clang+llvm-3.9.0-x86_64-apple-darwin.tar.xz.
+// HighSierra seems to require the LLVM 4.0.0 Clang download:
+// http://releases.llvm.org/4.0.0/clang+llvm-4.0.0-x86_64-apple-darwin.tar.xz.
 //
 // Note that the "fastcall" calling convention is *not* the same as the
 // "fastcc" calling convention.  But (as it's deliberately non-standard),
@@ -777,6 +790,16 @@ loadHandler::loadHandler()
   AEDescribeDesc = (CFStringRef (*)(CFAllocatorRef, const AEDesc *, Boolean))
     module_dlsym("/System/Library/Frameworks/CoreServices.framework/Frameworks/AE.framework/AE",
                  "_AEDescribeDesc");
+}
+
+loadHandler::~loadHandler()
+{
+  if (g_serial1_FILE) {
+    fclose(g_serial1_FILE);
+  }
+  if (g_serial1) {
+    close(g_serial1);
+  }
 }
 
 loadHandler handler = loadHandler();
@@ -827,6 +850,23 @@ static int Hooked_patch_example(char *arg)
   PrintStackTrace();
   // Not always required, but using it when not required does no harm.
   reset_hook(reinterpret_cast<void*>(Hooked_example));
+  return retval;
+}
+
+// An example of setting a patch hook at a function's numerical address.  The
+// hook function's name must start with "sub_" and finish with its address (in
+// the module where it's located) in hexadecimal (base 16) notation.  To hook
+// a function whose actual name (in the symbol table) follows this convention,
+// set the HC_NO_NUMERICAL_ADDRS environment variable.
+int (*sub_123abc_caller)(char *arg) = NULL;
+
+static int Hooked_sub_123abc(char *arg)
+{
+  int retval = sub_123abc_caller(arg);
+  LogWithFormat(true, "Hook.mm: sub_123abc(): arg \"%s\", returning \'%i\'", arg, retval);
+  PrintStackTrace();
+  // Not always required, but using it when not required does no harm.
+  reset_hook(reinterpret_cast<void*>(Hooked_sub_123abc));
   return retval;
 }
 
@@ -882,9 +922,9 @@ typedef uint32_t CGSError;
 class AEEventImpl;
 
 // As reported by CGSEventRecordLength(), this structure is 0xF8 (248) bytes
-// long on Mavericks through Sierra in 64-bit mode, and 0xD0 (208) bytes long
-// in 32-bit mode.  A full definition (though without member names) is present
-// in the class-dump output for the AppKit framework.
+// long on Mavericks through HighSierra in 64-bit mode, and 0xD0 (208) bytes
+// long in 32-bit mode.  A full definition (though without member names) is
+// present in the class-dump output for the AppKit framework.
 typedef struct _CGSEventRecord {
   unsigned short unknown1;
   unsigned short unknown2;
@@ -908,9 +948,21 @@ typedef struct __CGEvent {
   CGSEventRecord eventRecord;
 } CGEvent, *CGEventRef;
 
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101300
+uint32_t CGSEventRecordLength()
+{
+  return sizeof(CGSEventRecord);
+}
+CGSEventRecord *CGEventRecordPointer(CGEventRef event)
+{
+  return &(event->eventRecord);
+}
+#else
 extern "C" uint32_t CGSEventRecordLength();
-extern "C" CGEventRef CGEventCreate(CGEventSourceRef source);
 extern "C" CGSEventRecord *CGEventRecordPointer(CGEventRef event);
+#endif
+
+extern "C" CGEventRef CGEventCreate(CGEventSourceRef source);
 extern "C" OSStatus CreateEventWithCGEvent(CFAllocatorRef unused,
                                            CGEventRef inCGEvent,
                                            EventAttributes inAttributes,
@@ -947,8 +999,8 @@ EventRef EventFromCGSEventRecord(CGSEventRecord *eventRecord)
 // CGEvent on to the CGEvent queue.  Later, on the main thread, the CGEvent is
 // removed from the CGEvent queue, converted to a Carbon event, and posted to
 // the main event queue (using Convert1CGEvent()).  This method is called
-// SLSGetNextEventRecordInternal() on macOS Sierra, and is in a different
-// framework (the SkyLight framework).
+// SLSGetNextEventRecordInternal() on macOS Sierra and HighSierra, and is in a
+// different framework (the SkyLight framework).
 extern "C" CGSError CGSGetNextEventRecordInternal(CGSConnectionID cid,
                                                   CGSEventRecord *eventRecord);
 
@@ -1124,6 +1176,7 @@ static CGEventRef Hooked__DPSNextEvent(CGSConnectionID cid,
     {
       LogWithFormat(true, "HookEvents: _DPSNextEvent(): event %@", cocoaEvent);
     }
+    RetainEvent(*eventCopy);
     [cocoaEvent release];
   }
 
@@ -1177,6 +1230,7 @@ static CGSEventRecord Hooked__DPSNextEvent(CGSConnectionID cid,
     {
       LogWithFormat(true, "HookEvents: _DPSNextEvent(): event %@", cocoaEvent);
     }
+    RetainEvent(*eventCopy);
     [cocoaEvent release];
   }
 
@@ -1351,8 +1405,7 @@ __attribute__((used)) static const hook_desc user_hooks[]
   __attribute__((section("__DATA, __hook"))) =
 {
   INTERPOSE_FUNCTION(NSPushAutoreleasePool),
-  PATCH_FUNCTION(_objc_init, /usr/lib/libobjc.dylib),
-  PATCH_FUNCTION(_ZL10_objc_initv, /usr/lib/libobjc.dylib),
+  PATCH_FUNCTION(__CFInitialize, /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation),
 
   PATCH_FUNCTION(ReceiveNextEventCommon, /System/Library/Frameworks/Carbon.framework/Frameworks/HIToolbox.framework/HIToolbox),
   PATCH_FUNCTION(_DPSNextEvent, /System/Library/Frameworks/AppKit.framework/AppKit),
@@ -1486,6 +1539,14 @@ const char *GetOwnerName(void *address, CSTypeRef owner)
                 symbolicator,
                 (unsigned long long) address,
                 kCSNow);
+      // Sometimes we need to do this a second time.  I've no idea why, but it
+      // seems to be more likely in 32bit mode.
+      if (CSIsNull(owner)) {
+        owner = CSSymbolicatorGetSymbolOwnerWithAddressAtTime(
+                  symbolicator,
+                  (unsigned long long) address,
+                  kCSNow);
+      }
     }
   }
 
@@ -1519,6 +1580,14 @@ const char *GetAddressString(void *address, CSTypeRef owner)
                 symbolicator,
                 (unsigned long long) address,
                 kCSNow);
+      // Sometimes we need to do this a second time.  I've no idea why, but it
+      // seems to be more likely in 32bit mode.
+      if (CSIsNull(owner)) {
+        owner = CSSymbolicatorGetSymbolOwnerWithAddressAtTime(
+                  symbolicator,
+                  (unsigned long long) address,
+                  kCSNow);
+      }
     }
   }
 
@@ -1562,14 +1631,23 @@ const char *GetAddressString(void *address, CSTypeRef owner)
 void PrintAddress(void *address, CSTypeRef symbolicator)
 {
   const char *ownerName = "unknown";
-  const char *addressString = "unknown + 0";
+  const char *addressString = "unknown";
 
   bool symbolicatorNeedsRelease = false;
   CSSymbolOwnerRef owner = {0};
 
   if (CSIsNull(symbolicator)) {
     symbolicatorNeedsRelease = GetSymbolicator(&symbolicator);
-    if (!CSIsNull(symbolicator)) {
+  }
+
+  if (!CSIsNull(symbolicator)) {
+    owner = CSSymbolicatorGetSymbolOwnerWithAddressAtTime(
+              symbolicator,
+              (unsigned long long) address,
+              kCSNow);
+    // Sometimes we need to do this a second time.  I've no idea why, but it
+    // seems to be more likely in 32bit mode.
+    if (CSIsNull(owner)) {
       owner = CSSymbolicatorGetSymbolOwnerWithAddressAtTime(
                 symbolicator,
                 (unsigned long long) address,
@@ -1577,17 +1655,9 @@ void PrintAddress(void *address, CSTypeRef symbolicator)
     }
   }
 
-  if (!CSIsNull(symbolicator)) {
-      owner = CSSymbolicatorGetSymbolOwnerWithAddressAtTime(
-                symbolicator,
-                (unsigned long long) address,
-                kCSNow);
-  }
+  ownerName = GetOwnerName(address, owner);
+  addressString = GetAddressString(address, owner);
 
-  if (!CSIsNull(owner)) {
-    ownerName = GetOwnerName(address, owner);
-    addressString = GetAddressString(address, owner);
-  }
   LogWithFormat(false, "    (%s) %s", ownerName, addressString);
 
   if (symbolicatorNeedsRelease) {

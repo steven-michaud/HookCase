@@ -65,7 +65,7 @@ for its possible clients.
 As `secinitd` is a system daemon, making it load a hook library takes
 a bit of work:
 
-1. Copy secinitd-hook.dylib to an appropriate location:
+1. Copy `secinitd-hook.dylib` to an appropriate location:
 
         sudo cp secinitd-hook.dylib /usr/libexec/
 
@@ -80,7 +80,7 @@ a bit of work:
 
         sudo cp com.apple.secinitd.plist com.apple.secinitd.plist.debug
 
-        sudo [emacs or vi] com.apple.secinitd.plist
+        sudo [emacs or vi] com.apple.secinitd.plist.debug
 
 4. In your editor, add the following section to the "debug" plist
    file's top level `dict` structure, then copy it over the original
@@ -111,8 +111,8 @@ sandbox via `sandbox_init_with_parameters()`).
 
 A lot of the logging output will go to the Console, including
 everything from `secinitd-hook.dylib`.  If you're testing on macOS
-10.12 (Sierra), run the Console before you run any `secinitd` client.
-Use "secinit" to filter the Console app's output.
+10.12 (Sierra) or above, run the Console before you run any `secinitd`
+client.  Use "secinit" to filter the Console app's output.
 
 For example:
 

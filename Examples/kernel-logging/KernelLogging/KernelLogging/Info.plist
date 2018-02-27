@@ -15,11 +15,11 @@
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.0</string>
+	<string>1.0</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>2.0</string>
+	<string>1</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2018 Steven Michaud. All rights reserved.</string>
 	<key>OSBundleLibraries</key>
@@ -30,12 +30,6 @@
 		<string>7.0</string>
 		<key>com.apple.kpi.libkern</key>
 		<string>8.0d0</string>
-		<key>com.apple.kpi.mach</key>
-		<string>8.0.0d0</string>
-		<key>com.apple.kpi.dsep</key>
-		<string>8.0.0b1</string>
-		<key>com.apple.kpi.unsupported</key>
-		<string>8.0.0b1</string>
 	</dict>
 </dict>
 </plist>
