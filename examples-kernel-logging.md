@@ -69,14 +69,14 @@ will cause the `start()` method to fail.
 
 ## Using HookCase to Diagnose the Bug
 
-[This example](Examples/KernelLogging/) contains a "hello world"
+[This example](Examples/kernel-logging/) contains a "hello world"
 kernel extension, KernelLogging, which can be used to test logging.
 It also contains two hook libraries -- one (`logger-hook.dylib`) for
 client logging apps like "Console", and the other
 (`diagnosticd-hook.dylib`) for the `diagnosticd` daemon.
 
 Build KernelLogging by running `xcodebuild` in
-[`Examples/KernelLogging/KernelLogging`](Examples/KernelLogging/KernelLogging/).
+[`Examples/kernel-logging/KernelLogging`](Examples/kernel-logging/KernelLogging/).
 Note that you can define `FAIL_START` or not, depending on whether you
 want its `start()` method to fail or succeed.  Once KernelLogging is
 built, change to the `build/Release` subdirectory and copy it to a
@@ -131,8 +131,8 @@ port at the same time.
 6. Unload and reload `diagnosticd`, to make it pick up
    `diagnosticd-hook.dylib`:
 
-        launchctl unload /System/Library/LaunchDaemons/com.apple.diagnosticd.plist
-        launchctl load /System/Library/LaunchDaemons/com.apple.diagnosticd.plist
+        sudo launchctl unload /System/Library/LaunchDaemons/com.apple.diagnosticd.plist
+        sudo launchctl load /System/Library/LaunchDaemons/com.apple.diagnosticd.plist
 
 7. Run either the Console app or the `log` app.  Without at least one
    of its clients running, `diagnosticd` receives no input.
