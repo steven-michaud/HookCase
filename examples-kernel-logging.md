@@ -63,17 +63,20 @@ But that would be cumbersome -- how would the kernel know when the
 kext should be unloaded?  It'd be better to allow components of the
 new logging subsystem to once again send logging messages that contain
 full strings, which wouldn't need to be decoded upon receipt by
-diagnosticd.  Maybe Apple could provide a special method just for this
-purpose, which kext developers could use for error conditions that
-will cause the `start()` method to fail.
+`diagnosticd`.  Maybe Apple could provide a special method just for
+this purpose, which kext developers could use for error conditions
+that will cause the `start()` method to fail.
 
 ## Using HookCase to Diagnose the Bug
 
 [This example](Examples/kernel-logging/) contains a "hello world"
-kernel extension, KernelLogging, which can be used to test logging.
-It also contains two hook libraries -- one (`logger-hook.dylib`) for
-client logging apps like "Console", and the other
-(`diagnosticd-hook.dylib`) for the `diagnosticd` daemon.
+kernel extension, [KernelLogging](Examples/kernel-logging/KernelLogging/),
+which can be used to test logging.  It also contains two hook
+libraries -- one
+([`logger-hook.dylib`](Examples/kernel-logging/logger-hook.mm))
+for client logging apps like "Console", and the other
+([`diagnosticd-hook.dylib`](Examples/kernel-logging/diagnosticd-hook.mm))
+for the `diagnosticd` daemon.
 
 Build KernelLogging by running `xcodebuild` in
 [`Examples/kernel-logging/KernelLogging`](Examples/kernel-logging/KernelLogging/).
@@ -100,7 +103,7 @@ Note that user-mode code and the kernel can't both access the serial
 port at the same time.
 
 1. Make sure no `diagnosticd` client app is running (the Console app
-   or the `log` app).
+   or the log app).
 
 2. Copy `diagnosticd-hook.dylib` to an appropriate location:
 
@@ -134,8 +137,8 @@ port at the same time.
         sudo launchctl unload /System/Library/LaunchDaemons/com.apple.diagnosticd.plist
         sudo launchctl load /System/Library/LaunchDaemons/com.apple.diagnosticd.plist
 
-7. Run either the Console app or the `log` app.  Without at least one
-   of its clients running, `diagnosticd` receives no input.
+7. Run either the Console app or the log app.  Without at least one of
+   its clients running, `diagnosticd` receives no input.
 
 You can now load and unload KernelLogging, to see how `diagnosticd`
 behaves.  All of `diagnosticd-hook.dylib`'s output will go to a serial
@@ -144,7 +147,7 @@ port, if you've installed one.  Otherwise there won't be any output.
         sudo kextutil /usr/local/sbin/KernelLogging.kext
         sudo kextunload -b org.smichaud.KernelLogging
 
-When you're done experimenting, quit Console and/or `log` and do the
+When you're done experimenting, quit Console and/or log and do the
 following in `/System/Library/LaunchDaemons` to unload
 `diagnosticd-hook.dylib`:
 
