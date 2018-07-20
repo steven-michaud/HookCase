@@ -4916,6 +4916,7 @@ typedef struct _symbol_table {
   user_addr_t stubs_table_addr;
   vm_offset_t slide;
   vm_offset_t module_size;
+  vm_offset_t pagezero_size;
   // If symbol_type == symbol_type_defined, symbol_index and symbol_count
   // refer to the symbol table itself.  But for symbol_type_undef, they
   // refer to the indirect symbol table.
@@ -5021,6 +5022,7 @@ bool copyin_symbol_table(module_info_t *module_info,
   bool found_stubs_table = false;
 
   vm_offset_t module_size = mh_size + cmds_size;
+  vm_offset_t pagezero_size = 0;
   uint32_t num_commands = mh_local.ncmds;
   const struct load_command *load_command =
     (struct load_command *) cmds_local;
@@ -5064,7 +5066,9 @@ bool copyin_symbol_table(module_info_t *module_info,
         if (!is_in_shared_cache && !fileoff && filesize) {
           slide = module_info->load_address - vmaddr;
         }
-        if (strcmp(segname, "__PAGEZERO")) {
+        if (!strcmp(segname, "__PAGEZERO")) {
+          pagezero_size = vmsize;
+        } else {
           vm_offset_t segment_end = vmaddr + slide + vmsize;
           vm_offset_t size_to_segment_end =
             segment_end - module_info->load_address;
@@ -5284,6 +5288,7 @@ bool copyin_symbol_table(module_info_t *module_info,
   symbol_table->stubs_table_addr = stubs_table_offset;
   symbol_table->slide = slide;
   symbol_table->module_size = module_size;
+  symbol_table->pagezero_size = pagezero_size;
   symbol_table->symbol_index = interesting_symbol_index;
   symbol_table->symbol_count = interesting_symbol_count;
   symbol_table->symbol_type = symbol_type;
@@ -7960,20 +7965,39 @@ void set_patch_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
     if (get_module_info(proc, patch_hooks[i].orig_module_name, 0,
                         &module_info))
     {
-      if (!cast_hookp->no_numerical_addrs &&
-          function_name_to_numerical_addr(patch_hooks[i].orig_function_name,
-                                          &numerical_addr))
+      if (copyin_symbol_table(&module_info, &symbol_table,
+                              symbol_type_defined))
       {
-        orig_addr = numerical_addr + module_info.load_address;
-        is_numerical_addr = true;
-      } else {
-        if (copyin_symbol_table(&module_info, &symbol_table,
-                                symbol_type_defined))
+        // In a main executable's Mach-O binary, before it's loaded into
+        // memory, the symbol-table addresses of all symbols are offsets from
+        // the beginning of the PAGEZERO segment (which is only present in the
+        // main executable).  So, for example, in a main executable's file on
+        // disk, the address of the _mh_execute_header symbol, which points to
+        // the Mach-O header, is always the length of the PAGEZERO segment.
+        // But once the main executable is loaded into memory, all its symbols
+        // become offsets from the beginning of the Mach-O header.  So in
+        // effect the addresses of all symbols are decremented by the size of
+        // the PAGEZERO segment, and the address of _mh_execute_header is
+        // reduced to 0 (relative to the beginning of the loaded image).  If
+        // we're dealing with a function name that translates to a numerical
+        // address, the user will have gotten the address from a Mach-O binary
+        // file (using 'nm' or a disassembler).  So if the address is in the
+        // main executable, we need to compensate, by subtracting from it the
+        // size of the PAGEZERO segment.
+        if (!cast_hookp->no_numerical_addrs &&
+            function_name_to_numerical_addr(patch_hooks[i].orig_function_name,
+                                            &numerical_addr))
         {
+          // symbol_table.pagezero_size will be 0 for a module that lacks a
+          // PAGEZERO segment.
+          numerical_addr -= symbol_table.pagezero_size;
+          orig_addr = numerical_addr + module_info.load_address;
+          is_numerical_addr = true;
+        } else {
           orig_addr =
             find_symbol(patch_hooks[i].orig_function_name, &symbol_table);
-          free_symbol_table(&symbol_table);
         }
+        free_symbol_table(&symbol_table);
       }
     } else {
       printf("HookCase(%s[%d]): set_patch_hooks(%s): Module \"%s\" not (yet) present/loaded in process\n",
@@ -7996,8 +8020,9 @@ void set_patch_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
     uint32_t prologue = 0;
     if (!proc_copyin(proc_map, orig_addr, &prologue, sizeof(prologue))) {
       if (is_numerical_addr) {
-        printf("HookCase(%s[%d]): set_patch_hooks(%s): The address \'0x%llx\' of function \"%s\" in \"%s\" is invalid\n",
-               procname, proc_pid(proc), cast_hookp->inserted_dylib_path, orig_addr, patch_hooks[i].orig_function_name, patch_hooks[i].orig_module_name);
+        printf("HookCase(%s[%d]): set_patch_hooks(%s): The address \'0x%llx\' of function \"%s\" in \"%s\" (load address \'0x%llx\') is invalid\n",
+               procname, proc_pid(proc), cast_hookp->inserted_dylib_path, orig_addr, patch_hooks[i].orig_function_name,
+               patch_hooks[i].orig_module_name, module_info.load_address);
         patch_hooks[i].hook_function = 0;
       }
       continue;
