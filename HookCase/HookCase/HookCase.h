@@ -155,10 +155,10 @@ typedef enum {
 #define HC_INT3 0x22UL
 #define HC_INT4 0x23UL
 
-//#define HC_INT1 0x21UL
-//#define HC_INT2 0x22UL
-//#define HC_INT3 0x23UL
-//#define HC_INT4 0x24UL
+/* #define HC_INT1 0x21UL
+#define HC_INT2 0x22UL
+#define HC_INT3 0x23UL
+#define HC_INT4 0x24UL */
 
 #ifndef __ASSEMBLER__
 
