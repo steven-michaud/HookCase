@@ -6412,17 +6412,17 @@ typedef struct _hook {
 // format
 #define PROLOGUE_BEGIN_32BIT 0xe58955
 
-// unsigned char[] = {0xcd, 0x20} when stored in little endian format
-#define INT_0x20_OPCODE_SHORT 0x20cd
+// unsigned char[] = {0xcd, HC_INT1} when stored in little endian format
+#define HC_INT1_OPCODE_SHORT ((HC_INT1 << 8) + 0xcd)
 
-// unsigned char[] = {0xcd, 0x21} when stored in little endian format
-#define INT_0x21_OPCODE_SHORT 0x21cd
+// unsigned char[] = {0xcd, HC_INT2} when stored in little endian format
+#define HC_INT2_OPCODE_SHORT ((HC_INT2 << 8) + 0xcd)
 
-// unsigned char[] = {0xcd, 0x22} when stored in little endian format
-#define INT_0x22_OPCODE_SHORT 0x22cd
+// unsigned char[] = {0xcd, HC_INT3} when stored in little endian format
+#define HC_INT3_OPCODE_SHORT ((HC_INT3 << 8) + 0xcd)
 
-// unsigned char[] = {0xcd, 0x23} when stored in little endian format
-#define INT_0x23_OPCODE_SHORT 0x23cd
+// unsigned char[] = {0xcd, HC_INT4} when stored in little endian format
+#define HC_INT4_OPCODE_SHORT ((HC_INT4 << 8) + 0xcd)
 
 // xor   %rax, %rax
 // ret
@@ -6442,13 +6442,13 @@ typedef struct _hook {
 
 //push    %rbp
 //mov     %rsp, %rbp
-//int     $(0x21)
+//int     $(HC_INT2)
 //pop     %rbp
 //ret
 
-// 55 48 89 E5 CD 21 5D C3
+// 55 48 89 E5 CD HC_INT2 5D C3
 
-#define INT_21_FUNC_64BIT_LONG 0xC35D21CDE5894855
+#define HC_INT2_FUNC_64BIT_LONG (0xC35D00CDE5894855 + (HC_INT2 << 40))
 
 //push   %ebp
 //mov    %esp, %ebp
@@ -6461,13 +6461,13 @@ typedef struct _hook {
 
 //push    %ebp
 //mov     %esp, %ebp
-//int     $(0x21)
+//int     $(HC_INT2)
 //pop     %ebp
 //ret
 
-// 55 89 E5 CD 21 5D C3
+// 55 89 E5 CD HC_INT2 5D C3
 
-#define INT_21_FUNC_32BIT_LONG 0x00C35D21CDE58955
+#define HC_INT2_FUNC_32BIT_LONG (0x00C35D00CDE58955 + (HC_INT2 << 32))
 
 // See call_orig.s for more information about how the machine code in
 // g_call_orig_func_64bit and g_call_orig_func_32bit is generated.
@@ -7051,7 +7051,7 @@ bool maybe_cast_hook(proc_t proc)
 #endif
   }
 
-  uint16_t new_code = INT_0x20_OPCODE_SHORT;
+  uint16_t new_code = HC_INT1_OPCODE_SHORT;
   bool rv1 = proc_copyout(proc_map, &new_code, initializeMainExecutable,
                           sizeof(new_code), true, false);
   bool rv2 = true;
@@ -7215,7 +7215,7 @@ void process_hook_cast(hook_t *hookp, x86_saved_state_t *intr_state)
   // triggered by our call to dlopen().  Our hook (on_dyld_runInitializers())
   // blocks calls to the original method.  Without this, C++ initializers
   // might call methods before we've had a chance to hook them.
-  uint16_t new_code = INT_0x23_OPCODE_SHORT;
+  uint16_t new_code = HC_INT4_OPCODE_SHORT;
   proc_copyout(proc_map, &new_code, hookp->dyld_runInitializers,
                sizeof(new_code), true, false);
 
@@ -8066,7 +8066,7 @@ void set_patch_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
       continue;
     }
 
-    uint16_t new_code = INT_0x20_OPCODE_SHORT;
+    uint16_t new_code = HC_INT1_OPCODE_SHORT;
     if (!proc_copyout(proc_map, &new_code, orig_addr,
                       sizeof(new_code), true, false))
     {
@@ -8515,9 +8515,9 @@ void process_hook_flying(hook_t *hookp, x86_saved_state_t *intr_state)
   if (func_buffer) {
     bzero(func_buffer, PAGE_SIZE);
     if (intr_state->flavor == x86_SAVED_STATE64) {
-      func_buffer[0] = INT_21_FUNC_64BIT_LONG;
+      func_buffer[0] = HC_INT2_FUNC_64BIT_LONG;
     } else {     // flavor == x86_SAVED_STATE32
-      func_buffer[0] = INT_21_FUNC_32BIT_LONG;
+      func_buffer[0] = HC_INT2_FUNC_32BIT_LONG;
     }
     if (proc_mapout(proc_map, func_buffer, &on_add_image, PAGE_SIZE, true)) {
       vm_protect(proc_map, on_add_image, PAGE_SIZE, false,
@@ -8845,7 +8845,7 @@ void reset_hook(x86_saved_state_t *intr_state)
       task_hold(task);
       task_wait(task, false);
     }
-    uint16_t new_code = INT_0x20_OPCODE_SHORT;
+    uint16_t new_code = HC_INT1_OPCODE_SHORT;
     if (proc_copyout(proc_map, &new_code, hookp->orig_addr,
                      sizeof(new_code), true, false))
     {
@@ -9344,7 +9344,7 @@ bool hook_thread_bootstrap_return()
 
   uint32_t new_begin = thread_bootstrap_return_begin;
   new_begin &= 0xffff0000;
-  new_begin |= INT_0x20_OPCODE_SHORT;
+  new_begin |= HC_INT1_OPCODE_SHORT;
 
   if (!set_kernel_physmap_protection((vm_map_offset_t) target,
                                      (vm_map_offset_t) target + sizeof(uint32_t),
@@ -9472,7 +9472,7 @@ bool hook_vm_page_validate_cs()
 
   uint32_t new_begin = vm_page_validate_cs_begin;
   new_begin &= 0xffff0000;
-  new_begin |= INT_0x21_OPCODE_SHORT;
+  new_begin |= HC_INT2_OPCODE_SHORT;
 
   if (!set_kernel_physmap_protection((vm_map_offset_t) target,
                                      (vm_map_offset_t) target + sizeof(uint32_t),
@@ -9588,7 +9588,7 @@ bool hook_mac_file_check_library_validation()
 
   uint32_t new_begin = mac_file_check_library_validation_begin;
   new_begin &= 0xffff0000;
-  new_begin |= INT_0x22_OPCODE_SHORT;
+  new_begin |= HC_INT3_OPCODE_SHORT;
 
   if (!set_kernel_physmap_protection((vm_map_offset_t) target,
                                      (vm_map_offset_t) target + sizeof(uint32_t),
@@ -9690,7 +9690,7 @@ bool hook_mac_file_check_mmap()
 
   uint32_t new_begin = mac_file_check_mmap_begin;
   new_begin &= 0xffff0000;
-  new_begin |= INT_0x23_OPCODE_SHORT;
+  new_begin |= HC_INT4_OPCODE_SHORT;
 
   if (!set_kernel_physmap_protection((vm_map_offset_t) target,
                                      (vm_map_offset_t) target + sizeof(uint32_t),
@@ -9771,22 +9771,22 @@ typedef struct {
            reserved32:32;    /* reserved/zero */
 } idt64_entry;
 
-idt64_entry old_0x20_idt_entry;
-char old_0x20_stub[16];
+idt64_entry old_hc_int1_idt_entry;
+char old_hc_int1_stub[16];
 
-idt64_entry old_0x21_idt_entry;
-char old_0x21_stub[16];
+idt64_entry old_hc_int2_idt_entry;
+char old_hc_int2_stub[16];
 
-idt64_entry old_0x22_idt_entry;
-char old_0x22_stub[16];
+idt64_entry old_hc_int3_idt_entry;
+char old_hc_int3_stub[16];
 
-idt64_entry old_0x23_idt_entry;
-char old_0x23_stub[16];
+idt64_entry old_hc_int4_idt_entry;
+char old_hc_int4_stub[16];
 
-bool s_installed_0x20_handler = false;
-bool s_installed_0x21_handler = false;
-bool s_installed_0x22_handler = false;
-bool s_installed_0x23_handler = false;
+bool s_installed_hc_int1_handler = false;
+bool s_installed_hc_int2_handler = false;
+bool s_installed_hc_int3_handler = false;
+bool s_installed_hc_int4_handler = false;
 
 // In the macOS 10.13.2 release Apple implemented KPTI (kernel page-table
 // isolation) as a workaround for Intel's Meltdown bug
@@ -10185,37 +10185,37 @@ bool install_intr_handler(int intr_num)
   char *old_stub;
   vm_offset_t raw_handler;
   switch(intr_num) {
-    case 0x20:
-      if (s_installed_0x20_handler) {
+    case HC_INT1:
+      if (s_installed_hc_int1_handler) {
         return true;
       }
-      old_idt_entry = &old_0x20_idt_entry;
-      old_stub = old_0x20_stub;
-      raw_handler = (vm_offset_t) intr_0x20_raw_handler;
+      old_idt_entry = &old_hc_int1_idt_entry;
+      old_stub = old_hc_int1_stub;
+      raw_handler = (vm_offset_t) hc_int1_raw_handler;
       break;
-    case 0x21:
-      if (s_installed_0x21_handler) {
+    case HC_INT2:
+      if (s_installed_hc_int2_handler) {
         return true;
       }
-      old_idt_entry = &old_0x21_idt_entry;
-      old_stub = old_0x21_stub;
-      raw_handler = (vm_offset_t) intr_0x21_raw_handler;
+      old_idt_entry = &old_hc_int2_idt_entry;
+      old_stub = old_hc_int2_stub;
+      raw_handler = (vm_offset_t) hc_int2_raw_handler;
       break;
-    case 0x22:
-      if (s_installed_0x22_handler) {
+    case HC_INT3:
+      if (s_installed_hc_int3_handler) {
         return true;
       }
-      old_idt_entry = &old_0x22_idt_entry;
-      old_stub = old_0x22_stub;
-      raw_handler = (vm_offset_t) intr_0x22_raw_handler;
+      old_idt_entry = &old_hc_int3_idt_entry;
+      old_stub = old_hc_int3_stub;
+      raw_handler = (vm_offset_t) hc_int3_raw_handler;
       break;
-    case 0x23:
-      if (s_installed_0x23_handler) {
+    case HC_INT4:
+      if (s_installed_hc_int4_handler) {
         return true;
       }
-      old_idt_entry = &old_0x23_idt_entry;
-      old_stub = old_0x23_stub;
-      raw_handler = (vm_offset_t) intr_0x23_raw_handler;
+      old_idt_entry = &old_hc_int4_idt_entry;
+      old_stub = old_hc_int4_stub;
+      raw_handler = (vm_offset_t) hc_int4_raw_handler;
       break;
     default:
       return false;
@@ -10261,17 +10261,17 @@ bool install_intr_handler(int intr_num)
   }
 
   switch(intr_num) {
-    case 0x20:
-      s_installed_0x20_handler = true;
+    case HC_INT1:
+      s_installed_hc_int1_handler = true;
       break;
-    case 0x21:
-      s_installed_0x21_handler = true;
+    case HC_INT2:
+      s_installed_hc_int2_handler = true;
       break;
-    case 0x22:
-      s_installed_0x22_handler = true;
+    case HC_INT3:
+      s_installed_hc_int3_handler = true;
       break;
-    case 0x23:
-      s_installed_0x23_handler = true;
+    case HC_INT4:
+      s_installed_hc_int4_handler = true;
       break;
     default:
       break;
@@ -10285,33 +10285,33 @@ void remove_intr_handler(int intr_num)
   idt64_entry *old_idt_entry;
   char *old_stub;
   switch(intr_num) {
-    case 0x20:
-      if (!s_installed_0x20_handler) {
+    case HC_INT1:
+      if (!s_installed_hc_int1_handler) {
         return;
       }
-      old_idt_entry = &old_0x20_idt_entry;
-      old_stub = old_0x20_stub;
+      old_idt_entry = &old_hc_int1_idt_entry;
+      old_stub = old_hc_int1_stub;
       break;
-    case 0x21:
-      if (!s_installed_0x21_handler) {
+    case HC_INT2:
+      if (!s_installed_hc_int2_handler) {
         return;
       }
-      old_idt_entry = &old_0x21_idt_entry;
-      old_stub = old_0x21_stub;
+      old_idt_entry = &old_hc_int2_idt_entry;
+      old_stub = old_hc_int2_stub;
       break;
-    case 0x22:
-      if (!s_installed_0x22_handler) {
+    case HC_INT3:
+      if (!s_installed_hc_int3_handler) {
         return;
       }
-      old_idt_entry = &old_0x22_idt_entry;
-      old_stub = old_0x22_stub;
+      old_idt_entry = &old_hc_int3_idt_entry;
+      old_stub = old_hc_int3_stub;
       break;
-    case 0x23:
-      if (!s_installed_0x23_handler) {
+    case HC_INT4:
+      if (!s_installed_hc_int4_handler) {
         return;
       }
-      old_idt_entry = &old_0x23_idt_entry;
-      old_stub = old_0x23_stub;
+      old_idt_entry = &old_hc_int4_idt_entry;
+      old_stub = old_hc_int4_stub;
       break;
     default:
       return;
@@ -10323,17 +10323,17 @@ void remove_intr_handler(int intr_num)
   }
 
   switch(intr_num) {
-    case 0x20:
-      s_installed_0x20_handler = false;
+    case HC_INT1:
+      s_installed_hc_int1_handler = false;
       break;
-    case 0x21:
-      s_installed_0x21_handler = false;
+    case HC_INT2:
+      s_installed_hc_int2_handler = false;
       break;
-    case 0x22:
-      s_installed_0x22_handler = false;
+    case HC_INT3:
+      s_installed_hc_int3_handler = false;
       break;
-    case 0x23:
-      s_installed_0x23_handler = false;
+    case HC_INT4:
+      s_installed_hc_int4_handler = false;
       break;
     default:
       break;
@@ -10359,16 +10359,16 @@ bool install_intr_handlers()
     return false;
   }
 
-  if (!install_intr_handler(0x20)) {
+  if (!install_intr_handler(HC_INT1)) {
     return false;
   }
-  if (!install_intr_handler(0x21)) {
+  if (!install_intr_handler(HC_INT2)) {
     return false;
   }
-  if (!install_intr_handler(0x22)) {
+  if (!install_intr_handler(HC_INT3)) {
     return false;
   }
-  if (!install_intr_handler(0x23)) {
+  if (!install_intr_handler(HC_INT4)) {
     return false;
   }
 
@@ -10397,49 +10397,49 @@ void remove_intr_handlers()
   unhook_mac_file_check_mmap();
   unhook_mac_file_check_library_validation();
   unhook_vm_page_validate_cs();
-  remove_intr_handler(0x20);
-  remove_intr_handler(0x21);
-  remove_intr_handler(0x22);
-  remove_intr_handler(0x23);
+  remove_intr_handler(HC_INT1);
+  remove_intr_handler(HC_INT2);
+  remove_intr_handler(HC_INT3);
+  remove_intr_handler(HC_INT4);
   remove_stub_dispatcher();
 }
 
-extern "C" void handle_user_0x20_intr(x86_saved_state_t *intr_state)
+extern "C" void handle_user_hc_int1(x86_saved_state_t *intr_state)
 {
   check_hook_state(intr_state);
 }
 
-extern "C" void handle_user_0x21_intr(x86_saved_state_t *intr_state)
+extern "C" void handle_user_hc_int2(x86_saved_state_t *intr_state)
 {
   on_add_image(intr_state);
 }
 
-extern "C" void handle_user_0x22_intr(x86_saved_state_t *intr_state)
+extern "C" void handle_user_hc_int3(x86_saved_state_t *intr_state)
 {
   reset_hook(intr_state);
 }
 
-extern "C" void handle_user_0x23_intr(x86_saved_state_t *intr_state)
+extern "C" void handle_user_hc_int4(x86_saved_state_t *intr_state)
 {
   on_dyld_runInitializers(intr_state);
 }
 
-extern "C" void handle_kernel_0x20_intr(x86_saved_state_t *intr_state)
+extern "C" void handle_kernel_hc_int1(x86_saved_state_t *intr_state)
 {
   thread_bootstrap_return_hook(intr_state);
 }
 
-extern "C" void handle_kernel_0x21_intr(x86_saved_state_t *intr_state)
+extern "C" void handle_kernel_hc_int2(x86_saved_state_t *intr_state)
 {
   vm_page_validate_cs_hook(intr_state);
 }
 
-extern "C" void handle_kernel_0x22_intr(x86_saved_state_t *intr_state)
+extern "C" void handle_kernel_hc_int3(x86_saved_state_t *intr_state)
 {
   mac_file_check_library_validation_hook(intr_state);
 }
 
-extern "C" void handle_kernel_0x23_intr(x86_saved_state_t *intr_state)
+extern "C" void handle_kernel_hc_int4(x86_saved_state_t *intr_state)
 {
   mac_file_check_mmap_hook(intr_state);
 }

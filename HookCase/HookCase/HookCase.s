@@ -22,12 +22,12 @@
  */
 
 /* This file mostly contains support for HookCase.kext's use of software
- * interrupts, including the raw handlers for interrupts 0x20, 0x21 and 0x22.
- * This is modeled to some extent on code in the xnu kernel's
- * osfmk/x86_64/idt64.s, but is much simpler (since that code also supports
- * hardware interrupts and syscalls).  In both user mode and kernel mode, we
- * treat our software interrupts more like syscalls than like interrupts.  So,
- * for example, we don't change %gs:CPU_PREEMPTION_LEVEL or
+ * interrupts, including the raw handlers for interrupts HC_INT1, HC_INT2,
+ * HC_INT3 and HC_INT4. This is modeled to some extent on code in the xnu
+ * kernel's osfmk/x86_64/idt64.s, but is much simpler (since that code also
+ * supports hardware interrupts and syscalls).  In both user mode and kernel
+ * mode, we treat our software interrupts more like syscalls than like
+ * interrupts.  So, for example, we don't change %gs:CPU_PREEMPTION_LEVEL or
  * %gs:CPU_INTERRUPT_LEVEL.
  *
  * There are also miscellaneous methods, callable from C/C++ code, that needed
@@ -532,21 +532,21 @@ Entry(teardown)
  */
 Entry(user_trampoline)
    mov     R64_TRAPNO(%r15), %cx
-   cmpw    $(0x20), %cx
+   cmpw    $(HC_INT1), %cx
    jne     1f
-   lea     EXT(handle_user_0x20_intr)(%rip), %rax
+   lea     EXT(handle_user_hc_int1)(%rip), %rax
    jmp     4f
-1: cmpw    $(0x21), %cx
+1: cmpw    $(HC_INT2), %cx
    jne     2f
-   lea     EXT(handle_user_0x21_intr)(%rip), %rax
+   lea     EXT(handle_user_hc_int2)(%rip), %rax
    jmp     4f
-2: cmpw    $(0x22), %cx
+2: cmpw    $(HC_INT3), %cx
    jne     3f
-   lea     EXT(handle_user_0x22_intr)(%rip), %rax
+   lea     EXT(handle_user_hc_int3)(%rip), %rax
    jmp     4f
-3: cmpw    $(0x23), %cx
+3: cmpw    $(HC_INT4), %cx
    jne     5f
-   lea     EXT(handle_user_0x23_intr)(%rip), %rax
+   lea     EXT(handle_user_hc_int4)(%rip), %rax
 
 4: mov     %r15, %rdi
 
@@ -566,21 +566,21 @@ Entry(user_trampoline)
  */
 Entry(kernel_trampoline)
    mov     R64_TRAPNO(%r15), %cx
-   cmpw    $(0x20), %cx
+   cmpw    $(HC_INT1), %cx
    jne     1f
-   lea     EXT(handle_kernel_0x20_intr)(%rip), %rax
+   lea     EXT(handle_kernel_hc_int1)(%rip), %rax
    jmp     4f
-1: cmpw    $(0x21), %cx
+1: cmpw    $(HC_INT2), %cx
    jne     2f
-   lea     EXT(handle_kernel_0x21_intr)(%rip), %rax
+   lea     EXT(handle_kernel_hc_int2)(%rip), %rax
    jmp     4f
-2: cmpw    $(0x22), %cx
+2: cmpw    $(HC_INT3), %cx
    jne     3f
-   lea     EXT(handle_kernel_0x22_intr)(%rip), %rax
+   lea     EXT(handle_kernel_hc_int3)(%rip), %rax
    jmp     4f
-3: cmpw    $(0x23), %cx
+3: cmpw    $(HC_INT4), %cx
    jne     5f
-   lea     EXT(handle_kernel_0x23_intr)(%rip), %rax
+   lea     EXT(handle_kernel_hc_int4)(%rip), %rax
 
 4: mov     %r15, %rdi
 
@@ -632,17 +632,17 @@ Entry(kernel_teardown)
 
    retq
 
-Entry(intr_0x20_raw_handler)
-   SETUP(0x20)
+Entry(hc_int1_raw_handler)
+   SETUP(HC_INT1)
 
-Entry(intr_0x21_raw_handler)
-   SETUP(0x21)
+Entry(hc_int2_raw_handler)
+   SETUP(HC_INT2)
 
-Entry(intr_0x22_raw_handler)
-   SETUP(0x22)
+Entry(hc_int3_raw_handler)
+   SETUP(HC_INT3)
 
-Entry(intr_0x23_raw_handler)
-   SETUP(0x23)
+Entry(hc_int4_raw_handler)
+   SETUP(HC_INT4)
 
 /* In developer and debug kernels, the OSCompareAndSwap...() all enforce a
  * requirement that 'address' be 4-byte aligned.  But this is actually only
@@ -748,24 +748,28 @@ Entry(OSCompareAndSwap128)
    pop     %rbp
    retq
 
+/* If KPTI is enabled, 'stub_handler' becomes the target of the "stubs" we
+ * install in the HIB segment (overwriting Apple's original "stubs" for those
+ * interrupts). See install_intr_handler() in HookCase.cpp.
+ */
 Entry(stub_handler)
    pop     %rax
-   cmpq    $(0x20), %rax
+   cmpq    $(HC_INT1), %rax
    jne     1f
    pop     %rax
-   jmp     EXT(intr_0x20_raw_handler)
-1: cmpq    $(0x21), %rax
+   jmp     EXT(hc_int1_raw_handler)
+1: cmpq    $(HC_INT2), %rax
    jne     2f
    pop     %rax
-   jmp     EXT(intr_0x21_raw_handler)
-2: cmpq    $(0x22), %rax
+   jmp     EXT(hc_int2_raw_handler)
+2: cmpq    $(HC_INT3), %rax
    jne     3f
    pop     %rax
-   jmp     EXT(intr_0x22_raw_handler)
-3: cmpq    $(0x23), %rax
+   jmp     EXT(hc_int3_raw_handler)
+3: cmpq    $(HC_INT4), %rax
    jne     4f
    pop     %rax
-   jmp     EXT(intr_0x23_raw_handler)
+   jmp     EXT(hc_int4_raw_handler)
 4: pop     %rax
    iretq
 

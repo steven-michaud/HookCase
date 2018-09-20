@@ -149,6 +149,17 @@ typedef enum {
 #define MSR_IA32_GS_BASE 0xC0000101 /* Current GS base -- kernel or user */
 #define MSR_IA32_KERNEL_GS_BASE 0xC0000102 /* "Stored" GS base */
 
+/* Define the interrupts that HookCase will use internally. */
+#define HC_INT1 0x20UL
+#define HC_INT2 0x21UL
+#define HC_INT3 0x22UL
+#define HC_INT4 0x23UL
+
+//#define HC_INT1 0x21UL
+//#define HC_INT2 0x22UL
+//#define HC_INT3 0x23UL
+//#define HC_INT4 0x24UL
+
 #ifndef __ASSEMBLER__
 
 /* From the xnu kernel's osfmk/i386/thread_status.h (begin) */
@@ -324,10 +335,10 @@ static inline int get_cpu_number(void)
 
 /* Derived from the xnu kernel's osfmk/i386/cpu_data.h (end) */
 
-extern "C" void intr_0x20_raw_handler(void);
-extern "C" void intr_0x21_raw_handler(void);
-extern "C" void intr_0x22_raw_handler(void);
-extern "C" void intr_0x23_raw_handler(void);
+extern "C" void hc_int1_raw_handler(void);
+extern "C" void hc_int2_raw_handler(void);
+extern "C" void hc_int3_raw_handler(void);
+extern "C" void hc_int4_raw_handler(void);
 
 extern "C" void stub_handler(void);
 
