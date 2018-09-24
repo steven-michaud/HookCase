@@ -1,8 +1,8 @@
 # What's New in Version 2.1
 
-* HookCase now works properly with VMware Fusion running as a
-host. This required changing the range of software interrupts used
-internally by HookCase (from `0x20-0x23` to `0x30-0x33`). See
+HookCase now works properly with VMware Fusion running as a host. This
+required changing the range of software interrupts used internally by
+HookCase (from `0x20-0x23` to `0x30-0x33`). See
 [Issue #5](https://github.com/steven-michaud/HookCase/issues/5) for
 more information.
 
