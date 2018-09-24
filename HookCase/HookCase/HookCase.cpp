@@ -38,9 +38,9 @@
 // hook any method in any module (even non-exported ones, and even those that
 // don't have an entry in their own module's symbol table).  This we call a
 // "patch hook", since it requires that we "patch" the beginning of the
-// original method with an assembly language "int 0x20" instruction.  This is
+// original method with an assembly language "int 0x30" instruction.  This is
 // analogous to what a debugger does when it sets a breakpoint (though it uses
-// "int 3" instead of "int 0x20").
+// "int 3" instead of "int 0x30").
 //
 // Patch hooks can sometimes be substantially less performant than interpose
 // hooks, because sometimes we need to "unset" the breakpoint on every call to
@@ -71,8 +71,8 @@
 // osfmk/x86_64/idt_table.h.  The unused interrupts are marked there as
 // "INTERRUPT(0xNN)".  But note that the ranges 0xD0-0xFF and 0x50-0x5F are
 // reserved for APIC interrupts (see the xnu kernel's osfmk/i386/lapic.h).
-// So we're reasonably safe reserving the range 0x20-0x27 for our own use,
-// though we currently only use 0x20-0x23.  And aside from plenty of them
+// So we're reasonably safe reserving the range 0x30-0x37 for our own use,
+// though we currently only use 0x30-0x33.  And aside from plenty of them
 // being available, there are other advantages to using interrupts as
 // breakpoints:  They're short (they take up just two bytes of machine code),
 // but provide more information than other instructions of equal length (like
@@ -6160,7 +6160,7 @@ bool ensure_user_region_wired(vm_map_t map, vm_map_offset_t start,
 // A user hook is one that we wish to "set" in a given process.
 //
 // Patch hooks are user hooks that work by patching the original method with
-// an "int 0x20" instruction as a breakpoint.  One hook_t structure is created
+// an "int 0x30" instruction as a breakpoint.  One hook_t structure is created
 // (and added to the linked list) for every patch hook that was set
 // successfully.  It lives as long as the process to which it corresponds.
 //
@@ -6220,15 +6220,15 @@ bool ensure_user_region_wired(vm_map_t map, vm_map_offset_t start,
 //
 // hook_state_set
 //
-// The "int 0x20" breakpoint is set.  process_hook_set() is called every time
+// The "int 0x30" breakpoint is set.  process_hook_set() is called every time
 // this breakpoint is hit.  If the original method doesn't have a standard
 // prologue, we'll need to unset it in process_hook_set().
 //
 // hook_state_unset
 //
-// The "int 0x20" breakpoint is unset.  The hook will need to call
+// The "int 0x30" breakpoint is unset.  The hook will need to call
 // reset_hook() in the hook library to reset it.  (reset_hook() in the hook
-// library invokes "int 0x22" and triggers a call to reset_hook() here).
+// library invokes "int 0x32" and triggers a call to reset_hook() here).
 
 // In order to set hooks in a process, we need to find a method that runs at
 // an appropriate time as the process is being initialized, and hook that
@@ -6256,7 +6256,7 @@ bool ensure_user_region_wired(vm_map_t map, vm_map_offset_t start,
 // subsystem works.
 //
 // maybe_cast_hook() is called just before the new process's execution begins
-// at _dyld_start.  There, if appropriate, we write an "int 0x20" breakpoint
+// at _dyld_start.  There, if appropriate, we write an "int 0x30" breakpoint
 // to the beginning of dyld::initializeMainExecutable(), and wait for the
 // breakpoint to be hit.  When dealing with a 64-bit process on macOS 10.13,
 // we also patch dyld::launchWithClosure() to always "return false".
@@ -6278,11 +6278,11 @@ bool ensure_user_region_wired(vm_map_t map, vm_map_offset_t start,
 // Later, in process_hook_landed(), we may set up another call, to
 // _dyld_register_func_for_add_image().  This time we need user mode code for
 // this method's 'func' argument.  We allocate a page of kernel memory and
-// copy to it the appropriate machine code (which contains an "int 0x21"
+// copy to it the appropriate machine code (which contains an "int 0x31"
 // instruction).  Then we remap that page into the user process and set the
 // 'func' argument accordingly.  We also set RIP/EIP to
 // _dyld_register_func_for_add_image() and the "return address" to
-// dyld::initializeMainExecutable().  Our int 0x21 handler calls
+// dyld::initializeMainExecutable().  Our int 0x31 handler calls
 // on_add_image().
 //
 // When we're all done, we return the thread state to what it was before the
@@ -8508,7 +8508,7 @@ void process_hook_flying(hook_t *hookp, x86_saved_state_t *intr_state)
 
   // Allocate a block to hold the 'func' we will pass to
   // _dyld_register_func_for_add_image().  Copy to it the appropriate machine
-  // code (which contains an "int 0x21" instruction).  Then remap that block
+  // code (which contains an "int 0x31" instruction).  Then remap that block
   // into the current user process.
   vm_map_offset_t on_add_image = 0;
   uint64_t *func_buffer = (uint64_t *) IOMallocPageable(PAGE_SIZE, PAGE_SIZE);
@@ -9297,7 +9297,7 @@ void thread_bootstrap_return_hook(x86_saved_state_t *intr_state)
 #endif
 }
 
-// Set an "int 0x20" breakpoint at the beginning of thread_bootstrap_return(),
+// Set an "int 0x30" breakpoint at the beginning of thread_bootstrap_return(),
 // which will trigger calls to thread_bootstrap_return_hook().  We don't need
 // to call the original method from our hook.
 bool hook_thread_bootstrap_return()
@@ -9447,7 +9447,7 @@ void vm_page_validate_cs_hook(x86_saved_state_t *intr_state)
   intr_state->ss_64.isf.rip = return_address;
 }
 
-// Set an "int 0x21" breakpoint at the beginning of vm_page_validate_cs(),
+// Set an "int 0x31" breakpoint at the beginning of vm_page_validate_cs(),
 // which will trigger calls to vm_page_validate_cs_hook().  Because this
 // method has a standard C/C++ prologue, we can use a CALLER to call the
 // original method from the hook.  See CALLER in HookCase.s.

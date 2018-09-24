@@ -26,12 +26,12 @@ not intended for use by external modules.
 
 Patch hooks are so-called because we set them up by "patching" the
 beginning of an original method with a software interrupt instruction
-(`int 0x20`).  HookCase's kernel extension handles the interrupt to
+(`int 0x30`).  HookCase's kernel extension handles the interrupt to
 implement the hook.  This is analogous to what a debugger does when it
-sets a breakpoint (though it uses `int 3` instead of `int 0x20`).
+sets a breakpoint (though it uses `int 3` instead of `int 0x30`).
 Software interrupts are mostly not used on BSD-style operating systems
 like macOS and OS X, so we have plenty to choose among.  For now we're
-using those in the range `0x20-0x23`.
+using those in the range `0x30-0x33`.
 
 Whatever their disadvantages, interpose hooks are very performant.
 They're implemented by changing a pointer, so they impose no

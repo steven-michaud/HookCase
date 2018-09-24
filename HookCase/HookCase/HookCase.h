@@ -149,16 +149,18 @@ typedef enum {
 #define MSR_IA32_GS_BASE 0xC0000101 /* Current GS base -- kernel or user */
 #define MSR_IA32_KERNEL_GS_BASE 0xC0000102 /* "Stored" GS base */
 
-/* Define the interrupts that HookCase will use internally. */
-#define HC_INT1 0x20UL
-#define HC_INT2 0x21UL
-#define HC_INT3 0x22UL
-#define HC_INT4 0x23UL
+/*
+ * Prior to version 2.1, HookCase used the interrupts from 0x20 through 0x23.
+ * But this caused trouble with VMware Fusion running as host, so now we use
+ * 0x30 through 0x33. The problem with VMware Fusion is reported at bug #5
+ * (https://github.com/steven-michaud/HookCase/issues/5).
+ */
 
-/* #define HC_INT1 0x21UL
-#define HC_INT2 0x22UL
-#define HC_INT3 0x23UL
-#define HC_INT4 0x24UL */
+/* Define the interrupts that HookCase will use internally. */
+#define HC_INT1 0x30UL
+#define HC_INT2 0x31UL
+#define HC_INT3 0x32UL
+#define HC_INT4 0x33UL
 
 #ifndef __ASSEMBLER__
 

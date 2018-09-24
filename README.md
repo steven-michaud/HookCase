@@ -21,7 +21,7 @@ Steven Michaud, 2/2018
 
 ## Table of Contents
 
-* [What's New in Version 2.0](0-whats-new.md)
+* [What's New](0-whats-new.md)
 
 * [More About HookCase](1-more-about.md)
 

@@ -748,9 +748,9 @@ Entry(OSCompareAndSwap128)
    pop     %rbp
    retq
 
-/* If KPTI is enabled, 'stub_handler' becomes the target of the "stubs" we
- * install in the HIB segment (overwriting Apple's original "stubs" for those
- * interrupts). See install_intr_handler() in HookCase.cpp.
+/* If KPTI is enabled, 'stub_handler' becomes the target of the "stub
+ * dispatcher" we install in the HIB segment. See install_stub_dispatcher()
+ * in HookCase.cpp.
  */
 Entry(stub_handler)
    pop     %rax

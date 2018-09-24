@@ -730,10 +730,11 @@ const char *GetCallerOwnerName()
 
 // Reset a patch hook after it's been unset (as it was called).  Not always
 // required -- most patch hooks don't get unset when called.  But using it
-// when not required does no harm.
+// when not required does no harm. Note that, as of HookCase version 2.1, we
+// changed which interrupt is used here -- from 0x22 to 0x32.
 void reset_hook(void *hook)
 {
-  __asm__ ("int %0" :: "N" (0x22));
+  __asm__ ("int %0" :: "N" (0x32));
 }
 
 class loadHandler
