@@ -105,6 +105,7 @@ bool CanUseCF()
 #define MAC_OS_X_VERSION_10_11_HEX 0x00000AB0
 #define MAC_OS_X_VERSION_10_12_HEX 0x00000AC0
 #define MAC_OS_X_VERSION_10_13_HEX 0x00000AD0
+#define MAC_OS_X_VERSION_10_14_HEX 0x00000AE0
 
 char gOSVersionString[PATH_MAX] = {0};
 
@@ -178,6 +179,11 @@ bool macOS_Sierra()
 bool macOS_HighSierra()
 {
   return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_13_HEX);
+}
+
+bool macOS_Mojave()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_14_HEX);
 }
 
 class nsAutoreleasePool {
@@ -774,8 +780,46 @@ public:
 #define FASTI386
 #endif
 
+// As reported by CGSEventRecordLength(), this structure is 0xF8 (248) bytes
+// long on Mavericks through Mojave in 64-bit mode, and 0xD0 (208) bytes
+// long in 32-bit mode.  A full definition (though without member names) is
+// present in the class-dump output for the AppKit framework.
+typedef struct _CGSEventRecord {
+  unsigned short unknown1;
+  unsigned short unknown2;
+  unsigned int length;
+  unsigned int type;
+  struct CGPoint location;
+  struct CGPoint windowLocation;
+  unsigned long long timestamp;
+  unsigned int flags;
+#ifdef __i386__
+  uint32_t pad[42];
+#else
+  uint32_t pad[47];
+#endif
+} CGSEventRecord;
+
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101400
+// CGEventGetEventRecord() copies sizeof(CGSEventRecord) bytes from a CGEvent
+// structure pointer at offset 0x18 in 64-bit mode and 0xC in 32-bit mode.
+typedef struct __CGEvent {
+  uintptr_t pad[3];
+  CGSEventRecord *eventRecord;
+} CGEvent, *CGEventRef;
+#else
+// CGEventGetEventRecord() copies sizeof(CGSEventRecord) bytes from a CGEvent
+// structure starting at offset 0x18 in 64-bit mode and 0xC in 32-bit mode.
+typedef struct __CGEvent {
+  uintptr_t pad[3];
+  CGSEventRecord eventRecord;
+} CGEvent, *CGEventRef;
+#endif
+
 CFStringRef (*CopyEventDescription)(EventRef event, Boolean verbose) = NULL;
 CFStringRef (*AEDescribeDesc)(CFAllocatorRef alloc, const AEDesc *desc, Boolean verbose) = NULL;
+CGEventRef (*CGEventCreateWithEventRecord)(CGSEventRecord *eventRecord,
+                                           uint32_t eventRecordLength) = NULL;
 
 loadHandler::loadHandler()
 {
@@ -791,6 +835,15 @@ loadHandler::loadHandler()
   AEDescribeDesc = (CFStringRef (*)(CFAllocatorRef, const AEDesc *, Boolean))
     module_dlsym("/System/Library/Frameworks/CoreServices.framework/Frameworks/AE.framework/AE",
                  "_AEDescribeDesc");
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 101200
+  CGEventCreateWithEventRecord = (CGEventRef (*)(CGSEventRecord *, uint32_t))
+    module_dlsym("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics",
+                 "_CGEventCreateWithEventRecord");
+#else
+  CGEventCreateWithEventRecord = (CGEventRef (*)(CGSEventRecord *, uint32_t))
+    module_dlsym("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",
+                 "_SLEventCreateWithEventRecord");
+#endif
 }
 
 loadHandler::~loadHandler()
@@ -908,12 +961,32 @@ static int Hooked_interpose_example(char *arg)
 // messaging system (as described under "AE Mach API" in the AE framework's
 // AEMach.h).  Low-level events are everything else -- things like keyboard
 // and mouse events.  Applications pull them from WindowServer (a system
-// daemon from the CoreGraphics framework).
+// daemon from the CoreGraphics framework).  There are also "synthetic"
+// events (either high-level or low-level), created and posted by the app
+// itself (or one of its dylibs), and not delivered from an external source.
 
 // Logging stack traces on a secondary thread generally only works properly
 // if we don't also try to log stack traces on other threads (like the main
 // thread).
 //#define LOG_NSEVENTTHREAD_STACKS 1
+
+enum {
+  kEventClassCGS = 'cgs '
+};
+
+static char *GetFourCharCode(OSType type)
+{
+  char *retval = (char *) calloc(5, 1);
+  if (!type) {
+    strcpy(retval, "none");
+    return retval;
+  }
+  retval[0] = ((type & 0xff000000) >> 24);
+  retval[1] = ((type & 0x00ff0000) >> 16);
+  retval[2] = ((type & 0x0000ff00) >> 8);
+  retval[3] = (type & 0x000000ff);
+  return retval;
+}
 
 typedef uint32_t CGSConnectionID;
 typedef uint32_t CGSError;
@@ -922,71 +995,72 @@ typedef uint32_t CGSError;
 
 class AEEventImpl;
 
-// As reported by CGSEventRecordLength(), this structure is 0xF8 (248) bytes
-// long on Mavericks through HighSierra in 64-bit mode, and 0xD0 (208) bytes
-// long in 32-bit mode.  A full definition (though without member names) is
-// present in the class-dump output for the AppKit framework.
-typedef struct _CGSEventRecord {
-  unsigned short unknown1;
-  unsigned short unknown2;
-  unsigned int length;
-  unsigned int type;
-  struct CGPoint location;
-  struct CGPoint windowLocation;
-  unsigned long long timestamp;
-  unsigned int flags;
-#ifdef __i386__
-  uint32_t pad[42];
-#else
-  uint32_t pad[47];
-#endif
-} CGSEventRecord;
-
-// CGEventGetEventRecord() copies sizeof(CGSEventRecord) bytes from a CGEvent
-// structure starting at offset 0x18 in 64-bit mode and 0xC in 32-bit mode.
-typedef struct __CGEvent {
-  uintptr_t pad[3];
-  CGSEventRecord eventRecord;
-} CGEvent, *CGEventRef;
-
 #if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101300
 uint32_t CGSEventRecordLength()
 {
   return sizeof(CGSEventRecord);
 }
-CGSEventRecord *CGEventRecordPointer(CGEventRef event)
-{
-  return &(event->eventRecord);
-}
 #else
 extern "C" uint32_t CGSEventRecordLength();
-extern "C" CGSEventRecord *CGEventRecordPointer(CGEventRef event);
 #endif
 
 extern "C" CGEventRef CGEventCreate(CGEventSourceRef source);
-extern "C" OSStatus CreateEventWithCGEvent(CFAllocatorRef unused,
+extern "C" OSStatus CreateEventWithCGEvent(CFAllocatorRef inAllocator,
                                            CGEventRef inCGEvent,
                                            EventAttributes inAttributes,
                                            EventRef *outEvent);
+
+OSStatus (*CreateEventWithCGEvent_caller)(CFAllocatorRef inAllocator,
+                                          CGEventRef inEvent,
+                                          EventAttributes inAttributes,
+                                          EventRef *outEvent) = NULL;
+
+// CreateEventWithCGEvent() is nearly always called before a synthetic event
+// is posted.  So this hook can be useful for finding unexpected ways for
+// this to happen.
+OSStatus Hooked_CreateEventWithCGEvent(CFAllocatorRef inAllocator,
+                                       CGEventRef inEvent,
+                                       EventAttributes inAttributes,
+                                       EventRef *outEvent)
+{
+  OSStatus retval = CreateEventWithCGEvent_caller(inAllocator, inEvent,
+                                                  inAttributes, outEvent);
+
+#if (0)
+  if (retval == noErr) {
+    OSType evClass = GetEventClass(*outEvent);
+    UInt32 kind = GetEventKind(*outEvent);
+    char *evClassString = GetFourCharCode(evClass);
+    CFStringRef description = CopyEventDescription(*outEvent, true);
+
+    LogWithFormat(true, "HookEvents: CreateEventWithCGEvent(): outEvent %@ (class %s, kind %i)",
+                  description, evClassString, kind);
+    PrintStackTrace();
+
+    if (description) {
+      CFRelease(description);
+    }
+    free(evClassString);
+  }
+#endif
+
+  return retval;
+}
 
 EventRef EventFromCGSEventRecord(CGSEventRecord *eventRecord)
 {
   if (!eventRecord) {
     return NULL;
   }
-  CGEventRef cgEvent = CGEventCreate(NULL);
+  CGEventRef cgEvent =
+    CGEventCreateWithEventRecord(eventRecord, CGSEventRecordLength());
   if (!cgEvent) {
     return NULL;
   }
-  CGSEventRecord *cgEventRecord = CGEventRecordPointer(cgEvent);
-  if (!cgEventRecord) {
-    CFRelease(cgEvent);
-    return NULL;
-  }
-  memcpy(cgEventRecord, eventRecord, CGSEventRecordLength());
   EventRef retval = NULL;
-  OSStatus rv = CreateEventWithCGEvent(NULL, cgEvent, kEventAttributeNone,
-                                       &retval);
+  OSStatus rv =
+    CreateEventWithCGEvent_caller(NULL, cgEvent, kEventAttributeNone,
+                                  &retval);
   if (rv != noErr) {
     retval = NULL;
   }
@@ -1014,19 +1088,26 @@ static FASTI386 CGSError Hooked_CGSGetNextEventRecordInternal(CGSConnectionID ci
   if ((retval == kCGSErrorSuccess) && eventRecord->type &&
       (eventRecord->type != kCGEventMouseMoved))
   {
+    OSType evClass = 0;
+    UInt32 kind = 0;
     CFStringRef description = NULL;
     EventRef event = EventFromCGSEventRecord(eventRecord);
     if (event) {
+      evClass = GetEventClass(event);
+      kind = GetEventKind(event);
       description = CopyEventDescription(event, true);
       ReleaseEvent(event);
     }
-    LogWithFormat(true, "HookEvents: CGSGetNextEventRecordInternal(): event %@", description);
+    char *evClassString = GetFourCharCode(evClass);
+    LogWithFormat(true, "HookEvents: CGSGetNextEventRecordInternal(): event %@ (class %s, kind %i)",
+                  description, evClassString, kind);
 #ifdef LOG_NSEVENTTHREAD_STACKS
     PrintStackTrace();
 #endif
     if (description) {
       CFRelease(description);
     }
+    free(evClassString);
   }
   return retval;
 }
@@ -1043,19 +1124,26 @@ static FASTI386 CGSError Hooked_SLSGetNextEventRecordInternal(CGSConnectionID ci
   if ((retval == kCGSErrorSuccess) && eventRecord->type &&
       (eventRecord->type != kCGEventMouseMoved))
   {
+    OSType evClass = 0;
+    UInt32 kind = 0;
     CFStringRef description = NULL;
     EventRef event = EventFromCGSEventRecord(eventRecord);
     if (event) {
+      evClass = GetEventClass(event);
+      kind = GetEventKind(event);
       description = CopyEventDescription(event, true);
       ReleaseEvent(event);
     }
-    LogWithFormat(true, "HookEvents: SLSGetNextEventRecordInternal(): event %@", description);
+    char *evClassString = GetFourCharCode(evClass);
+    LogWithFormat(true, "HookEvents: SLSGetNextEventRecordInternal(): event %@ (class %s, kind %i)",
+                  description, evClassString, kind);
 #ifdef LOG_NSEVENTTHREAD_STACKS
     PrintStackTrace();
 #endif
     if (description) {
       CFRelease(description);
     }
+    free(evClassString);
   }
   return retval;
 }
@@ -1095,15 +1183,21 @@ static FASTI386 OSStatus Hooked_ReceiveNextEventCommon(ItemCount inNumTypes,
   if (retval == noErr) {
     OSType evClass = GetEventClass(*outEvent);
     UInt32 kind = GetEventKind(*outEvent);
-    if ((evClass != kEventClassMouse) || (kind != kEventMouseMoved)) {
+    if (!((evClass == kEventClassMouse) && (kind == kEventMouseMoved)) &&
+        // Firefox sends lots of these events
+        !((evClass == kEventClassCGS) && (kind == NSApplicationDefined)))
+    {
+      char *evClassString = GetFourCharCode(evClass);
       CFStringRef description = CopyEventDescription(*outEvent, true);
-      LogWithFormat(true, "HookEvents: ReceiveNextEventCommon(): event %@", description);
+      LogWithFormat(true, "HookEvents: ReceiveNextEventCommon(): event %@ (class %s, kind %i)",
+                    description, evClassString, kind);
 #ifndef LOG_NSEVENTTHREAD_STACKS
       PrintStackTrace();
 #endif
       if (description) {
         CFRelease(description);
       }
+      free(evClassString);
     }
   }
   return retval;
@@ -1171,9 +1265,12 @@ static CGEventRef Hooked__DPSNextEvent(CGSConnectionID cid,
       data2 = [cocoaEvent data2];
     }
     if ((cocoaType != NSMouseMoved) &&
-        // Firefox uses lots of NSApplicationDefined events with subtype,
-        // data1 and data2 all set to 0.
-        ((cocoaType != NSApplicationDefined) || subtype || data1 || data2))
+        // Firefox uses lots of NSApplicationDefined events with data1 and
+        // data2 set to 0, and subtype set to 0 or 1 (kEventSubtypeTrace).
+        ((cocoaType != NSApplicationDefined) ||
+          ((subtype != 0) && (subtype != 1)) ||
+          (data1 != 0) ||
+          (data2 != 0)))
     {
       LogWithFormat(true, "HookEvents: _DPSNextEvent(): event %@", cocoaEvent);
     }
@@ -1225,9 +1322,12 @@ static CGSEventRecord Hooked__DPSNextEvent(CGSConnectionID cid,
       data2 = [cocoaEvent data2];
     }
     if ((cocoaType != NSMouseMoved) &&
-        // Firefox uses lots of NSApplicationDefined events with subtype,
-        // data1 and data2 all set to 0.
-        ((cocoaType != NSApplicationDefined) || subtype || data1 || data2))
+        // Firefox uses lots of NSApplicationDefined events with data1 and
+        // data2 set to 0, and subtype set to 0 or 1 (kEventSubtypeTrace).
+        ((cocoaType != NSApplicationDefined) ||
+          ((subtype != 0) && (subtype != 1)) ||
+          (data1 != 0) ||
+          (data2 != 0)))
     {
       LogWithFormat(true, "HookEvents: _DPSNextEvent(): event %@", cocoaEvent);
     }
@@ -1266,14 +1366,19 @@ static OSStatus Hooked_CreateHighLevelEvent(EventRecord *inEventRecord,
   OSStatus retval =
     CreateHighLevelEvent_caller(inEventRecord, inAEEvent, outEvent);
   if (retval == noErr) {
+    OSType evClass = GetEventClass(*outEvent);
+    UInt32 kind = GetEventKind(*outEvent);
+    char *evClassString = GetFourCharCode(evClass);
     CFStringRef description = CopyEventDescription(*outEvent, true);
-    LogWithFormat(true, "HookEvents: CreateHighLevelEvent(): event %@", description);
+    LogWithFormat(true, "HookEvents: CreateHighLevelEvent(): event %@ (class %s, kind %i)",
+                  description, evClassString, kind);
 #ifndef LOG_NSEVENTTHREAD_STACKS
     PrintStackTrace();
 #endif
     if (description) {
       CFRelease(description);
     }
+    free(evClassString);
   }
   return retval;
 }
@@ -1320,6 +1425,9 @@ OSStatus (*PostEventToQueueInternal_caller)(EventQueueRef inQueue,
                                             EventPriority inPriority,
                                             Boolean inSignalRunLoop) = NULL;
 
+// Both low-level and high-level events are posted to the "Carbon event" queue
+// using this method, after they've been converted from CGS events or CG
+// events.  Most (all?) synthetic events are also posted using this method.
 static OSStatus Hooked_PostEventToQueueInternal(EventQueueRef inQueue,
                                                 EventRef inEvent,
                                                 EventPriority inPriority,
@@ -1329,15 +1437,27 @@ static OSStatus Hooked_PostEventToQueueInternal(EventQueueRef inQueue,
     PostEventToQueueInternal_caller(inQueue, inEvent, inPriority,
                                     inSignalRunLoop);
   if (retval == noErr) {
-    if (GetEventClass(inEvent) == kEventClassAppleEvent) {
+    OSType evClass = GetEventClass(inEvent);
+    UInt32 kind = GetEventKind(inEvent);
+    if (!((evClass == kEventClassMouse) && (kind == kEventMouseMoved)) &&
+        // Firefox sends lots of these events
+        !((evClass == kEventClassCGS) && (kind == NSApplicationDefined)))
+    {
+      char *evClassString = GetFourCharCode(evClass);
       CFStringRef description = CopyEventDescription(inEvent, true);
-      LogWithFormat(true, "HookEvents: PostEventToQueueInternal(): event %@", description);
+      LogWithFormat(true, "HookEvents: PostEventToQueueInternal(): event %@ (class %s, kind %i)",
+                    description, evClassString, kind);
+#if (0)
 #ifndef LOG_NSEVENTTHREAD_STACKS
-      PrintStackTrace();
+      if (IsMainThread()) {
+        PrintStackTrace();
+      }
+#endif
 #endif
       if (description) {
         CFRelease(description);
       }
+      free(evClassString);
     }
   }
   return retval;
@@ -1358,6 +1478,8 @@ static FASTI386 Boolean Hooked__ZL15Convert1CGEventh(Boolean wakeup)
   return retval;
 }
 
+extern "C" void _PostCGEventToQueue(CGEventRef cgEvent, bool arg1);
+
 extern "C" EventRef AcquireEventFromQueue(EventQueueRef inQueue,
                                           ItemCount inNumTypes,
                                           const EventTypeSpec *inList,
@@ -1367,7 +1489,7 @@ extern "C" EventRef AcquireEventFromQueue(EventQueueRef inQueue,
 // This may be called from AEPredispatchHandler() (via AEProcessAppleEvent()
 // via _DPSNextEvent()) to create additional Carbon events wrapping Apple
 // events, presumably for delivery to their handlers.  Presumably these Apple
-// events not handled via NSAppleEventManager.
+// events are not handled via NSAppleEventManager.
 extern "C" OSStatus _CreateEventWithAppleEvents(CFAllocatorRef inAllocator,
                                                 AEEventClass inEventClass,
                                                 AEEventID inEventID,
@@ -1408,6 +1530,7 @@ __attribute__((used)) static const hook_desc user_hooks[]
   INTERPOSE_FUNCTION(NSPushAutoreleasePool),
   PATCH_FUNCTION(__CFInitialize, /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation),
 
+  PATCH_FUNCTION(CreateEventWithCGEvent, /System/Library/Frameworks/Carbon.framework/Frameworks/HIToolbox.framework/HIToolbox),
   PATCH_FUNCTION(ReceiveNextEventCommon, /System/Library/Frameworks/Carbon.framework/Frameworks/HIToolbox.framework/HIToolbox),
   PATCH_FUNCTION(_DPSNextEvent, /System/Library/Frameworks/AppKit.framework/AppKit),
   PATCH_FUNCTION(CreateHighLevelEvent, /System/Library/Frameworks/Carbon.framework/Frameworks/HIToolbox.framework/HIToolbox),
@@ -1416,7 +1539,7 @@ __attribute__((used)) static const hook_desc user_hooks[]
 #else
   PATCH_FUNCTION(CGSGetNextEventRecordInternal, /System/Library/Frameworks/CoreGraphics.framework/CoreGraphics),
 #endif
-  //PATCH_FUNCTION(PostEventToQueueInternal, /System/Library/Frameworks/Carbon.framework/Frameworks/HIToolbox.framework/HIToolbox),
+  PATCH_FUNCTION(PostEventToQueueInternal, /System/Library/Frameworks/Carbon.framework/Frameworks/HIToolbox.framework/HIToolbox),
   //PATCH_FUNCTION(_ZL15Convert1CGEventh, /System/Library/Frameworks/Carbon.framework/Frameworks/HIToolbox.framework/HIToolbox),
 };
 

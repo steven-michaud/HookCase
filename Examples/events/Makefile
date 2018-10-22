@@ -40,11 +40,11 @@
 # tools that are as compatible as possible with the code that you're hooking.
 # I've had good luck up through Sierra with the LLVM 3.9.0 Clang download:
 # http://releases.llvm.org/3.9.0/clang+llvm-3.9.0-x86_64-apple-darwin.tar.xz.
-# HighSierra seems to require the LLVM 4.0.0 Clang download:
+# HighSierra and Mojave seem to require the LLVM 4.0.0 Clang download:
 # http://releases.llvm.org/4.0.0/clang+llvm-4.0.0-x86_64-apple-darwin.tar.xz.
 
-#LLVM_HOME=/usr/local/clang+llvm-4.0.0-x86_64-apple-darwin
-LLVM_HOME=/usr/local/clang+llvm-3.9.0-x86_64-apple-darwin
+LLVM_HOME=/usr/local/clang+llvm-4.0.0-x86_64-apple-darwin
+#LLVM_HOME=/usr/local/clang+llvm-3.9.0-x86_64-apple-darwin
 CLANG=$(LLVM_HOME)/bin/clang++
 LLAS=$(LLVM_HOME)/bin/llvm-as
 LLC=$(LLVM_HOME)/bin/llc

@@ -303,22 +303,34 @@ typedef struct cpu_data_fake
     };
     // KPTI enabled, 10.13.2 and above
     struct {
-      // User-mode (per-task) CR3 with kernel unmapped
-      volatile addr64_t cpu_task_cr3_nokernel;    // Offset 0x118
-      addr64_t cpu_kernel_cr3_kpti;               // Offset 0x120
+      union {
+        // 10.13.2 and 10.13.3 (Apple goofed here, but fixed the mistake
+        // in 10.13.4)
+        struct {
+          // User-mode (per-task) CR3 with kernel unmapped.
+          volatile addr64_t cpu_user_cr3_goofed;  // Offset 0x118
+          addr64_t cpu_kernel_cr3_goofed;         // Offset 0x120
+        };
+        // 10.13.4 and above
+        struct {
+          addr64_t cpu_kernel_cr3_kpti;           // Offset 0x118
+          // User-mode (per-task) CR3 with kernel unmapped
+          volatile addr64_t cpu_user_cr3;         // Offset 0x120, cpu_ucr3
+        };
+      };
       boolean_t cpu_pagezero_mapped;              // Offset 0x128
       addr64_t cpu_uber_isf;                      // Offset 0x130
       uint64_t cpu_uber_tmp;                      // Offset 0x138
       addr64_t cpu_uber_user_gs_base;             // Offset 0x140
-      addr64_t cpu_user_stack;                    // Offset 0x148
+      addr64_t cpu_excstack;                      // Offset 0x148, cd_estack
     };
     // KPTI enabled, backported to 10.12.6 and 10.11.6
     struct {
       addr64_t cpu_kernel_cr3_kpti_bp;            // Offset 0x118
       // User-mode (per-task) CR3 with kernel unmapped
-      volatile addr64_t cpu_task_cr3_nokernel_bp; // Offset 0x120
+      volatile addr64_t cpu_user_cr3_bp;          // Offset 0x120
       uint64_t pad3[5];
-      addr64_t cpu_user_stack_bp;                 // Offset 0x150
+      addr64_t cpu_excstack_bp;                   // Offset 0x150
     };
   };
 } cpu_data_fake_t;

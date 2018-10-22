@@ -458,7 +458,7 @@ Entry(teardown)
     * that's no longer accessible from the user-mode CR3 (after we've changed
     * to it).
     */
-   mov     EXT(g_cpu_user_stack_offset)(%rip), %rax
+   mov     EXT(g_cpu_excstack_offset)(%rip), %rax
    mov     %gs:(%rax), %rsp
    mov     R64_RAX(%r15), %rax
    pushq   R64_SS(%r15)
@@ -469,7 +469,7 @@ Entry(teardown)
    mov     R64_R15(%r15), %r15
 
    push    %rax
-   mov     EXT(g_cpu_task_cr3_nokernel_offset)(%rip), %rax
+   mov     EXT(g_cpu_user_cr3_offset)(%rip), %rax
    push    %rax
    mov     EXT(g_return_from_kext_addr)(%rip), %rax
    jmp     *%rax

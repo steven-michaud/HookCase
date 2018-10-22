@@ -164,6 +164,7 @@ extern "C" void *get_bsdtask_info(task_t);
 #define MAC_OS_X_VERSION_10_11_HEX 0x00000F00
 #define MAC_OS_X_VERSION_10_12_HEX 0x00001000
 #define MAC_OS_X_VERSION_10_13_HEX 0x00001100
+#define MAC_OS_X_VERSION_10_14_HEX 0x00001200
 
 char *gOSVersionString = NULL;
 size_t gOSVersionStringLength = 0;
@@ -229,10 +230,24 @@ bool macOS_HighSierra()
   return ((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_10_13_HEX);
 }
 
+bool macOS_HighSierra_less_than_4()
+{
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_10_13_HEX)) {
+    return false;
+  }
+  // The output of "uname -r" for macOS 10.3.4 is actually "17.5.0"
+  return ((OSX_Version() & 0xFF) < 0x50);
+}
+
+bool macOS_Mojave()
+{
+  return ((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_10_14_HEX);
+}
+
 bool OSX_Version_Unsupported()
 {
   return (((OSX_Version() & 0xFF00) < MAC_OS_X_VERSION_10_9_HEX) ||
-          ((OSX_Version() & 0xFF00) > MAC_OS_X_VERSION_10_13_HEX));
+          ((OSX_Version() & 0xFF00) > MAC_OS_X_VERSION_10_14_HEX));
 }
 
 // When using the debug kernel, set "kernel_stack_pages=6" in the boot args
@@ -291,6 +306,17 @@ kernel_type get_kernel_type()
     type = kernel_type_unknown;
   }
 
+  /* */
+  // HookCase no longer works with the DEBUG kernel on macOS 10.13.  I also
+  // haven't (yet) been able to get it to work with the DEBUG kernel on
+  // macOS 10.14.  We'll have to disable support for the time being.
+  if (macOS_HighSierra() || macOS_Mojave()) {
+    if (type == kernel_type_debug) {
+      type = kernel_type_unknown;
+    }
+  }
+  /* */
+
   return type;
 }
 
@@ -307,6 +333,11 @@ bool kernel_type_is_development()
 bool kernel_type_is_debug()
 {
   return (get_kernel_type() == kernel_type_debug);
+}
+
+bool kernel_type_is_unknown()
+{
+  return (get_kernel_type() == kernel_type_unknown);
 }
 
 #define VM_MIN_KERNEL_ADDRESS ((vm_offset_t) 0xFFFFFF8000000000UL)
@@ -336,10 +367,10 @@ bool find_kernel_header()
   }
 
 #if (defined(MAC_OS_X_VERSION_10_11) || defined(MAC_OS_X_VERSION_10_12) || \
-             defined(MAC_OS_X_VERSION_10_13)) && \
+             defined(MAC_OS_X_VERSION_10_13) || defined(MAC_OS_X_VERSION_10_14)) && \
     (MAC_OS_X_VERSION_MAX_ALLOWED / 100) >= (MAC_OS_X_VERSION_10_11 / 100)
   // vm_kernel_unslide_or_perm_external() is only available on OS X 10.11 and up.
-  if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra()) {
+  if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
     vm_offset_t func_address = (vm_offset_t) vm_kernel_unslide_or_perm_external;
     vm_offset_t func_address_unslid = 0;
     vm_kernel_unslide_or_perm_external(func_address, &func_address_unslid);
@@ -372,7 +403,7 @@ bool find_kernel_header()
       return false;
     }
 #if (defined(MAC_OS_X_VERSION_10_11) || defined(MAC_OS_X_VERSION_10_12) || \
-             defined(MAC_OS_X_VERSION_10_13)) && \
+             defined(MAC_OS_X_VERSION_10_13) || defined(MAC_OS_X_VERSION_10_14)) && \
     (MAC_OS_X_VERSION_MAX_ALLOWED / 100) >= (MAC_OS_X_VERSION_10_11 / 100)
   }
 #endif
@@ -538,7 +569,7 @@ bool find_sysent_table()
   struct section_64 *data_sections = NULL;
   const char *data_segment_name;
   const char *const_section_name;
-  if (macOS_Sierra() || macOS_HighSierra()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
     data_segment_name = "__CONST";
     const_section_name = "__constdata";
   } else {
@@ -629,6 +660,11 @@ bool find_sysent_table()
   return found_sysent_table;
 }
 
+typedef void (*disable_preemption_t)(void);
+typedef void (*enable_preemption_t)(void);
+static disable_preemption_t disable_preemption = NULL;
+static enable_preemption_t enable_preemption = NULL;
+
 bool set_kernel_physmap_protection(vm_map_offset_t start, vm_map_offset_t end,
                                    vm_prot_t new_prot, bool use_pmap_protect);
 
@@ -664,11 +700,26 @@ bool hook_sysent_call(uint32_t offset, sy_call_t *hook, sy_call_t **orig)
     orig_addr = &(table[offset].sy_call);
   }
 
-  if (!set_kernel_physmap_protection((vm_map_offset_t) orig_addr,
-                                     (vm_map_offset_t) orig_addr + sizeof(void *),
-                                     VM_PROT_READ | VM_PROT_WRITE, true))
-  {
-    return false;
+  // On macOS 10.14 (Mojave), set_kernel_physmap_protection() is no longer
+  // able to add VM_PROT_WRITE where it wasn't already present, so we need to
+  // use brute force here.  Changing CR0's write protect bit has caused us
+  // trouble in the past -- sometimes a write-protect page fault still
+  // happened when we tried to change kernel memory.  Hopefully we'll be able
+  // to avoid that by temporarily disabling preemption and interrupts.
+  boolean_t org_int_level = false;
+  uintptr_t org_cr0 = 0;
+  if (macOS_Mojave()) {
+    org_int_level = ml_set_interrupts_enabled(false);
+    disable_preemption();
+    org_cr0 = get_cr0();
+    set_cr0(org_cr0 & ~CR0_WP);
+  } else {
+    if (!set_kernel_physmap_protection((vm_map_offset_t) orig_addr,
+                                       (vm_map_offset_t) orig_addr + sizeof(void *),
+                                       VM_PROT_READ | VM_PROT_WRITE, true))
+    {
+      return false;
+    }
   }
 
   bool retval = true;
@@ -679,9 +730,15 @@ bool hook_sysent_call(uint32_t offset, sy_call_t *hook, sy_call_t **orig)
     retval = false;
   }
 
-  set_kernel_physmap_protection((vm_map_offset_t) orig_addr,
-                                (vm_map_offset_t) orig_addr + sizeof(void *),
-                                VM_PROT_READ, true);
+  if (macOS_Mojave()) {
+    set_cr0(org_cr0);
+    enable_preemption();
+    ml_set_interrupts_enabled(org_int_level);
+  } else {
+    set_kernel_physmap_protection((vm_map_offset_t) orig_addr,
+                                  (vm_map_offset_t) orig_addr + sizeof(void *),
+                                  VM_PROT_READ, true);
+  }
 
   if (orig && retval) {
     *orig = orig_local;
@@ -986,7 +1043,7 @@ bool find_kernel_private_functions()
       return false;
     }
   }
-  if (macOS_Sierra() || macOS_HighSierra()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
     if (!g_vm_pages) {
       g_vm_pages = (vm_page_t *)
         kernel_dlsym("_vm_pages");
@@ -1233,7 +1290,21 @@ bool find_kernel_private_functions()
       return false;
     }
   }
-  if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra()) {
+  if (!disable_preemption) {
+    disable_preemption = (disable_preemption_t)
+      kernel_dlsym("__disable_preemption");
+    if (!disable_preemption) {
+      return false;
+    }
+  }
+  if (!enable_preemption) {
+    enable_preemption = (enable_preemption_t)
+      kernel_dlsym("__enable_preemption");
+    if (!enable_preemption) {
+      return false;
+    }
+  }
+  if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
     if (!task_coalition_ids) {
       task_coalition_ids = (task_coalition_ids_t)
         kernel_dlsym("_task_coalition_ids");
@@ -1263,7 +1334,7 @@ bool find_kernel_private_functions()
       }
     }
   }
-  if (macOS_Sierra() || macOS_HighSierra()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
     if (!vm_object_unlock_ptr) {
       vm_object_unlock_ptr = (vm_object_unlock_t)
         kernel_dlsym("_vm_object_unlock");
@@ -1407,12 +1478,25 @@ typedef struct _vm_map_fake_highsierra {
   unsigned int timestamp; // Offset 0xf4
 } *vm_map_fake_highsierra_t;
 
+typedef struct _vm_map_fake_mojave {
+  lck_rw_t lock;
+  struct vm_map_links links; // Actually 1st member of "struct vm_map_header hdr"
+#define hdr links
+  uint64_t pad1[3];
+  pmap_t pmap;            // Offset 0x48
+  vm_map_size_t size;
+  vm_map_size_t user_wire_limit;
+  vm_map_size_t user_wire_size;
+  uint32_t pad2[34];
+  unsigned int timestamp; // Offset 0xf0
+} *vm_map_fake_mojave_t;
+
 pmap_t vm_map_pmap(vm_map_t map)
 {
   if (!map) {
     return NULL;
   }
-  if (macOS_Sierra() || macOS_HighSierra()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
     vm_map_fake_sierra_t m = (vm_map_fake_sierra_t) map;
     return m->pmap;
   } else {
@@ -1427,7 +1511,10 @@ unsigned int vm_map_timestamp(vm_map_t map)
     return 0;
   }
   unsigned int retval;
-  if (macOS_HighSierra()) {
+  if (macOS_Mojave()) {
+    vm_map_fake_mojave_t map_local = (vm_map_fake_mojave_t) map;
+    retval = map_local->timestamp;
+  } else if (macOS_HighSierra()) {
     vm_map_fake_highsierra_t map_local = (vm_map_fake_highsierra_t) map;
     retval = map_local->timestamp;
   } else if (OSX_ElCapitan() || macOS_Sierra()) {
@@ -1464,7 +1551,7 @@ vm_map_size_t vm_map_user_wire_limit(vm_map_t map)
     return 0;
   }
   vm_map_size_t retval;
-  if (macOS_Sierra() || macOS_HighSierra()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
     vm_map_fake_sierra_t m = (vm_map_fake_sierra_t) map;
     retval = m->user_wire_limit;
   } else {
@@ -1480,7 +1567,7 @@ vm_map_size_t vm_map_user_wire_size(vm_map_t map)
     return 0;
   }
   vm_map_size_t retval;
-  if (macOS_Sierra() || macOS_HighSierra()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
     vm_map_fake_sierra_t m = (vm_map_fake_sierra_t) map;
     retval = m->user_wire_size;
   } else {
@@ -1495,7 +1582,7 @@ void vm_map_set_user_wire_size(vm_map_t map, vm_map_size_t new_size)
   if (!map) {
     return;
   }
-  if (macOS_Sierra() || macOS_HighSierra()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
     vm_map_fake_sierra_t m = (vm_map_fake_sierra_t) map;
     m->user_wire_size = new_size;
   } else {
@@ -1600,7 +1687,7 @@ bool vm_map_entry_get_superpage_size(vm_map_entry_t entry)
     return false;
   }
   bool retval = false;
-  if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra()) {
+  if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
     vm_map_entry_fake_elcapitan_t entry_local =
       (vm_map_entry_fake_elcapitan_t) entry;
     retval = entry_local->superpage_size;
@@ -1670,7 +1757,11 @@ void vm_map_lock_write_to_read(vm_map_t map)
   if (!map) {
     return;
   }
-  if (macOS_HighSierra()) {
+  if (macOS_Mojave()) {
+    vm_map_fake_mojave_t map_local = (vm_map_fake_mojave_t) map;
+    ++map_local->timestamp;
+    lck_rw_lock_exclusive_to_shared(&(map_local->lock));
+  } else if (macOS_HighSierra()) {
     vm_map_fake_highsierra_t map_local = (vm_map_fake_highsierra_t) map;
     ++map_local->timestamp;
     lck_rw_lock_exclusive_to_shared(&(map_local->lock));
@@ -1690,7 +1781,11 @@ void vm_map_unlock(vm_map_t map)
   if (!map) {
     return;
   }
-  if (macOS_HighSierra()) {
+  if (macOS_Mojave()) {
+    vm_map_fake_mojave_t map_local = (vm_map_fake_mojave_t) map;
+    ++map_local->timestamp;
+    lck_rw_done(&(map_local->lock));
+  } else if (macOS_HighSierra()) {
     vm_map_fake_highsierra_t map_local = (vm_map_fake_highsierra_t) map;
     ++map_local->timestamp;
     lck_rw_done(&(map_local->lock));
@@ -2102,7 +2197,7 @@ typedef struct vm_page_fake_highsierra {
 
 vm_page_packed_t vm_page_pack_ptr(uintptr_t p)
 {
-  if (!p || (!macOS_Sierra() && !macOS_HighSierra())) {
+  if (!p || (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave())) {
     return 0;
   }
 
@@ -2141,7 +2236,7 @@ vm_page_packed_t vm_page_pack_ptr(uintptr_t p)
 
 uintptr_t vm_page_unpack_ptr(uintptr_t p)
 {
-  if (!p || (!macOS_Sierra() && !macOS_HighSierra())) {
+  if (!p || (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave())) {
     return 0;
   }
 
@@ -2176,7 +2271,7 @@ ppnum_t page_phys_page(vm_page_t page)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sierra() || macOS_HighSierra()) {
+    if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
       offset_in_struct = offsetof(struct vm_page_fake_sierra, phys_page);
     } else if (OSX_ElCapitan()) {
       offset_in_struct = offsetof(struct vm_page_fake_elcapitan, phys_page);
@@ -2206,7 +2301,7 @@ bool page_is_wpmapped(vm_page_t page)
     return false;
   }
   bool retval = false;
-  if (macOS_Sierra() || macOS_HighSierra()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
     vm_page_fake_sierra_t page_local = (vm_page_fake_sierra_t) page;
     retval = page_local->wpmapped;
   } else if (OSX_ElCapitan()) {
@@ -2227,7 +2322,7 @@ void page_set_wpmapped(vm_page_t page, bool flag)
   if (!page) {
     return;
   }
-  if (macOS_Sierra() || macOS_HighSierra()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
     vm_page_fake_sierra_t page_local = (vm_page_fake_sierra_t) page;
     page_local->wpmapped = flag;
   } else if (OSX_ElCapitan()) {
@@ -2248,7 +2343,7 @@ bool page_is_cs_validated(vm_page_t page)
     return false;
   }
   bool retval = false;
-  if (macOS_HighSierra()) {
+  if (macOS_HighSierra() || macOS_Mojave()) {
     vm_page_fake_highsierra_t page_local = (vm_page_fake_highsierra_t) page;
     retval = page_local->cs_validated;
   } else if (macOS_Sierra()) {
@@ -2272,7 +2367,7 @@ void page_set_cs_validated(vm_page_t page, bool flag)
   if (!page) {
     return;
   }
-  if (macOS_HighSierra()) {
+  if (macOS_HighSierra() || macOS_Mojave()) {
     vm_page_fake_highsierra_t page_local = (vm_page_fake_highsierra_t) page;
     page_local->cs_validated = flag;
   } else if (macOS_Sierra()) {
@@ -2296,7 +2391,7 @@ bool page_is_cs_tainted(vm_page_t page)
     return false;
   }
   bool retval = false;
-  if (macOS_HighSierra()) {
+  if (macOS_HighSierra() || macOS_Mojave()) {
     vm_page_fake_highsierra_t page_local = (vm_page_fake_highsierra_t) page;
     retval = page_local->cs_tainted;
   } else if (macOS_Sierra()) {
@@ -2320,7 +2415,7 @@ void page_set_cs_tainted(vm_page_t page, bool flag)
   if (!page) {
     return;
   }
-  if (macOS_HighSierra()) {
+  if (macOS_HighSierra() || macOS_Mojave()) {
     vm_page_fake_highsierra_t page_local = (vm_page_fake_highsierra_t) page;
     page_local->cs_tainted = flag;
   } else if (macOS_Sierra()) {
@@ -2344,7 +2439,7 @@ bool page_is_cs_nx(vm_page_t page)
     return false;
   }
   bool retval = false;
-  if (macOS_HighSierra()) {
+  if (macOS_HighSierra() || macOS_Mojave()) {
     vm_page_fake_highsierra_t page_local = (vm_page_fake_highsierra_t) page;
     retval = page_local->cs_nx;
   } else if (macOS_Sierra()) {
@@ -2365,7 +2460,7 @@ void page_set_cs_nx(vm_page_t page, bool flag)
   if (!page) {
     return;
   }
-  if (macOS_HighSierra()) {
+  if (macOS_HighSierra() || macOS_Mojave()) {
     vm_page_fake_highsierra_t page_local = (vm_page_fake_highsierra_t) page;
     page_local->cs_nx = flag;
   } else if (macOS_Sierra()) {
@@ -2382,7 +2477,8 @@ void page_set_cs_nx(vm_page_t page, bool flag)
 
 bool page_is_slid(vm_page_t page)
 {
-  if (!page) {
+  // As best I can tell, the notion of slid pages is absent in macOS Mojave.
+  if (!page || macOS_Mojave()) {
     return false;
   }
   bool retval = false;
@@ -2407,7 +2503,8 @@ bool page_is_slid(vm_page_t page)
 
 void page_set_slid(vm_page_t page, bool flag)
 {
-  if (!page) {
+  // As best I can tell, the notion of slid pages is absent in macOS Mojave.
+  if (!page || macOS_Mojave()) {
     return;
   }
   if (macOS_HighSierra()) {
@@ -2436,7 +2533,7 @@ vm_object_t page_object(vm_page_t page)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sierra() || macOS_HighSierra()) {
+    if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
       offset_in_struct = offsetof(struct vm_page_fake_sierra, vm_page_object);
     } else if (OSX_ElCapitan()) {
       offset_in_struct = offsetof(struct vm_page_fake_elcapitan, object);
@@ -2449,7 +2546,7 @@ vm_object_t page_object(vm_page_t page)
 
   vm_object_t retval = NULL;
   if (offset_in_struct != -1) {
-    if (macOS_Sierra() || macOS_HighSierra()) {
+    if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
       vm_page_object_t packed =
         *((vm_page_object_t *)((vm_map_offset_t)page + offset_in_struct));
       retval = (vm_object_t) vm_page_unpack_ptr(packed);
@@ -2469,7 +2566,7 @@ vm_object_offset_t page_object_offset(vm_page_t page)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sierra() || macOS_HighSierra()) {
+    if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
       offset_in_struct = offsetof(struct vm_page_fake_sierra, offset);
     } else if (OSX_ElCapitan()) {
       offset_in_struct = offsetof(struct vm_page_fake_elcapitan, offset);
@@ -2825,7 +2922,7 @@ bool object_is_code_signed(vm_object_t object)
         (vm_object_fake_sierra_dev_debug_t) object;
       retval = object_local->code_signed;
     }
-  } else if (macOS_HighSierra()) {
+  } else if (macOS_HighSierra() || macOS_Mojave()) {
     if (kernel_type_is_release()) {
       vm_object_fake_highsierra_t object_local =
         (vm_object_fake_highsierra_t) object;
@@ -2880,7 +2977,7 @@ void object_set_code_signed(vm_object_t object, bool flag)
         (vm_object_fake_sierra_dev_debug_t) object;
       object_local->code_signed = flag;
     }
-  } else if (macOS_HighSierra()) {
+  } else if (macOS_HighSierra() || macOS_Mojave()) {
     if (kernel_type_is_release()) {
       vm_object_fake_highsierra_t object_local =
         (vm_object_fake_highsierra_t) object;
@@ -2909,7 +3006,8 @@ void object_set_code_signed(vm_object_t object, bool flag)
 
 bool object_is_slid(vm_object_t object)
 {
-  if (!object) {
+  // As best I can tell, the notion of slid objects is absent in macOS Mojave.
+  if (!object || macOS_Mojave()) {
     return false;
   }
   bool retval = false;
@@ -2969,7 +3067,7 @@ vm_object_t object_get_shadow(vm_object_t object)
     return NULL;
   }
   vm_object_t retval = NULL;
-  if (macOS_Sierra() || macOS_HighSierra()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
     if (kernel_type_is_release()) {
       vm_object_fake_sierra_t object_local =
         (vm_object_fake_sierra_t) object;
@@ -2995,7 +3093,7 @@ vm_object_offset_t object_get_shadow_offset(vm_object_t object)
     return 0;
   }
   vm_object_offset_t retval = 0;
-  if (macOS_Sierra() || macOS_HighSierra()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
     if (kernel_type_is_release()) {
       vm_object_fake_sierra_t object_local =
         (vm_object_fake_sierra_t) object;
@@ -3021,7 +3119,7 @@ vm_object_offset_t object_get_shadow_offset(vm_object_t object)
 
 void vm_object_unlock(vm_object_t object)
 {
-  if (macOS_Sierra() || macOS_HighSierra()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
     vm_object_unlock_ptr(object);
     return;
   }
@@ -3099,10 +3197,32 @@ typedef struct _proc_fake_elcapitan {
   u_short p_acflag;       // Offset 0x390
 } *proc_fake_elcapitan_t;
 
+typedef struct _proc_fake_mojave {
+  uint32_t pad1[4];
+  task_t task;            // Offset 0x10
+  uint32_t pad2[10];
+  uint64_t p_uniqueid;    // Offset 0x40
+  uint32_t pad3[6];
+  pid_t p_pid;            // Offset 0x60
+  uint32_t pad4[64];
+  unsigned int p_flag;    // P_* flags (offset 0x164)
+  unsigned int p_lflag;
+  uint32_t pad5[75];
+  uint32_t p_argslen;     // Length of "string area" at beginning of user stack (offset 0x298)
+  int32_t p_argc;         // Offset 0x29c
+  user_addr_t user_stack; // Where user stack was allocated (offset 0x2a0)
+  uint32_t pad6[51];
+  u_short p_acflag;       // Offset 0x374
+} *proc_fake_mojave_t;
+
 static uint64_t proc_uniqueid(proc_t proc)
 {
   if (!proc) {
     return 0;
+  }
+  if (macOS_Mojave()) {
+    proc_fake_mojave_t p = (proc_fake_mojave_t) proc;
+    return p->p_uniqueid;
   }
   proc_fake_mavericks_t p = (proc_fake_mavericks_t) proc;
   return p->p_uniqueid;
@@ -3113,19 +3233,29 @@ static task_t proc_task(proc_t proc)
   if (!proc) {
     return NULL;
   }
+  if (macOS_Mojave()) {
+    proc_fake_mojave_t p = (proc_fake_mojave_t) proc;
+    return p->task;
+  }
   proc_fake_mavericks_t p = (proc_fake_mavericks_t) proc;
   return p->task;
 }
 
 static bool IS_64BIT_PROCESS(proc_t proc)
 {
+  if (!proc) {
+    return false;
+  }
+  if (macOS_Mojave()) {
+    proc_fake_mojave_t p = (proc_fake_mojave_t) proc;
+    return (p && (p->p_flag & P_LP64));
+  }
   if (macOS_HighSierra() || macOS_Sierra() || OSX_ElCapitan()) {
     proc_fake_elcapitan_t p = (proc_fake_elcapitan_t) proc;
     return (p && (p->p_flag & P_LP64));
-  } else {
-    proc_fake_mavericks_t p = (proc_fake_mavericks_t) proc;
-    return (p && (p->p_flag & P_LP64));
   }
+  proc_fake_mavericks_t p = (proc_fake_mavericks_t) proc;
+  return (p && (p->p_flag & P_LP64));
 }
 
 u_short get_acflag(proc_t proc)
@@ -3133,16 +3263,21 @@ u_short get_acflag(proc_t proc)
   if (!proc) {
     return 0;
   }
+  if (macOS_Mojave()) {
+    proc_fake_mojave_t p = (proc_fake_mojave_t) proc;
+    return p->p_acflag;
+  }
   if (OSX_Mavericks()) {
     proc_fake_mavericks_t p = (proc_fake_mavericks_t) proc;
     return p->p_acflag;
-  } else if (OSX_Yosemite()) {
+  }
+  if (OSX_Yosemite()) {
     proc_fake_yosemite_t p = (proc_fake_yosemite_t) proc;
     return p->p_acflag;
-  } else { // ElCapitan or Sierra or HighSierra
-    proc_fake_elcapitan_t p = (proc_fake_elcapitan_t) proc;
-    return p->p_acflag;
   }
+  // ElCapitan or Sierra or HighSierra
+  proc_fake_elcapitan_t p = (proc_fake_elcapitan_t) proc;
+  return p->p_acflag;
 }
 
 unsigned int get_lflag(proc_t proc)
@@ -3150,13 +3285,16 @@ unsigned int get_lflag(proc_t proc)
   if (!proc) {
     return 0;
   }
+  if (macOS_Mojave()) {
+    proc_fake_mojave_t p = (proc_fake_mojave_t) proc;
+    return p->p_lflag;
+  }
   if (macOS_HighSierra() || macOS_Sierra() || OSX_ElCapitan()) {
     proc_fake_elcapitan_t p = (proc_fake_elcapitan_t) proc;
     return p->p_lflag;
-  } else {
-    proc_fake_mavericks_t p = (proc_fake_mavericks_t) proc;
-    return p->p_lflag;
   }
+  proc_fake_mavericks_t p = (proc_fake_mavericks_t) proc;
+  return p->p_lflag;
 }
 
 unsigned int get_flag(proc_t proc)
@@ -3164,13 +3302,16 @@ unsigned int get_flag(proc_t proc)
   if (!proc) {
     return 0;
   }
+  if (macOS_Mojave()) {
+    proc_fake_mojave_t p = (proc_fake_mojave_t) proc;
+    return p->p_flag;
+  }
   if (macOS_HighSierra() || macOS_Sierra() || OSX_ElCapitan()) {
     proc_fake_elcapitan_t p = (proc_fake_elcapitan_t) proc;
     return p->p_flag;
-  } else {
-    proc_fake_mavericks_t p = (proc_fake_mavericks_t) proc;
-    return p->p_flag;
   }
+  proc_fake_mavericks_t p = (proc_fake_mavericks_t) proc;
+  return p->p_flag;
 }
 
 bool forked_but_not_execd(proc_t proc)
@@ -3194,9 +3335,8 @@ typedef enum {
 // in the xnu kernel's osfmk/mach/i386/fp_reg.h.  "struct thread" is defined
 // in osfmk/kern/thread.h.  "struct machine_thread" is defined in
 // osfmk/i386/thread.h.  For the offsets of fp_valid and ifps, look at the
-// machine code for fp_setvalid().  For those of fx_XMM_reg and x_YMMH_reg,
-// look at the machine code for fpu_module_init().  For the offset of
-// iotier_override, look at the machine code for set_thread_iotier_override().
+// machine code for fp_setvalid().  For the offset of iotier_override, look at
+// the machine code for set_thread_iotier_override().
 
 typedef struct x86_fx_thread_state_fake
 {
@@ -3217,6 +3357,45 @@ typedef struct x86_avx_thread_state_fake
   uint64_t pad3[8];
   unsigned int x_YMMH_reg[4][16];
 } x86_avx_thread_state_fake_t;
+
+typedef struct thread_fake_mojave
+{
+  uint32_t pad1[22];
+  integer_t options;    // Offset 0x58
+  uint32_t pad2[23];
+  int iotier_override;  // Offset 0xb8
+  uint32_t pad3[171];
+  vm_map_t map;         // Offset 0x368
+  uint32_t pad4[58];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0x458
+} thread_fake_mojave_t;
+
+typedef struct thread_fake_mojave_development
+{
+  uint32_t pad1[24];
+  integer_t options;    // Offset 0x60
+  uint32_t pad2[23];
+  int iotier_override;  // Offset 0xc0
+  uint32_t pad3[171];
+  vm_map_t map;         // Offset 0x370
+  uint32_t pad4[64];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0x478
+} thread_fake_mojave_development_t;
+
+typedef struct thread_fake_mojave_debug
+{
+  uint32_t pad1[56];
+  integer_t options;    // Offset 0xe0
+  uint32_t pad2[23];
+  int iotier_override;  // Offset 0x140
+  uint32_t pad3[205];
+  vm_map_t map;         // Offset 0x478
+  uint32_t pad4[64];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0x580
+} thread_fake_mojave_debug_t;
 
 typedef struct thread_fake_highsierra
 {
@@ -3250,10 +3429,10 @@ typedef struct thread_fake_highsierra_debug
   integer_t options;    // Offset 0xc0
   uint32_t pad2[227];
   vm_map_t map;         // Offset 0x450
-  uint32_t pad3[62];
+  uint32_t pad3[60];
   // Actually a member of thread_t's 'machine' member.
-  void *ifps;           // Offset 0x550
-  uint32_t pad4[46];
+  void *ifps;           // Offset 0x548
+  uint32_t pad4[48];
   int iotier_override;  // Offset 0x610
 } thread_fake_highsierra_debug_t;
 
@@ -3416,7 +3595,17 @@ wait_interrupt_t thread_interrupt_level(wait_interrupt_t new_level)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_HighSierra()) {
+    if (macOS_Mojave()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct = offsetof(struct thread_fake_mojave, options);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct thread_fake_mojave_development, options);
+      } else if (kernel_type_is_debug()) {
+        offset_in_struct =
+          offsetof(struct thread_fake_mojave_debug, options);
+      }
+    } else if (macOS_HighSierra()) {
       if (kernel_type_is_release()) {
         offset_in_struct = offsetof(struct thread_fake_highsierra, options);
       } else if (kernel_type_is_development()) {
@@ -3491,7 +3680,17 @@ x86_fx_thread_state_fake_t *get_fp_thread_state()
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_HighSierra()) {
+    if (macOS_Mojave()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct = offsetof(struct thread_fake_mojave, ifps);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct thread_fake_mojave_development, ifps);
+      } else if (kernel_type_is_debug()) {
+        offset_in_struct =
+          offsetof(struct thread_fake_mojave_debug, ifps);
+      }
+    } else if (macOS_HighSierra()) {
       if (kernel_type_is_release()) {
         offset_in_struct = offsetof(struct thread_fake_highsierra, ifps);
       } else if (kernel_type_is_development()) {
@@ -3558,7 +3757,17 @@ vm_map_t thread_map(thread_t thread)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_HighSierra()) {
+    if (macOS_Mojave()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct = offsetof(struct thread_fake_mojave, map);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct thread_fake_mojave_development, map);
+      } else if (kernel_type_is_debug()) {
+        offset_in_struct =
+          offsetof(struct thread_fake_mojave_debug, map);
+      }
+    } else if (macOS_HighSierra()) {
       if (kernel_type_is_release()) {
         offset_in_struct = offsetof(struct thread_fake_highsierra, map);
       } else if (kernel_type_is_development()) {
@@ -3643,7 +3852,18 @@ extern "C" void reset_iotier_override()
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_HighSierra()) {
+    if (macOS_Mojave()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct =
+          offsetof(struct thread_fake_mojave, iotier_override);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct thread_fake_mojave_development, iotier_override);
+      } else if (kernel_type_is_debug()) {
+        offset_in_struct =
+          offsetof(struct thread_fake_mojave_debug, iotier_override);
+      }
+    } else if (macOS_HighSierra()) {
       if (kernel_type_is_release()) {
         offset_in_struct =
           offsetof(struct thread_fake_highsierra, iotier_override);
@@ -3718,6 +3938,12 @@ extern "C" void restore_fp()
 // Possible value for uu_flag.
 #define UT_NOTCANCELPT 0x00000004  /* not a cancelation point */
 
+typedef struct uthread_fake_mojave
+{
+  uint64_t pad[42];
+  int uu_flag;        // Offset 0x150
+} *uthread_fake_mojave_t;
+
 typedef struct uthread_fake_highsierra
 {
   uint64_t pad[40];
@@ -3756,7 +3982,9 @@ int get_uu_flag(uthread_t uthread)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_HighSierra()) {
+    if (macOS_Mojave()) {
+      offset_in_struct = offsetof(struct uthread_fake_mojave, uu_flag);
+    } else if (macOS_HighSierra()) {
       offset_in_struct = offsetof(struct uthread_fake_highsierra, uu_flag);
     } else if (macOS_Sierra()) {
       offset_in_struct = offsetof(struct uthread_fake_sierra, uu_flag);
@@ -3831,6 +4059,16 @@ void report_proc_thread_state(const char *header, thread_t thread)
 // deal with.  In effect, that structure isn't used to manage permissions in
 // standard kernel memory (or in the double-mapped HIB segment that's used to
 // implement KPTI in recent versions of macOS and OS X).
+//
+// This method no longer works properly on macOS Mojave (10.14) -- neither
+// pmap_protect() nor pmap_enter().  pmap_enter() returns no error (when you
+// use it), but attempting to write the target memory still triggers a
+// write-protect page fault (error code 3, T_PF_PROT | T_PF_WRITE).  This
+// only happens when VM_PROT_WRITE is newly added (not when it was already
+// present).  It doesn't happen when VM_PROT_EXECUTE is newly added.  I don't
+// know what tricks Apple has played, though I may learn more when they
+// release the source code for Mojave's xnu kernel.  In the meantime we'll use
+// use brute force where necessary -- by changing CR0's write protect bit.
 bool set_kernel_physmap_protection(vm_map_offset_t start, vm_map_offset_t end,
                                    vm_prot_t new_prot, bool use_pmap_protect)
 {
@@ -3844,8 +4082,11 @@ bool set_kernel_physmap_protection(vm_map_offset_t start, vm_map_offset_t end,
   }
 
   // Though we don't access kernel_map here, holding a lock on it seems to
-  // help prevent weirdness.
-  vm_map_lock(kernel_map);
+  // help prevent weirdness.  But on Mojave we hang, even if we use
+  // vm_map_trylock() instead.
+  if (!macOS_Mojave()) {
+    vm_map_lock(kernel_map);
+  }
 
   // Apple's comments in their xnu kernel source code claim that
   // pmap_protect() can't be used to increase permissions, and that one should
@@ -3876,7 +4117,9 @@ bool set_kernel_physmap_protection(vm_map_offset_t start, vm_map_offset_t end,
     }
   }
 
-  vm_map_unlock(kernel_map);
+  if (!macOS_Mojave()) {
+    vm_map_unlock(kernel_map);
+  }
 
   return retval;
 }
@@ -4329,7 +4572,8 @@ char *basename(const char *path)
 pid_t get_xpc_parent(pid_t possible_child)
 {
   if (!possible_child ||
-      (!OSX_ElCapitan() && !macOS_Sierra() && !macOS_HighSierra()))
+      (!OSX_ElCapitan() && !macOS_Sierra() &&
+       !macOS_HighSierra() && !macOS_Mojave()))
   {
     return 0;
   }
@@ -4442,7 +4686,14 @@ bool get_proc_info(int32_t pid, char **path,
   uint32_t p_argslen = 0;
   int32_t p_argc = 0;
   user_addr_t user_stack = 0;
-  if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra()) {
+  if (macOS_Mojave()) {
+    proc_fake_mojave_t p = (proc_fake_mojave_t) our_proc;
+    if (p) {
+      p_argslen = p->p_argslen;
+      p_argc = p->p_argc;
+      user_stack = p->user_stack;
+    }
+  } else if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra()) {
     proc_fake_elcapitan_t p = (proc_fake_elcapitan_t) our_proc;
     if (p) {
       p_argslen = p->p_argslen;
@@ -4619,6 +4870,17 @@ typedef struct _task_fake_highsierra {
   mach_vm_size_t all_image_info_size;    // Offset 0x3d8
 } *task_fake_highsierra_t;
 
+typedef struct _task_fake_mojave {
+  lck_mtx_t lock;       // Size 0x10
+  uint64_t pad1[6];
+  queue_head_t threads; // Size 0x10, offset 0x40
+  uint64_t pad2[109];
+  volatile uint32_t t_flags; /* Offset 0x3b8, general-purpose task flags protected by task_lock (TL) */
+  uint32_t pad3[1];
+  mach_vm_address_t all_image_info_addr; // Offset 0x3c0
+  mach_vm_size_t all_image_info_size;    // Offset 0x3c8
+} *task_fake_mojave_t;
+
 void task_lock(task_t task)
 {
   if (!task) {
@@ -4645,7 +4907,10 @@ mach_vm_address_t task_all_image_info_addr(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_HighSierra()) {
+    if (macOS_Mojave()) {
+      offset_in_struct =
+        offsetof(struct _task_fake_mojave, all_image_info_addr);
+    } else if (macOS_HighSierra()) {
       offset_in_struct =
         offsetof(struct _task_fake_highsierra, all_image_info_addr);
     } else if (macOS_Sierra()) {
@@ -4680,7 +4945,10 @@ mach_vm_size_t task_all_image_info_size(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_HighSierra()) {
+    if (macOS_Mojave()) {
+      offset_in_struct =
+        offsetof(struct _task_fake_mojave, all_image_info_size);
+    } else if (macOS_HighSierra()) {
       offset_in_struct =
         offsetof(struct _task_fake_highsierra, all_image_info_size);
     } else if (macOS_Sierra()) {
@@ -4715,7 +4983,9 @@ uint32_t task_flags(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_HighSierra()) {
+    if (macOS_Mojave()) {
+      offset_in_struct = offsetof(struct _task_fake_mojave, t_flags);
+    } else if (macOS_HighSierra()) {
       offset_in_struct = offsetof(struct _task_fake_highsierra, t_flags);
     } else if (macOS_Sierra()) {
       offset_in_struct = offsetof(struct _task_fake_sierra, t_flags);
@@ -6430,6 +6700,7 @@ typedef struct _hook {
 // 48 31 C0 C3
 
 #define RETURN_FALSE_64BIT_INT 0xC3C03148
+#define RETURN_NULL_64BIT_INT RETURN_FALSE_64BIT_INT
 
 //push   %rbp
 //mov    %rsp, %rbp
@@ -6979,6 +7250,7 @@ bool maybe_cast_hook(proc_t proc)
   user_addr_t initializeMainExecutable = 0;
   user_addr_t dyld_runInitializers = 0;
   user_addr_t dyld_launchWithClosure = 0;
+  user_addr_t dyld_buildLaunchClosure = 0;
   module_info_t module_info;
   symbol_table_t symbol_table;
   if (get_module_info(proc, "dyld", 0, &module_info)) {
@@ -6990,9 +7262,18 @@ bool maybe_cast_hook(proc_t proc)
       dyld_runInitializers =
         find_symbol("__ZN4dyld15runInitializersEP11ImageLoader", &symbol_table);
       if (IS_64BIT_PROCESS(proc)) {
-        dyld_launchWithClosure =
-          find_symbol("__ZN4dyldL17launchWithClosureEPKN5dyld312launch_cache13binary_format7ClosureEPK15DyldSharedCachePK11mach_headermiPPKcSE_SE_PmSF_",
-                      &symbol_table);
+        if (macOS_Mojave()) {
+          dyld_launchWithClosure =
+            find_symbol("__ZN4dyldL17launchWithClosureEPKN5dyld37closure13LaunchClosureEPK15DyldSharedCachePKNS0_11MachOLoadedEmiPPKcSD_SD_PmSE_",
+                        &symbol_table);
+          dyld_buildLaunchClosure =
+            find_symbol("__ZN4dyldL18buildLaunchClosureEPKhRKN5dyld37closure14LoadedFileInfoEPPKc",
+                        &symbol_table);
+        } else if (macOS_HighSierra()) {
+          dyld_launchWithClosure =
+            find_symbol("__ZN4dyldL17launchWithClosureEPKN5dyld312launch_cache13binary_format7ClosureEPK15DyldSharedCachePK11mach_headermiPPKcSE_SE_PmSF_",
+                        &symbol_table);
+        }
       }
       free_symbol_table(&symbol_table);
     }
@@ -7054,20 +7335,29 @@ bool maybe_cast_hook(proc_t proc)
   uint16_t new_code = HC_INT1_OPCODE_SHORT;
   bool rv1 = proc_copyout(proc_map, &new_code, initializeMainExecutable,
                           sizeof(new_code), true, false);
-  bool rv2 = true;
-  // If a 64-bit process is being launched on macOS 10.13, dyld might call
-  // dyld::launchWithClosure(), and take a code path that never calls
+  bool rv2 = true, rv3 = true;
+  // If a 64-bit process is being launched on macOS 10.13 or 10.14, dyld might
+  // call dyld::launchWithClosure(), and take a code path that never calls
   // dyld::initializeMainExecutable().  To prevent this we patch
   // dyld::launchWithClosure() to make it always "return false".  This makes
   // dyld fail over to the code path that calls
-  // dyld::initializeMainExecutable().
+  // dyld::initializeMainExecutable().  On 10.14 dyld::launchWithClosure() is
+  // (potentially) called twice, and dyld::buildLaunchClosure() is called if
+  // first call fails.  So on 10.14 we also need to make
+  // dyld::buildLaunchClosure() "return NULL".  This prevents the second call
+  // to dyld::launchWithClosure(), and stops us wasting time to rebuild
+  // closures that already exist.
+  uint32_t new_lwc = RETURN_NULL_64BIT_INT;
   if (dyld_launchWithClosure) {
-    uint32_t new_lwc = RETURN_FALSE_64BIT_INT;
     rv2 = proc_copyout(proc_map, &new_lwc, dyld_launchWithClosure,
                        sizeof(new_lwc), true, false);
   }
+  if (dyld_buildLaunchClosure) {
+    rv3 = proc_copyout(proc_map, &new_lwc, dyld_buildLaunchClosure,
+                       sizeof(new_lwc), true, false);
+  }
   vm_map_deallocate(proc_map);
-  if (!rv1 || !rv2) {
+  if (!rv1 || !rv2 || !rv3) {
     free_hook(hookp);
     return false;
   }
@@ -9079,7 +9369,7 @@ int hook_execve(proc_t p, struct execve_args *uap, int *retv)
     // above, by which time the current process will be the current user
     // process.
 #ifndef DEBUG_PROCESS_START
-    if (!macOS_Sierra() && !macOS_HighSierra()) {
+    if (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave()) {
       maybe_cast_hook(current_proc());
     }
 #endif
@@ -9158,7 +9448,7 @@ int hook_posix_spawn(proc_t p, struct posix_spawn_args *uap, int *retv)
       // Sierra and above we should wait to call it in
       // thread_bootstrap_return_hook().
 #ifndef DEBUG_PROCESS_START
-      if (!macOS_Sierra() && !macOS_HighSierra()) {
+      if (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave()) {
         maybe_cast_hook(proc);
       }
 #endif
@@ -9184,7 +9474,7 @@ int hook_mac_execve(proc_t p, struct mac_execve_args *uap, int *retv)
     report_proc_thread_state("HookCase: hook_mac_execve()", current_thread());
 #endif
 #ifndef DEBUG_PROCESS_START
-    if (!macOS_Sierra() && !macOS_HighSierra()) {
+    if (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave()) {
       maybe_cast_hook(current_proc());
     }
 #endif
@@ -9346,20 +9636,41 @@ bool hook_thread_bootstrap_return()
   new_begin &= 0xffff0000;
   new_begin |= HC_INT1_OPCODE_SHORT;
 
-  if (!set_kernel_physmap_protection((vm_map_offset_t) target,
-                                     (vm_map_offset_t) target + sizeof(uint32_t),
-                                     VM_PROT_ALL, true))
-  {
-    return false;
+  // On macOS 10.14 (Mojave), set_kernel_physmap_protection() is no longer
+  // able to add VM_PROT_WRITE where it wasn't already present, so we need to
+  // use brute force here.  Changing CR0's write protect bit has caused us
+  // trouble in the past -- sometimes a write-protect page fault still
+  // happened when we tried to change kernel memory.  Hopefully we'll be able
+  // to avoid that by temporarily disabling preemption and interrupts.
+  boolean_t org_int_level = false;
+  uintptr_t org_cr0 = 0;
+  if (macOS_Mojave()) {
+    org_int_level = ml_set_interrupts_enabled(false);
+    disable_preemption();
+    org_cr0 = get_cr0();
+    set_cr0(org_cr0 & ~CR0_WP);
+  } else {
+    if (!set_kernel_physmap_protection((vm_map_offset_t) target,
+                                       (vm_map_offset_t) target + sizeof(uint32_t),
+                                       VM_PROT_ALL, true))
+    {
+      return false;
+    }
   }
 
   if (!OSCompareAndSwap(thread_bootstrap_return_begin, new_begin, target)) {
     retval = false;
   }
 
-  set_kernel_physmap_protection((vm_map_offset_t) target,
-                                (vm_map_offset_t) target + sizeof(uint32_t),
-                                VM_PROT_READ | VM_PROT_EXECUTE, true);
+  if (macOS_Mojave()) {
+    set_cr0(org_cr0);
+    enable_preemption();
+    ml_set_interrupts_enabled(org_int_level);
+  } else {
+    set_kernel_physmap_protection((vm_map_offset_t) target,
+                                  (vm_map_offset_t) target + sizeof(uint32_t),
+                                  VM_PROT_READ | VM_PROT_EXECUTE, true);
+  }
 
   return retval;
 }
@@ -9375,17 +9686,38 @@ bool unhook_thread_bootstrap_return()
   uint32_t *target = (uint32_t *) thread_bootstrap_return;
   uint32_t current_value = target[0];
 
-  set_kernel_physmap_protection((vm_map_offset_t) target,
-                                (vm_map_offset_t) target + sizeof(uint32_t),
-                                VM_PROT_ALL, true);
+  // On macOS 10.14 (Mojave), set_kernel_physmap_protection() is no longer
+  // able to add VM_PROT_WRITE where it wasn't already present, so we need to
+  // use brute force here.  Changing CR0's write protect bit has caused us
+  // trouble in the past -- sometimes a write-protect page fault still
+  // happened when we tried to change kernel memory.  Hopefully we'll be able
+  // to avoid that by temporarily disabling preemption and interrupts.
+  boolean_t org_int_level = false;
+  uintptr_t org_cr0 = 0;
+  if (macOS_Mojave()) {
+    org_int_level = ml_set_interrupts_enabled(false);
+    disable_preemption();
+    org_cr0 = get_cr0();
+    set_cr0(org_cr0 & ~CR0_WP);
+  } else {
+    set_kernel_physmap_protection((vm_map_offset_t) target,
+                                  (vm_map_offset_t) target + sizeof(uint32_t),
+                                  VM_PROT_ALL, true);
+  }
 
   if (!OSCompareAndSwap(current_value, thread_bootstrap_return_begin, target)) {
     retval = false;
   }
 
-  set_kernel_physmap_protection((vm_map_offset_t) target,
-                                (vm_map_offset_t) target + sizeof(uint32_t),
-                                VM_PROT_READ | VM_PROT_EXECUTE, true);
+  if (macOS_Mojave()) {
+    set_cr0(org_cr0);
+    enable_preemption();
+    ml_set_interrupts_enabled(org_int_level);
+  } else {
+    set_kernel_physmap_protection((vm_map_offset_t) target,
+                                  (vm_map_offset_t) target + sizeof(uint32_t),
+                                  VM_PROT_READ | VM_PROT_EXECUTE, true);
+  }
 
   thread_bootstrap_return_begin = 0;
 
@@ -9406,6 +9738,9 @@ uint32_t vm_page_validate_cs_begin = 0;
 // the original method from the hook (without having to unset the breakpoint
 // temporarily).  Page and object exist, and object is already locked ... but
 // it's probably wise not to assume this.
+//
+// This bug appears to have been fixed in macOS 10.14 (Mojave).  So as of
+// Mojave we no longer need to use this hook.
 void vm_page_validate_cs_hook(x86_saved_state_t *intr_state)
 {
   vm_page_t page = (vm_page_t) intr_state->ss_64.rdi;
@@ -9590,11 +9925,26 @@ bool hook_mac_file_check_library_validation()
   new_begin &= 0xffff0000;
   new_begin |= HC_INT3_OPCODE_SHORT;
 
-  if (!set_kernel_physmap_protection((vm_map_offset_t) target,
-                                     (vm_map_offset_t) target + sizeof(uint32_t),
-                                     VM_PROT_ALL, true))
-  {
-    return false;
+  // On macOS 10.14 (Mojave), set_kernel_physmap_protection() is no longer
+  // able to add VM_PROT_WRITE where it wasn't already present, so we need to
+  // use brute force here.  Changing CR0's write protect bit has caused us
+  // trouble in the past -- sometimes a write-protect page fault still
+  // happened when we tried to change kernel memory.  Hopefully we'll be able
+  // to avoid that by temporarily disabling preemption and interrupts.
+  boolean_t org_int_level = false;
+  uintptr_t org_cr0 = 0;
+  if (macOS_Mojave()) {
+    org_int_level = ml_set_interrupts_enabled(false);
+    disable_preemption();
+    org_cr0 = get_cr0();
+    set_cr0(org_cr0 & ~CR0_WP);
+  } else {
+    if (!set_kernel_physmap_protection((vm_map_offset_t) target,
+                                       (vm_map_offset_t) target + sizeof(uint32_t),
+                                       VM_PROT_ALL, true))
+    {
+      return false;
+    }
   }
 
   if (!OSCompareAndSwap(mac_file_check_library_validation_begin,
@@ -9603,9 +9953,15 @@ bool hook_mac_file_check_library_validation()
     retval = false;
   }
 
-  set_kernel_physmap_protection((vm_map_offset_t) target,
-                                (vm_map_offset_t) target + sizeof(uint32_t),
-                                VM_PROT_READ | VM_PROT_EXECUTE, true);
+  if (macOS_Mojave()) {
+    set_cr0(org_cr0);
+    enable_preemption();
+    ml_set_interrupts_enabled(org_int_level);
+  } else {
+    set_kernel_physmap_protection((vm_map_offset_t) target,
+                                  (vm_map_offset_t) target + sizeof(uint32_t),
+                                  VM_PROT_READ | VM_PROT_EXECUTE, true);
+  }
 
   return retval;
 }
@@ -9621,9 +9977,24 @@ bool unhook_mac_file_check_library_validation()
   uint32_t *target = (uint32_t *) mac_file_check_library_validation;
   uint32_t current_value = target[0];
 
-  set_kernel_physmap_protection((vm_map_offset_t) target,
-                                (vm_map_offset_t) target + sizeof(uint32_t),
-                                VM_PROT_ALL, true);
+  // On macOS 10.14 (Mojave), set_kernel_physmap_protection() is no longer
+  // able to add VM_PROT_WRITE where it wasn't already present, so we need to
+  // use brute force here.  Changing CR0's write protect bit has caused us
+  // trouble in the past -- sometimes a write-protect page fault still
+  // happened when we tried to change kernel memory.  Hopefully we'll be able
+  // to avoid that by temporarily disabling preemption and interrupts.
+  boolean_t org_int_level = false;
+  uintptr_t org_cr0 = 0;
+  if (macOS_Mojave()) {
+    org_int_level = ml_set_interrupts_enabled(false);
+    disable_preemption();
+    org_cr0 = get_cr0();
+    set_cr0(org_cr0 & ~CR0_WP);
+  } else {
+    set_kernel_physmap_protection((vm_map_offset_t) target,
+                                  (vm_map_offset_t) target + sizeof(uint32_t),
+                                  VM_PROT_ALL, true);
+  }
 
   if (!OSCompareAndSwap(current_value,
                         mac_file_check_library_validation_begin,
@@ -9632,9 +10003,15 @@ bool unhook_mac_file_check_library_validation()
     retval = false;
   }
 
-  set_kernel_physmap_protection((vm_map_offset_t) target,
-                                (vm_map_offset_t) target + sizeof(uint32_t),
-                                VM_PROT_READ | VM_PROT_EXECUTE, true);
+  if (macOS_Mojave()) {
+    set_cr0(org_cr0);
+    enable_preemption();
+    ml_set_interrupts_enabled(org_int_level);
+  } else {
+    set_kernel_physmap_protection((vm_map_offset_t) target,
+                                  (vm_map_offset_t) target + sizeof(uint32_t),
+                                  VM_PROT_READ | VM_PROT_EXECUTE, true);
+  }
 
   mac_file_check_library_validation_begin = 0;
 
@@ -9692,20 +10069,41 @@ bool hook_mac_file_check_mmap()
   new_begin &= 0xffff0000;
   new_begin |= HC_INT4_OPCODE_SHORT;
 
-  if (!set_kernel_physmap_protection((vm_map_offset_t) target,
-                                     (vm_map_offset_t) target + sizeof(uint32_t),
-                                     VM_PROT_ALL, true))
-  {
-    return false;
+  // On macOS 10.14 (Mojave), set_kernel_physmap_protection() is no longer
+  // able to add VM_PROT_WRITE where it wasn't already present, so we need to
+  // use brute force here.  Changing CR0's write protect bit has caused us
+  // trouble in the past -- sometimes a write-protect page fault still
+  // happened when we tried to change kernel memory.  Hopefully we'll be able
+  // to avoid that by temporarily disabling preemption and interrupts.
+  boolean_t org_int_level = false;
+  uintptr_t org_cr0 = 0;
+  if (macOS_Mojave()) {
+    org_int_level = ml_set_interrupts_enabled(false);
+    disable_preemption();
+    org_cr0 = get_cr0();
+    set_cr0(org_cr0 & ~CR0_WP);
+  } else {
+    if (!set_kernel_physmap_protection((vm_map_offset_t) target,
+                                       (vm_map_offset_t) target + sizeof(uint32_t),
+                                       VM_PROT_ALL, true))
+    {
+      return false;
+    }
   }
 
   if (!OSCompareAndSwap(mac_file_check_mmap_begin, new_begin, target)) {
     retval = false;
   }
 
-  set_kernel_physmap_protection((vm_map_offset_t) target,
-                                (vm_map_offset_t) target + sizeof(uint32_t),
-                                VM_PROT_READ | VM_PROT_EXECUTE, true);
+  if (macOS_Mojave()) {
+    set_cr0(org_cr0);
+    enable_preemption();
+    ml_set_interrupts_enabled(org_int_level);
+  } else {
+    set_kernel_physmap_protection((vm_map_offset_t) target,
+                                  (vm_map_offset_t) target + sizeof(uint32_t),
+                                  VM_PROT_READ | VM_PROT_EXECUTE, true);
+  }
 
   return retval;
 }
@@ -9721,17 +10119,38 @@ bool unhook_mac_file_check_mmap()
   uint32_t *target = (uint32_t *) mac_file_check_mmap;
   uint32_t current_value = target[0];
 
-  set_kernel_physmap_protection((vm_map_offset_t) target,
-                                (vm_map_offset_t) target + sizeof(uint32_t),
-                                VM_PROT_ALL, true);
+  // On macOS 10.14 (Mojave), set_kernel_physmap_protection() is no longer
+  // able to add VM_PROT_WRITE where it wasn't already present, so we need to
+  // use brute force here.  Changing CR0's write protect bit has caused us
+  // trouble in the past -- sometimes a write-protect page fault still
+  // happened when we tried to change kernel memory.  Hopefully we'll be able
+  // to avoid that by temporarily disabling preemption and interrupts.
+  boolean_t org_int_level = false;
+  uintptr_t org_cr0 = 0;
+  if (macOS_Mojave()) {
+    org_int_level = ml_set_interrupts_enabled(false);
+    disable_preemption();
+    org_cr0 = get_cr0();
+    set_cr0(org_cr0 & ~CR0_WP);
+  } else {
+    set_kernel_physmap_protection((vm_map_offset_t) target,
+                                  (vm_map_offset_t) target + sizeof(uint32_t),
+                                  VM_PROT_ALL, true);
+  }
 
   if (!OSCompareAndSwap(current_value, mac_file_check_mmap_begin, target)) {
     retval = false;
   }
 
-  set_kernel_physmap_protection((vm_map_offset_t) target,
-                                (vm_map_offset_t) target + sizeof(uint32_t),
-                                VM_PROT_READ | VM_PROT_EXECUTE, true);
+  if (macOS_Mojave()) {
+    set_cr0(org_cr0);
+    enable_preemption();
+    ml_set_interrupts_enabled(org_int_level);
+  } else {
+    set_kernel_physmap_protection((vm_map_offset_t) target,
+                                  (vm_map_offset_t) target + sizeof(uint32_t),
+                                  VM_PROT_READ | VM_PROT_EXECUTE, true);
+  }
 
   mac_file_check_mmap_begin = 0;
 
@@ -9744,8 +10163,8 @@ boolean_t *g_pmap_smap_enabled_ptr = (boolean_t *) -1;
 boolean_t g_kpti_enabled = (boolean_t) -1;
 
 uint64_t g_cpu_kernel_cr3_offset = (uint64_t) -1;
-uint64_t g_cpu_task_cr3_nokernel_offset = (uint64_t) -1;
-uint64_t g_cpu_user_stack_offset = (uint64_t) -1;
+uint64_t g_cpu_user_cr3_offset = (uint64_t) -1;
+uint64_t g_cpu_excstack_offset = (uint64_t) -1;
 
 typedef struct __attribute__((packed)) {
   uint16_t size;
@@ -9843,20 +10262,26 @@ void initialize_cpu_data_offsets()
   }
   g_cpu_kernel_cr3_offset =
     offsetof(cpu_data_fake_t, cpu_kernel_cr3);
-  if (macOS_HighSierra()) {
-    if (is_kpti_enabled(NULL)) {
+  if (!is_kpti_enabled(NULL)) {
+    return;
+  }
+  if (macOS_Mojave() || macOS_HighSierra()) {
+    if (macOS_HighSierra_less_than_4()) {
       g_cpu_kernel_cr3_offset =
-        offsetof(cpu_data_fake_t, cpu_kernel_cr3_kpti);
+        offsetof(cpu_data_fake_t, cpu_kernel_cr3_goofed);
+      g_cpu_user_cr3_offset =
+        offsetof(cpu_data_fake_t, cpu_user_cr3_goofed);
+    } else {
+      g_cpu_user_cr3_offset =
+        offsetof(cpu_data_fake_t, cpu_user_cr3);
     }
-    g_cpu_task_cr3_nokernel_offset =
-      offsetof(cpu_data_fake_t, cpu_task_cr3_nokernel);
-    g_cpu_user_stack_offset =
-      offsetof(cpu_data_fake_t, cpu_user_stack);
+    g_cpu_excstack_offset =
+      offsetof(cpu_data_fake_t, cpu_excstack);
   } else {
-    g_cpu_task_cr3_nokernel_offset =
-      offsetof(cpu_data_fake_t, cpu_task_cr3_nokernel_bp);
-    g_cpu_user_stack_offset =
-      offsetof(cpu_data_fake_t, cpu_user_stack_bp);
+    g_cpu_user_cr3_offset =
+      offsetof(cpu_data_fake_t, cpu_user_cr3_bp);
+    g_cpu_excstack_offset =
+      offsetof(cpu_data_fake_t, cpu_excstack_bp);
   }
 }
 
@@ -10133,7 +10558,7 @@ bool install_intr_blob(int intr_num, void *new_value,
     target = entry;
     target_size = sizeof(idt64_entry);
   }
-  vm_map_offset_t target_offset = (vm_map_offset_t) target;;
+  vm_map_offset_t target_offset = (vm_map_offset_t) target;
   if (previous_value) {
     memcpy(previous_value, target, target_size);
   }
@@ -10145,14 +10570,29 @@ bool install_intr_blob(int intr_num, void *new_value,
     new_entry->offset_top32 = entry->offset_top32;
   }
 
-  vm_prot_t new_prot = VM_PROT_READ | VM_PROT_WRITE;
-  if (is_stub) {
-    new_prot |= VM_PROT_EXECUTE;
-  }
-  if (!set_kernel_physmap_protection(target_offset, target_offset + target_size,
-                                     new_prot, true))
-  {
-    return false;
+  // On macOS 10.14 (Mojave), set_kernel_physmap_protection() is no longer
+  // able to add VM_PROT_WRITE where it wasn't already present, so we need to
+  // use brute force here.  Changing CR0's write protect bit has caused us
+  // trouble in the past -- sometimes a write-protect page fault still
+  // happened when we tried to change kernel memory.  Hopefully we'll be able
+  // to avoid that by temporarily disabling preemption and interrupts.
+  boolean_t org_int_level = false;
+  uintptr_t org_cr0 = 0;
+  if (macOS_Mojave()) {
+    org_int_level = ml_set_interrupts_enabled(false);
+    disable_preemption();
+    org_cr0 = get_cr0();
+    set_cr0(org_cr0 & ~CR0_WP);
+  } else {
+    vm_prot_t new_prot = VM_PROT_READ | VM_PROT_WRITE;
+    if (is_stub) {
+      new_prot |= VM_PROT_EXECUTE;
+    }
+    if (!set_kernel_physmap_protection(target_offset, target_offset + target_size,
+                                       new_prot, true))
+    {
+      return false;
+    }
   }
 
   bool retval = true;
@@ -10169,12 +10609,18 @@ bool install_intr_blob(int intr_num, void *new_value,
     memcpy((void *) target_offset, new_value, target_size);
   }
 
-  vm_prot_t old_prot = VM_PROT_READ;
-  if (is_stub) {
-    old_prot |= VM_PROT_EXECUTE;
+  if (macOS_Mojave()) {
+    set_cr0(org_cr0);
+    enable_preemption();
+    ml_set_interrupts_enabled(org_int_level);
+  } else {
+    vm_prot_t old_prot = VM_PROT_READ;
+    if (is_stub) {
+      old_prot |= VM_PROT_EXECUTE;
+    }
+    set_kernel_physmap_protection(target_offset, target_offset + target_size,
+                                  old_prot, true);
   }
-  set_kernel_physmap_protection(target_offset, target_offset + target_size,
-                                old_prot, true);
 
   return retval;
 }
@@ -10372,15 +10818,17 @@ bool install_intr_handlers()
     return false;
   }
 
-  if (!hook_vm_page_validate_cs()) {
-    return false;
+  if (!macOS_Mojave()) {
+    if (!hook_vm_page_validate_cs()) {
+      return false;
+    }
   }
-  if (macOS_HighSierra() || macOS_Sierra()) {
+  if (macOS_HighSierra() || macOS_Sierra() || macOS_Mojave()) {
     if (!hook_mac_file_check_library_validation()) {
       return false;
     }
   }
-  if (macOS_HighSierra() || macOS_Sierra() || OSX_ElCapitan()) {
+  if (macOS_HighSierra() || macOS_Sierra() || OSX_ElCapitan() || macOS_Mojave()) {
     if (!hook_mac_file_check_mmap()) {
       return false;
     }
@@ -10472,7 +10920,7 @@ kern_return_t HookCase_start(kmod_info_t * ki, void *d)
     // rebooting.  But this makes the kernel "capture" the serial port -- it's
     // no longer available to user-mode code, and drivers for it no longer show
     // up in the /dev directory.
-    kprintf("HookCase requires OS X Mavericks (10.9), Yosemite (10.10), El Capitan (10.11) or macOS Sierra (10.12): current version %s\n",
+    kprintf("HookCase requires OS X Mavericks (10.9), Yosemite (10.10), El Capitan (10.11), macOS Sierra (10.12), macOS High Sierra (10.13) or macOS Mojave (10.14): current version %s\n",
             gOSVersionString ? gOSVersionString : "null");
     if (gOSVersionString) {
       IOFree(gOSVersionString, gOSVersionStringLength);
@@ -10484,7 +10932,10 @@ kern_return_t HookCase_start(kmod_info_t * ki, void *d)
     return KERN_FAILURE;
   }
 
-  get_kernel_type();
+  if (kernel_type_is_unknown()) {
+    kprintf("HookCase: Unknown kernel type\n");
+    return KERN_FAILURE;
+  }
   initialize_cpu_data_offsets();
   if (!install_intr_handlers()) {
     remove_intr_handlers();

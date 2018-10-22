@@ -111,6 +111,7 @@ bool CanUseCF()
 #define MAC_OS_X_VERSION_10_11_HEX 0x00000AB0
 #define MAC_OS_X_VERSION_10_12_HEX 0x00000AC0
 #define MAC_OS_X_VERSION_10_13_HEX 0x00000AD0
+#define MAC_OS_X_VERSION_10_14_HEX 0x00000AE0
 
 char gOSVersionString[PATH_MAX] = {0};
 
@@ -184,6 +185,11 @@ bool macOS_Sierra()
 bool macOS_HighSierra()
 {
   return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_13_HEX);
+}
+
+bool macOS_Mojave()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_14_HEX);
 }
 
 class nsAutoreleasePool {
@@ -872,7 +878,7 @@ static int Hooked_interpose_example(char *arg)
 #pragma mark -
 
 // /usr/libexec/diagnosticd is a core component of the logging subsystem on
-// macOS 10.12 and 10.13.  It listens (as com.apple.diagnosticd) for
+// macOS 10.12, 10.13 and 10.14.  It listens (as com.apple.diagnosticd) for
 // connections from client apps like "log" and "Console".  While these client
 // connections are live, it receives messages from other parts of the OS,
 // which it passes along to its client(s).  These messages come from user-
@@ -1346,14 +1352,38 @@ bool Hooked__chunk_support_convert_tracepoint(void *arg0, void **arg1, void **ar
   return retval;
 }
 
-bool (*uuidpath_resolve_fd_caller)(int fd, uuid_t uuid, uint32_t name_offset,
-                                   char **name, char **imagepath, uint32_t arg5) = NULL;
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101400
+bool (*uuidpath_resolve_fd_caller)(int fd, uuid_t uuid, uint32_t name_offset, uint32_t arg3,
+                                   char **name, char **arg5, char **imagepath, char **arg7) = NULL;
 
 // Resolves the information from a kernel log message (received via
 // read(/dev/oslog_stream)) into a "name" and "imagepath" for the outgoing
-// message to the "log" or "Console" app.
+// message to the "log" or "Console" app.  Used on Mojave and up.
+bool Hooked_uuidpath_resolve_fd(int fd, uuid_t uuid, uint32_t name_offset, uint32_t arg3,
+                                char **name, char **arg5, char **imagepath, char **arg7)
+{
+  bool retval = uuidpath_resolve_fd_caller(fd, uuid, name_offset, arg3, name, arg5, imagepath, arg7);
+
+  char fd_path[PATH_MAX] = {0};
+  fcntl(fd, F_GETPATH, fd_path);
+  char uuid_string[PATH_MAX] = {0};
+  uuid_unparse(uuid, uuid_string);
+  LogWithFormat(true, "KernelLogging: uuidpath_resolve_fd(): fd \'%i\' (path \"%s\"), uuid \"%s\", name_offset \'0x%x\', arg3 \'0x%x\', name \"%s\", arg5 \"%s\", imagepath \"%s\", arg7 \"%s\", returning \'%i\'",
+                fd, fd_path, uuid_string, name_offset, arg3, (name && *name) ? *name : "null",
+                (arg5 && *arg5) ? *arg5 : "null", (imagepath && *imagepath) ? *imagepath : "null",
+                (arg7 && *arg7) ? *arg7 : "null", retval);
+
+  return retval;
+}
+#else
+bool (*uuidpath_resolve_fd_caller)(int fd, uuid_t uuid, uint32_t name_offset,
+                                   char **name, char **imagepath, char **arg5) = NULL;
+
+// Resolves the information from a kernel log message (received via
+// read(/dev/oslog_stream)) into a "name" and "imagepath" for the outgoing
+// message to the "log" or "Console" app.  Used on Sierra and HighSierra.
 bool Hooked_uuidpath_resolve_fd(int fd, uuid_t uuid, uint32_t name_offset,
-                                char **name, char **imagepath, uint32_t arg5)
+                                char **name, char **imagepath, char **arg5)
 {
   bool retval = uuidpath_resolve_fd_caller(fd, uuid, name_offset, name, imagepath, arg5);
 
@@ -1367,6 +1397,7 @@ bool Hooked_uuidpath_resolve_fd(int fd, uuid_t uuid, uint32_t name_offset,
 
   return retval;
 }
+#endif
 
 extern "C" void *_os_trace_mmap_at(int fd, char *path, int oflag, uint64_t *length);
 
@@ -1391,10 +1422,12 @@ void *Hooked__os_trace_mmap_at(int fd, char *path, int oflag, uint64_t *length)
   return retval;
 }
 
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 101400
+
 uint32_t (*_os_trace_uuiddb_write_file_caller)(char *uuidtext_dir, uuid_t uuid, uint32_t arg2,
                                                const struct iovec *iov, int iovcnt) = NULL;
 
-// Writes the appropriate uuidtext file.
+// Writes the appropriate uuidtext file.  Used on Sierra and HighSierra.
 uint32_t Hooked__os_trace_uuiddb_write_file(char *uuidtext_dir, uuid_t uuid, uint32_t arg2,
                                             const struct iovec *iov, int iovcnt)
 {
@@ -1416,7 +1449,7 @@ extern "C" void _os_trace_uuiddb_harvest(uuid_t uuid, char *uuidtext_dir,
 // If need be, attempts to "harvest" information from a loaded kext and write
 // it to the appropriate uuidtext file.  This method is called on receipt (via
 // /dev/oslog_stream) of a metadata message announcing that a kext has just
-// been loaded.
+// been loaded.  Used on Sierra and HighSierra.
 void Hooked__os_trace_uuiddb_harvest(uuid_t uuid, char *uuidtext_dir,
                                      xpc_object_t dict, uint32_t arg3)
 {
@@ -1447,11 +1480,13 @@ void Hooked__os_trace_uuiddb_harvest(uuid_t uuid, char *uuidtext_dir,
   }
 }
 
+#endif
+
 CFDictionaryRef (*OSKextCopyLoadedKextInfoByUUID_caller)(CFArrayRef kextIdentifiers,
                                                          CFArrayRef infoKeys) = NULL;
 
 // Called (indirectly) from _os_trace_uuiddb_harvest() to get information from
-// appropriate kext (if it's still loaded).
+// appropriate kext (if it's still loaded).  Used on Sierra and HighSierra.
 CFDictionaryRef Hooked_OSKextCopyLoadedKextInfoByUUID(CFArrayRef kextIdentifiers,
                                                       CFArrayRef infoKeys)
 {
@@ -1483,7 +1518,8 @@ CFDictionaryRef Hooked_OSKextCopyLoadedKextInfoByUUID(CFArrayRef kextIdentifiers
 }
 
 // Called (indirectly) from _os_trace_uuiddb_harvest() to see if the
-// appropriate uuidtext file exists and is writeable.
+// appropriate uuidtext file exists and is writeable.  Used on Sierra and
+// HighSierra.
 int Hooked_utimes(const char *path, const struct timeval times[2])
 {
   bool is_LoggingSupport = false;
@@ -1535,7 +1571,7 @@ void (*___os_trace_uuiddb_harvest_impl_block_invoke)(block_literal_t, ...) = NUL
 // do the actual work of "harvesting".  This hook can be used to show that a
 // kext whose start() function fails will already have been unloaded by the
 // time the metadata message appears (in /dev/oslog_stream) which announces
-// that it's been loaded.
+// that it's been loaded.  Used on Sierra and HighSierra.
 void Hooked_dispatch_async(dispatch_queue_t queue, void (^block)(void))
 {
   bool is_LoggingSupport = false;
@@ -1569,6 +1605,59 @@ void Hooked_dispatch_async(dispatch_queue_t queue, void (^block)(void))
   }
 
   dispatch_async(queue, block);
+}
+
+// Sends a request to logd to "harvest" information from a loaded kext and
+// write it to the appropriate uuidtext file.  This method is called on
+// receipt (via /dev/oslog_stream) of a metadata message announcing that a
+// kext has just been loaded.  Used on Mojave and up.
+xpc_object_t Hooked_xpc_connection_send_message_with_reply_sync(xpc_connection_t connection,
+                                                                xpc_object_t message)
+{
+  bool is_diagnosticd = false;
+  const char *owner_name = GetCallerOwnerName();
+  if (!strcmp(owner_name, "diagnosticd")) {
+    is_diagnosticd = true;
+  }
+
+  char *message_desc = NULL;
+  if (message && is_diagnosticd) {
+    message_desc = xpc_copy_description(message);
+  }
+
+  xpc_object_t retval = xpc_connection_send_message_with_reply_sync(connection, message);
+
+  char *reply_desc = NULL;
+  if (retval && is_diagnosticd) {
+    reply_desc = xpc_copy_description(retval);
+  }
+
+  if (is_diagnosticd) {
+    pid_t peer_pid = -1;
+    uid_t peer_uid = -1;
+    if (connection) {
+      peer_pid = xpc_connection_get_pid(connection);
+      peer_uid = xpc_connection_get_euid(connection);
+    }
+    char peer_name[PATH_MAX] = {0};
+    if (peer_pid && (peer_pid != -1)) {
+      proc_name(peer_pid, peer_name, sizeof(peer_name));
+    } else {
+      strcpy(peer_name, "none");
+    }
+    LogWithFormat(true, "Hook.mm: xpc_connection_send_message_with_reply_sync(): peer \"%s(%u)\", uid \'%i\', message %s, reply %s",
+                  peer_name, peer_pid, peer_uid, message_desc ? message_desc : "null",
+                  reply_desc ? reply_desc : "null");
+  }
+
+  if (message_desc) {
+    free(message_desc);
+  }
+  if (reply_desc) {
+    free(reply_desc);
+  }
+
+  return retval;
 }
 
 typedef struct _hook_desc {
@@ -1609,11 +1698,15 @@ __attribute__((used)) static const hook_desc user_hooks[]
   INTERPOSE_FUNCTION(_chunk_support_convert_tracepoint),
   PATCH_FUNCTION(uuidpath_resolve_fd, /System/Library/PrivateFrameworks/LoggingSupport.framework/LoggingSupport),
   INTERPOSE_FUNCTION(_os_trace_mmap_at),
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 101400
   PATCH_FUNCTION(_os_trace_uuiddb_write_file, /System/Library/PrivateFrameworks/LoggingSupport.framework/LoggingSupport),
   INTERPOSE_FUNCTION(_os_trace_uuiddb_harvest),
   PATCH_FUNCTION(OSKextCopyLoadedKextInfoByUUID, /System/Library/Frameworks/IOKit.framework/IOKit),
   INTERPOSE_FUNCTION(utimes),
   INTERPOSE_FUNCTION(dispatch_async),
+#else
+  INTERPOSE_FUNCTION(xpc_connection_send_message_with_reply_sync),
+#endif
 };
 
 // What follows are declarations of the CoreSymbolication APIs that we use to
