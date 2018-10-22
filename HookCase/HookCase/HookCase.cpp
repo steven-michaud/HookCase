@@ -3429,10 +3429,10 @@ typedef struct thread_fake_highsierra_debug
   integer_t options;    // Offset 0xc0
   uint32_t pad2[227];
   vm_map_t map;         // Offset 0x450
-  uint32_t pad3[60];
+  uint32_t pad3[62];
   // Actually a member of thread_t's 'machine' member.
-  void *ifps;           // Offset 0x548
-  uint32_t pad4[48];
+  void *ifps;           // Offset 0x550
+  uint32_t pad4[46];
   int iotier_override;  // Offset 0x610
 } thread_fake_highsierra_debug_t;
 
