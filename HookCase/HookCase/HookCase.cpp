@@ -307,10 +307,9 @@ kernel_type get_kernel_type()
   }
 
   /* */
-  // HookCase no longer works with the DEBUG kernel on macOS 10.13.  I also
-  // haven't (yet) been able to get it to work with the DEBUG kernel on
-  // macOS 10.14.  We'll have to disable support for the time being.
-  if (macOS_HighSierra() || macOS_Mojave()) {
+  // HookCase doesn't work with the DEBUG kernel on macOS 10.14.  Until I can
+  // figure out why, we'll have to disable support for it.
+  if (macOS_Mojave()) {
     if (type == kernel_type_debug) {
       type = kernel_type_unknown;
     }
