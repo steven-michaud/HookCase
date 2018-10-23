@@ -1,3 +1,12 @@
+# What's New in Version 3.0
+
+HookCase now supports macOS Mojave (10.14).
+
+But Mojave's Debug kernel is currently very flaky -- lots of panics,
+with and without HookCase.  So support for the Debug kernel
+[has been disabled](HookCase/HookCase/HookCase.cpp#L309), at least
+temporarily.
+
 # What's New in Version 2.1
 
 HookCase now works properly with VMware Fusion running as a host. This
@@ -23,16 +32,16 @@ instead of `int 0x22`, as follows:
 at a particular address in a given module.  This means that HookCase
 can now hook methods that aren't in their module's symbol table.  For
 more information see
-[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L810).
+[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L817).
 
-* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L8144) that
+* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L8458) that
 prevented interpose hooks from working outside the shared cache of
 system modules.
 
 * Version 2.0
-[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L9409)
+[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L9768)
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0
-[fixes a premature-release bug](Examples/events/hook.mm#L1179)
+[fixes a premature-release bug](Examples/events/hook.mm#L1277)
 in the "System Events" example's hook library.

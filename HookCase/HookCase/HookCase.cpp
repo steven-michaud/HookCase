@@ -306,15 +306,16 @@ kernel_type get_kernel_type()
     type = kernel_type_unknown;
   }
 
-  /* */
-  // HookCase doesn't work with the DEBUG kernel on macOS 10.14.  Until I can
-  // figure out why, we'll have to disable support for it.
+  // The DEBUG kernel is currently very flaky on macOS 10.14, to the extent
+  // that we need to disable support for it.  There are lots of panics, with
+  // and without HookCase.  In fact all that's needed to trigger a panic is to
+  // start Safari, visit apple.com, then quit it.  These panics all have the
+  // error "Assertion failed: object->vo_purgeable_volatilizer == NULL".
   if (macOS_Mojave()) {
     if (type == kernel_type_debug) {
       type = kernel_type_unknown;
     }
   }
-  /* */
 
   return type;
 }

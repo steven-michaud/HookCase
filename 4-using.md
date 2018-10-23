@@ -36,7 +36,7 @@ on OS X 10.10 (Yosemite) or 10.9 (Mavericks)).
 
 HookCase now supports creating a patch hook for an (un-named) method
 at a particular address in a given module.  (For more information see
-[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L810).)
+[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L817).)
 So, for example, creating a patch hook for a function named
 "sub_123abc" would (by default) specify that the hook should be
 inserted at offset 0x123abc (hexadecimal notation) in the module.  But
