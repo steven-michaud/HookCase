@@ -15,8 +15,9 @@ also possible
 [to only enable parts of it](https://forums.developer.apple.com/thread/17452).
 For example, it's possible to turn on everything but the protection
 against loading unsigned kernel extensions.  This is the most secure
-configuation that's still compatible with HookCase.  Note that you
-will also have to turn off file system protection at least
+configuation that's still compatible with HookCase.  But using it on
+macOS 10.14 (Mojave) will require you to codesign your hook libraries.
+You will also have to turn off file system protection at least
 temporarily, in order to be able to copy the `HookCase.kext` extension
 to its final destination.
 
