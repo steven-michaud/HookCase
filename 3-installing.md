@@ -7,8 +7,18 @@ view, the only "appropriately" signed kernel extensions are those
 signed with a special kernel extension signing certificate -- in
 practice almost exclusively Apple's own kernel extensions.)  On OS X
 10.11 (El Capitan) and up, to do this you'll need to turn off
-"rootless mode".  Rootless mode will also prevent you from copying the
-`HookCase.kext` binary to its final destination.
+full-scale "system integrity protection" (SIP, also known as "rootless
+mode").
+
+Apple documents turning SIP completely off or completely on.  But it's
+also possible
+[to only enable parts of it](https://forums.developer.apple.com/thread/17452).
+For example, it's possible to turn on everything but the protection
+against loading unsigned kernel extensions.  This is the most secure
+configuation that's still compatible with HookCase.  Note that you
+will also have to turn off file system protection at least
+temporarily, in order to be able to copy the `HookCase.kext` extension
+to its final destination.
 
 ## On OS X 10.10:
 
@@ -25,10 +35,18 @@ practice almost exclusively Apple's own kernel extensions.)  On OS X
    pressing `Command-R` immediately after you hear the Mac startup
    sound.  Release these keys when you see the Apple logo.
 
-2. Choose Utilties : Terminal, then run the following at the command
-   line:
+2. Choose Utilties : Terminal, then run one of the the following at
+   the command line.  The first command disables SIP completely.  The
+   second enables everything but protection against loading unsigned
+   kernel extensions.  The third also disables file-system protection
+   (in order to allow changes to system directories like
+   `/usr/local/sbin`).
 
         csrutil disable
+
+        csrutil enable --without kext
+
+        csrutil enable --without kext --without fs
 
 3. Quit Terminal and reboot your computer.
 

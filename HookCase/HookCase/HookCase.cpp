@@ -1851,27 +1851,47 @@ vm_object_offset_t map_entry_offset(vm_map_entry_t entry)
     return 0;
   }
   vm_map_entry_fake_t entry_local = (vm_map_entry_fake_t) entry;
-  return entry_local->vme_offset;
+  // We need to truncate the result the same way the kernel's
+  // VME_OFFSET() macro does.  Sometimes Apple leaves garbage in
+  // the 12 least significant bits.
+  return (entry_local->vme_offset & ~PAGE_MASK);
 }
 
 // Assumes the entire region we're interested in (from 'start' to 'end') has
 // the same protection as does the entry at 'start'.
-vm_prot_t vm_map_get_protection(vm_map_t map, user_addr_t start)
+kern_return_t vm_region_get_info(vm_map_t map, user_addr_t start,
+                                 vm_region_submap_info_64_t info)
 {
-  vm_prot_t retval = VM_PROT_DEFAULT;
-  if (!find_kernel_private_functions() || !map || !start) {
+  kern_return_t retval = KERN_FAILURE;
+  if (!find_kernel_private_functions() || !map || !start || !info) {
     return retval;
   }
 
   vm_map_offset_t start_local = start;
   vm_map_size_t size = 0;
-  natural_t depth = 0;
+  // This is a saner value than the '0' we used in previous versions of
+  // HookCase.  The kernel uses it in a number of places when calling
+  // vm_map_region_recurse_64() on user memory regions.  Setting depth
+  // to '0' probably often caused us to get incorrect values for
+  // info->protection.
+  natural_t depth = 999999;
+  bzero(info, sizeof(vm_region_submap_info_data_64_t));
+  mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
+  retval =
+    vm_map_region_recurse_64(map, &start_local, &size, &depth, info, &count);
+
+  return retval;
+}
+
+// Assumes the entire region we're interested in (from 'start' to 'end') has
+// the same protection as does the entry at 'start'.
+vm_prot_t vm_region_get_protection(vm_map_t map, user_addr_t start)
+{
+  vm_prot_t retval = VM_PROT_DEFAULT;
+
   vm_region_submap_info_data_64_t info;
   bzero(&info, sizeof(info));
-  mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
-  kern_return_t rv =
-    vm_map_region_recurse_64(map, &start_local, &size, &depth,
-                             (vm_region_submap_info_64_t) &info, &count);
+  kern_return_t rv = vm_region_get_info(map, start, &info);
   if (rv == KERN_SUCCESS) {
     retval = info.protection;
   }
@@ -4173,9 +4193,9 @@ void vm_submap_iterate_entries(vm_map_t submap, vm_map_offset_t start,
     vm_map_entry_fake_t an_entry = (vm_map_entry_fake_t) entry;
 
     if (an_entry->is_sub_map) {
-      vm_map_offset_t submap_start = an_entry->vme_offset;
-      vm_map_offset_t submap_end = 
-        an_entry->vme_offset + end_fixed - entry_start;
+      vm_map_offset_t submap_start = map_entry_offset(entry);
+      vm_map_offset_t submap_end =
+        map_entry_offset(entry) + end_fixed - entry_start;
       vm_submap_iterate_entries(an_entry->vme_object.vmo_submap,
                                 submap_start, submap_end, submap_level + 1,
                                 iterator, info);
@@ -4236,9 +4256,9 @@ void vm_map_iterate_entries(vm_map_t map, vm_map_offset_t start,
     vm_map_entry_fake_t an_entry = (vm_map_entry_fake_t) entry;
 
     if (an_entry->is_sub_map) {
-      vm_map_offset_t submap_start = an_entry->vme_offset;
+      vm_map_offset_t submap_start = map_entry_offset(entry);
       vm_map_offset_t submap_end = 
-        an_entry->vme_offset + end_fixed - entry_start;
+        map_entry_offset(entry) + end_fixed - entry_start;
       vm_submap_iterate_entries(an_entry->vme_object.vmo_submap,
                                 submap_start, submap_end, 1, iterator, info);
     } else {
@@ -4350,6 +4370,8 @@ bool user_region_codesigned(vm_map_t map, vm_map_offset_t start,
                             vm_map_offset_t end);
 void sign_user_pages(vm_map_t map, vm_map_offset_t start,
                      vm_map_offset_t end);
+void unsign_user_pages(vm_map_t map, vm_map_offset_t start,
+                       vm_map_offset_t end);
 
 bool proc_copyout(vm_map_t proc_map, const void *source,
                   user_addr_t dest, size_t len,
@@ -4375,12 +4397,43 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
   // The "DYLD shared cache" gets altered permanently, for all processes.
   // These changes even survive a reboot!  (Though they can be cleared by
   // running update_dyld_shared_cache.)  Even changes to dyld happen to a
-  // global copy in RAM, shared by all processes.  Using vm_protect() somehow
-  // avoids all this trouble.
+  // global copy in RAM, shared by all processes.  Using vm_protect() and
+  // vm_fault() somehow avoids all this trouble.
+  vm_region_submap_info_data_64_t info;
+  bzero(&info, sizeof(info));
+  if (vm_region_get_info(proc_map, dest, &info) != KERN_SUCCESS) {
+    return false;
+  }
+  bool codesigned = user_region_codesigned(proc_map, dest, dest + len);
   bool prot_needs_restore = false;
-  vm_prot_t prot = vm_map_get_protection(proc_map, dest);
-  if (!(prot & VM_PROT_WRITE)) {
+  vm_prot_t old_prot = info.protection;
+  vm_prot_t new_prot = old_prot;
+  if (!(old_prot & VM_PROT_WRITE)) {
     prot_needs_restore = true;
+    // Don't include 'old_prot' in 'new_prot'.  We want to avoid ever
+    // simultaneously setting VM_PROT_WRITE and VM_PROT_EXECUTE, even
+    // temporarily.  Doing so can upset macOS 10.14 (Mojave), if SIP is
+    // only disabled for kernel extensions (and not for anything else).
+    new_prot = VM_PROT_READ | VM_PROT_WRITE;
+    if (macOS_Mojave()) {
+      // Though shared libraries are all "copy on write", Mojave somehow needs
+      // us to request this specifically, if SIP is only disabled for kernel
+      // extensions.
+      if (info.share_mode == SM_COW) {
+        new_prot |= VM_PROT_COPY;
+      }
+    }
+    // If we're writing to a "private" region that's codesigned, we should
+    // first "unsign" it -- otherwise the OS may give us trouble for setting
+    // write permission on a region that should remain unchanged.  We don't
+    // need to worry about this for a shared region, because the region we
+    // write to will be a private copy of it (generated via COW).  On Mojave
+    // we need to do this for all private regions.
+    if (info.share_mode == SM_PRIVATE) {
+      if (macOS_Mojave() || codesigned) {
+        unsign_user_pages(proc_map, dest, dest + len);
+      }
+    }
     // If 'dest' is in the "DYLD shared cache", the first time vm_protect() is
     // called on it, it triggers a call to vm_map_clip_unnest() (via
     // vm_map_clip_start() or vm_map_clip_end()), which "unnests" a part of
@@ -4389,46 +4442,48 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
     // cache itself, even temporarily.  The whole business is something like a
     // copy-on-write.  In 64-bit mode it triggers a warning message from the
     // kernel about a "triggered unnest of range ... of DYLD shared region".
-    // For some reason the shared cache's 'protection' doesn't include
-    // VM_PROT_EXECUTE, so below we need to ensure that the unnested part does
-    // get execute permission.  Some settings for the shared cache (before the
-    // unnesting) are:
-    //  'protection'     == VM_PROT_READ
-    //  'max_protection' == VM_PROT_ALL
-    //  'inheritance'    == VM_INHERIT_SHARE
-    //  'user_tag'       == VM_MEMORY_SHARED_PMAP
-    //  'share_mode'     == SM_TRUESHARED
-    //  'is_submap'      == true
-    // In the unnested part (after this call) they become:
+    // On macOS 10.14 (Mojave), some settings for the shared cache
+    // (before the unnesting) are:
+    //  'protection'     == VM_PROT_EXECUTE
+    //  'max_protection' == VM_PROT_EXECUTE
+    //  'inheritance'    == VM_INHERIT_COPY
+    //  'user_tag'       == 0
+    //  'share_mode'     == SM_COW
+    //  'is_submap'      == false
+    //  'depth'          == 1
+    // In the unnested part (after vm_protect() and vm_fault()) they become:
     //  'protection'     == VM_PROT_READ | VM_PROT_WRITE
     //  'max_protection' == VM_PROT_ALL
     //  'inheritance'    == VM_INHERIT_COPY
-    //  'user_tag'       == VM_MEMORY_UNSHARED_PMAP
+    //  'user_tag'       == VM_MEMORY_SHARED_PMAP
     //  'share_mode'     == SM_PRIVATE
     //  'is_submap'      == false
-    vm_prot_t new_prot = prot | VM_PROT_READ | VM_PROT_WRITE;
+    //  'depth'          == 0
     vm_protect(proc_map, dest_rounded, len_rounded, false, new_prot);
   }
 
-  vm_map_t oldmap = vm_map_switch(proc_map);
-  // Without this check (this call to vm_fault()) we sometimes panic with a
-  // write-protect GPF.  Presumably it's some kind of race condition, probably
-  // most likely when we have one or more patch hooks without standard
-  // prologues.  We try elsewhere to alleviate that particular race condition,
-  // but it'd be too expensive to use locks here to protect against the
-  // general case.
+  // This call to vm_fault() finishes the job of preparing the region that
+  // contains 'dest' for writing.  It maps in an unnested region (created
+  // above by the call to vm_protect()), or unnests part of a shared region
+  // that already had write permission.  This call to vm_fault() also helps
+  // to remedy some kind of race condition -- without it we sometimes panic
+  // with a write-protect GPF.
   kern_return_t rv =
-    vm_fault(proc_map, dest_rounded, VM_PROT_READ | VM_PROT_WRITE,
-             false, THREAD_UNINT, NULL, 0);
+    vm_fault(proc_map, dest_rounded, new_prot, false, THREAD_UNINT, NULL, 0);
   if (rv == KERN_SUCCESS) {
+    vm_map_t oldmap = vm_map_switch(proc_map);
     rv = copyout(source, dest, len);
+    vm_map_switch(oldmap);
   }
-  vm_map_switch(oldmap);
 
   // If we've altered a codesigned region, we need to "sign" it ourselves to
-  // prevent later rechecks from finding the signature no longer matches.
-  if (user_region_codesigned(proc_map, dest, dest + len)) {
-    sign_user_pages(proc_map, dest, dest + len);
+  // prevent later rechecks from finding the signature no longer matches.  On
+  // macOS 10.14 (Mojave) we need to "sign" every page we change, whether or
+  // it was previously codesigned.
+  if (prot_needs_restore) {
+    if (macOS_Mojave() || codesigned) {
+      sign_user_pages(proc_map, dest, dest + len);
+    }
   }
 
   //pmap_t proc_pmap = vm_map_pmap(proc_map);
@@ -4440,13 +4495,19 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
   //}
 
   if (prot_needs_restore) {
+#if (0)
+    // As best I can tell, these are no longer necessary, now that we've fixed
+    // how we call vm_map_region_recurse_64() in vm_region_get_info() above.
+    // I'll probably remove 'needs_exec_prot' and 'needs_write_prot' in a
+    // future version of HookCase.
     if (needs_exec_prot) {
-      prot |= VM_PROT_EXECUTE;
+      old_prot |= VM_PROT_EXECUTE;
     }
     if (needs_write_prot) {
-      prot |= VM_PROT_WRITE;
+      old_prot |= VM_PROT_WRITE;
     }
-    vm_protect(proc_map, dest_rounded, len_rounded, false, prot);
+#endif
+    vm_protect(proc_map, dest_rounded, len_rounded, false, old_prot);
   }
 
   return (rv == KERN_SUCCESS);
@@ -4475,6 +4536,10 @@ bool proc_mapout(vm_map_t proc_map, const void *source,
   if (rv != KERN_SUCCESS) {
     vm_map_copy_discard(copy);
     return false;
+  }
+  // On macOS 10.14 (Mojave) we need to "sign" every page we add to proc_map.
+  if (macOS_Mojave()) {
+    sign_user_pages(proc_map, out, out + len);
   }
   *target = out;
 
@@ -6129,7 +6194,7 @@ void report_region_iterator(vm_map_t map, vm_map_entry_t entry,
   entry_end = an_entry->vme_end;
   entry_size = entry_end - entry_start;
   object = an_entry->vme_object.vmo_object;
-  offset = an_entry->vme_offset;
+  offset = map_entry_offset(entry);
 
   if (object) {
     vm_object_t orig_object = object;
@@ -6203,7 +6268,7 @@ void user_region_codesigned_iterator(vm_map_t map, vm_map_entry_t entry,
   vm_map_entry_fake_t an_entry = (vm_map_entry_fake_t) entry;
 
   vm_object_t object = an_entry->vme_object.vmo_object;
-  vm_object_offset_t offset = an_entry->vme_offset;
+  vm_object_offset_t offset = map_entry_offset(entry);
 
   if (object) {
     vm_object_t orig_object = object;
@@ -6256,10 +6321,12 @@ void sign_user_pages_iterator(vm_map_t map, vm_map_entry_t entry,
     return;
   }
 
+  bool sign = (bool) info;
+
   vm_map_entry_fake_t an_entry = (vm_map_entry_fake_t) entry;
 
   vm_object_t object = an_entry->vme_object.vmo_object;
-  vm_object_offset_t offset = an_entry->vme_offset;
+  vm_object_offset_t offset = map_entry_offset(entry);
 
   if (!object) {
     return;
@@ -6290,8 +6357,12 @@ void sign_user_pages_iterator(vm_map_t map, vm_map_entry_t entry,
     }
 
     // Emulate vm_map_sign() from the xnu kernel's osfmk/vm/vm_map.c
-    page_set_cs_validated(page, true);
-    page_set_wpmapped(page, false);
+    if (sign) {
+      page_set_cs_validated(page, true);
+      page_set_wpmapped(page, false);
+    } else {
+      page_set_cs_validated(page, false);
+    }
 
     vm_object_unlock(object);
 
@@ -6313,7 +6384,20 @@ void sign_user_pages(vm_map_t map, vm_map_offset_t start,
     return;
   }
 
-  vm_map_iterate_entries(map, start, end, sign_user_pages_iterator, NULL);
+  vm_map_iterate_entries(map, start, end, sign_user_pages_iterator, (void *) true);
+}
+
+// Make sure the contents of this region aren't considered to be validated.
+// On macOS 10.14 (Mojave) and up, writing to a "validated" region can cause
+// problems.
+void unsign_user_pages(vm_map_t map, vm_map_offset_t start,
+                       vm_map_offset_t end)
+{
+  if (!map || (map == kernel_map)) {
+    return;
+  }
+
+  vm_map_iterate_entries(map, start, end, sign_user_pages_iterator, (void *) false);
 }
 
 #if (0)
@@ -6340,7 +6424,7 @@ void ensure_user_region_wired_iterator(vm_map_t map, vm_map_entry_t entry,
   vm_map_offset_t entry_start = an_entry->vme_start;
   vm_map_offset_t entry_end = an_entry->vme_end;
   vm_object_t object = an_entry->vme_object.vmo_object;
-  vm_object_offset_t offset = an_entry->vme_offset;
+  vm_object_offset_t offset = map_entry_offset(entry);
 
   if (!object) {
     info_local->retval = false;
@@ -6644,6 +6728,7 @@ typedef struct _hook {
   hook_desc *interpose_hooks;           // Only used in cast hook
   task_t held_parent_task;              // Only used in cast hook
   pid_t hooked_parent;                  // Only used in cast hook
+  uint32_t orig_dyld_runInitializers;   // Only used in cast hook
   uint32_t num_call_orig_funcs;         // Only used in cast hook
   uint32_t num_patch_hooks;             // Only used in cast hook
   uint32_t num_interpose_hooks;         // Only used in cast hook
@@ -6701,6 +6786,14 @@ typedef struct _hook {
 
 #define RETURN_FALSE_64BIT_INT 0xC3C03148
 #define RETURN_NULL_64BIT_INT RETURN_FALSE_64BIT_INT
+
+// xor   %eax, %eax
+// ret
+
+// 31 C0 C3
+
+#define RETURN_FALSE_32BIT_INT 0x00C3C031
+#define RETURN_NULL_32BIT_INT RETURN_FALSE_32BIT_INT
 
 //push   %rbp
 //mov    %rsp, %rbp
@@ -6901,25 +6994,6 @@ hook_t *find_hook_with_add_image_func(uint64_t unique_pid)
   hook_t *hookp = NULL;
   LIST_FOREACH(hookp, &g_all_hooks, list_entry) {
     if ((hookp->unique_pid == unique_pid) && hookp->add_image_func_addr) {
-      break;
-    }
-  }
-  all_hooks_unlock();
-  return hookp;
-}
-
-hook_t *find_hook_with_dyld_runInitializers(user_addr_t runInitializers_addr,
-                                            uint64_t unique_pid)
-{
-  if (!check_init_locks() || !runInitializers_addr || !unique_pid) {
-    return NULL;
-  }
-  all_hooks_lock();
-  hook_t *hookp = NULL;
-  LIST_FOREACH(hookp, &g_all_hooks, list_entry) {
-    if ((hookp->dyld_runInitializers == runInitializers_addr) &&
-        (hookp->unique_pid == unique_pid))
-    {
       break;
     }
   }
@@ -7295,6 +7369,15 @@ bool maybe_cast_hook(proc_t proc)
     vm_map_deallocate(proc_map);
     return false;
   }
+
+  uint32_t orig_dyld_runInitializers = 0;
+  if (!proc_copyin(proc_map, dyld_runInitializers, &orig_dyld_runInitializers,
+                   sizeof(orig_dyld_runInitializers)))
+  {
+    vm_map_deallocate(proc_map);
+    return false;
+  }
+
   hook_t *hookp = create_hook();
   if (!hookp) {
     vm_map_deallocate(proc_map);
@@ -7308,6 +7391,7 @@ bool maybe_cast_hook(proc_t proc)
   hookp->orig_addr = initializeMainExecutable;
   hookp->orig_code = orig_code;
   hookp->dyld_runInitializers = dyld_runInitializers;
+  hookp->orig_dyld_runInitializers = orig_dyld_runInitializers;
   hookp->no_numerical_addrs = no_numerical_addrs;
 
   // If debug logging is on, suspend the parent process if we might have hooks
@@ -7501,11 +7585,17 @@ void process_hook_cast(hook_t *hookp, x86_saved_state_t *intr_state)
     intr_state->ss_32.eip = (uint32_t) dlopen;
   }
 
-  // Hook dyld::runInitializers() to prevent calls to C++ initializers being
-  // triggered by our call to dlopen().  Our hook (on_dyld_runInitializers())
-  // blocks calls to the original method.  Without this, C++ initializers
-  // might call methods before we've had a chance to hook them.
-  uint16_t new_code = HC_INT4_OPCODE_SHORT;
+  // Patch dyld::runInitializers() to always "return 0".  This prevents calls
+  // to C++ initializers from being triggered by our call to dlopen().
+  // Without this, C++ initializers might call methods before we've had a
+  // chance to hook them.  We'll restore the original method later in
+  // process_hook_flying().
+  uint32_t new_code;
+  if (intr_state->flavor == x86_SAVED_STATE64) {
+    new_code = RETURN_NULL_64BIT_INT;
+  } else {     // flavor == x86_SAVED_STATE32
+    new_code = RETURN_NULL_32BIT_INT;
+  }
   proc_copyout(proc_map, &new_code, hookp->dyld_runInitializers,
                sizeof(new_code), true, false);
 
@@ -7519,51 +7609,6 @@ void process_hook_cast(hook_t *hookp, x86_saved_state_t *intr_state)
            proc_pid(proc), proc_uniqueid(proc));
   do_report(report);
 #endif
-}
-
-// Do nothing, but set up a return to the caller as if from the original
-// method.
-void on_dyld_runInitializers(x86_saved_state_t *intr_state)
-{
-  if (!intr_state) {
-    return;
-  }
-
-  proc_t proc = current_proc();
-
-  // Sanity check
-  user_addr_t orig_addr;
-  if (intr_state->flavor == x86_SAVED_STATE64) {
-    orig_addr = intr_state->ss_64.isf.rip - 2;
-  } else { // flavor == x86_SAVED_STATE32
-    orig_addr = intr_state->ss_32.eip - 2;
-  }
-  hook_t *hookp = find_hook_with_dyld_runInitializers(orig_addr,
-                                                      proc_uniqueid(proc));
-  if (!hookp) {
-    return;
-  }
-
-  vm_map_t proc_map = task_map_for_proc(proc);
-  if (!proc_map) {
-    return;
-  }
-
-  if (intr_state->flavor == x86_SAVED_STATE64) {
-    uint64_t return_address;
-    proc_copyin(proc_map, intr_state->ss_64.isf.rsp,
-                &return_address, sizeof(return_address));
-    intr_state->ss_64.isf.rsp += sizeof(uint64_t);
-    intr_state->ss_64.isf.rip = return_address;
-  } else {     // flavor == x86_SAVED_STATE32
-    uint32_t return_address;
-    proc_copyin(proc_map, intr_state->ss_32.uesp,
-                &return_address, sizeof(return_address));
-    intr_state->ss_32.uesp += sizeof(uint32_t);
-    intr_state->ss_32.eip = return_address;
-  }
-
-  vm_map_deallocate(proc_map);
 }
 
 // Must call IOFree on whatever this function returns.
@@ -8719,19 +8764,14 @@ void process_hook_flying(hook_t *hookp, x86_saved_state_t *intr_state)
     return;
   }
 
-  // Unset our hook at dyld::runInitializers(), and stop blocking calls to it.
-  // Our hook library's C++ initializers (and those of its dependencies) will
-  // run along with those from the remaining modules in our host process, when
-  // dyld::runInitializers() is called again from
-  // dyld::initializeMainExecutable().
-  uint16_t orig_code;
-  if (intr_state->flavor == x86_SAVED_STATE64) {
-    orig_code = PROLOGUE_BEGIN_64BIT_SHORT;
-  } else {     // flavor == x86_SAVED_STATE32
-    orig_code = PROLOGUE_BEGIN_32BIT_SHORT;
-  }
-  proc_copyout(proc_map, &orig_code, hookp->dyld_runInitializers,
-               sizeof(orig_code), true, false);
+  // Restore the original dyld::runInitializers() method that we disabled
+  // above in process_hook_cast().  Our hook library's C++ initializers (and
+  // those of its dependencies) will run along with those from the remaining
+  // modules in our host process, when dyld::runInitializers() is called again
+  // from dyld::initializeMainExecutable().
+  proc_copyout(proc_map, &hookp->orig_dyld_runInitializers,
+               hookp->dyld_runInitializers,
+               sizeof(hookp->orig_dyld_runInitializers), true, false);
 
   char procname[PATH_MAX];
   proc_name(proc_pid(proc), procname, sizeof(procname));
@@ -10869,7 +10909,6 @@ extern "C" void handle_user_hc_int3(x86_saved_state_t *intr_state)
 
 extern "C" void handle_user_hc_int4(x86_saved_state_t *intr_state)
 {
-  on_dyld_runInitializers(intr_state);
 }
 
 extern "C" void handle_kernel_hc_int1(x86_saved_state_t *intr_state)
