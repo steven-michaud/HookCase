@@ -4476,10 +4476,10 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
     vm_map_switch(oldmap);
   }
 
-  // If we've altered a codesigned region, we need to "sign" it ourselves to
-  // prevent later rechecks from finding the signature no longer matches.  On
-  // macOS 10.14 (Mojave) we need to "sign" every page we change, whether or
-  // it was previously codesigned.
+  // If we've altered a write-protected codesigned region, we need to "sign"
+  // it ourselves to prevent later rechecks from finding the signature no
+  // longer matches.  On macOS 10.14 (Mojave) we need to "sign" every
+  // write-protected page we change, whether or not it's codesigned.
   if (prot_needs_restore) {
     if (macOS_Mojave() || codesigned) {
       sign_user_pages(proc_map, dest, dest + len);

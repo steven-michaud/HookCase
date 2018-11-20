@@ -1,3 +1,30 @@
+# What's New in Version 3.1
+
+HookCase now supports enabling all parts of "system integrity
+protection" (SIP) but the protection against loading unsigned kernel
+extensions.
+
+Though Apple has never documented it, since OS X 10.11 (El Capitan)
+it's been possible to
+[enable parts of SIP](https://forums.developer.apple.com/thread/17452).
+So, for example, you can use the following command (when booted from
+the recovery partition) to enable everything but "kernel extension
+protection":
+
+        csrutil enable --without kext
+
+I only became aware of this recently, thanks to the reporter of
+[Issue #7](https://github.com/steven-michaud/HookCase/issues/7).
+That bug report also revealed problems using HookCase on macOS 10.14
+(Mojave) with this configuration.  Version 3.1 fixes these problems.
+
+Note that, for HookCase to work properly on macOS 10.14 with this
+configuration, you will need to codesign your hook libraries (using
+something like `codesign -s "Your Name" hook.dylib`).  For this you'll
+need to get a Mac Developer codesigning certificate from Apple,
+presumably by joining their
+[Apple Developer Program](https://developer.apple.com/programs/).
+
 # What's New in Version 3.0
 
 HookCase now supports macOS Mojave (10.14).
