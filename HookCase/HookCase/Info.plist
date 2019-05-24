@@ -15,11 +15,11 @@
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
-	<string>3.1</string>
+	<string>3.2</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>3.1</string>
+	<string>3.2</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2018 Steven Michaud. All rights reserved.</string>
 	<key>OSBundleLibraries</key>

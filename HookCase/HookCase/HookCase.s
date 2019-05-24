@@ -139,7 +139,7 @@
 #define CPU_TASK_CR3_NOKERNEL_BP   288
 #define CPU_USER_STACK_BP          336
 
-/* On getting an interrupt, the Intel processor first ORs RSP with
+/* On getting an interrupt, the Intel processor first ANDs RSP with
  * 0xFFFFFFFFFFFFFFF0, to make it 16-byte aligned.  Then it pushes the
  * following registers onto the (current) stack (user or kernel):
  *
@@ -221,16 +221,18 @@ Entry(setup_continues)
     * (In user space, GS is normally used for thread-local storage.)
     */
 1: swapgs
+
    push    %rax
    mov     %gs:CPU_NUMBER, %ax
    mov     %ax, ISF64_CPU+8(%rsp)
-   pop     %rax
 
    /* Make room on the stack for the rest of the interrupt stack frame,
     * then fill it out with saved registers (64-bit or 32-bit).  Also switch
     * to the kernel stack.
     */
-   cmpl    $(TASK_MAP_32BIT), %gs:CPU_TASK_MAP
+   mov     EXT(g_cpu_task_map_offset)(%rip), %rax
+   cmpl    $(TASK_MAP_32BIT), %gs:(%rax)
+   pop     %rax
    je      3f
 
    cmpl    $0, EXT(g_kpti_enabled)(%rip)
@@ -238,8 +240,12 @@ Entry(setup_continues)
    /* Deal with an interrupt coming in from our dispatcher in the HIB segment,
     * with KPTI enabled.
     */
-   mov     %rax, %gs:CPU_UBER_TMP
-   mov     %gs:CPU_UBER_ISF, %rax
+   push    %rcx
+   mov     EXT(g_cpu_uber_tmp_offset)(%rip), %rcx
+   mov     %rax, %gs:(%rcx)
+   mov     EXT(g_cpu_uber_isf_offset)(%rip), %rcx
+   mov     %gs:(%rcx), %rax
+   pop     %rcx
    add     $(ISF64_SIZE), %rax
    xchg    %rsp, %rax
    push    ISF64_SS(%rax)
@@ -250,7 +256,10 @@ Entry(setup_continues)
    push    ISF64_ERR(%rax)
    push    ISF64_TRAPFN(%rax)
    push    ISF64_TRAPNO(%rax) /* trapno, cpu, pad */
-   mov     %gs:CPU_UBER_TMP, %rax
+   push    %rcx
+   mov     EXT(g_cpu_uber_tmp_offset)(%rip), %rcx
+   mov     %gs:(%rcx), %rax
+   pop     %rcx
 
    /* 64-bit user interrupt */
 2: sub     $(ISS64_OFFSET), %rsp
@@ -349,75 +358,86 @@ Entry(setup_continues)
    test    %eax, %eax
    jz      5f
    mov     %rcx, %cr3
-   jmp     7f
+   jmp     8f
    /* If the kernel and user-space share the same CR3, we need to check if the
     * kernel's memory mapping has changed since the kernel was last entered.
     */
 5: mov     %gs:CPU_TLB_INVALID, %ecx
    test    %ecx, %ecx     /* Invalid either globally or locally? */
-   jz      7f
+   jz      8f
    shr     $16, %ecx
    test    $1, %ecx       /* Invalid globally? */
+   jz      7f
+   /* If invalid globally, use invpcid or play games with CR4_PGE */
+   cmpl    $0, EXT(g_use_invpcid)(%rip)
    jz      6f
-   /* If invalid globally, play games with CR4_PGE */
-   movl    $0, %gs:CPU_TLB_INVALID
+   mov     EXT(g_cpu_invpcid_target_offset)(%rip), %rax
+   mov     $(2), %ecx
+   invpcid %gs:(%rax), %rcx
+   jmp     8f
+6: movl    $0, %gs:CPU_TLB_INVALID
    mov     %cr4, %rcx
    and     $(~CR4_PGE), %rcx
    mov     %rcx, %cr4
    or      $(CR4_PGE), %rcx
    mov     %rcx, %cr4
-   jmp     7f
+   jmp     8f
    /* If only invalid locally, just reset CR3 to the same value */
-6: movb    $0, %gs:CPU_TLB_INVALID_LOCAL
+7: movb    $0, %gs:CPU_TLB_INVALID_LOCAL
    mov     %cr3, %rcx
    mov     %rcx, %cr3
 
    /* Clear EFLAGS.AC if SMAP is present/enabled */
-7: mov     EXT(g_pmap_smap_enabled_ptr)(%rip), %rax
+8: mov     EXT(g_pmap_smap_enabled_ptr)(%rip), %rax
    cmp     $(-1), %rax
-   je      8f
+   je      9f
    test    %rax, %rax
-   jz      8f
+   jz      9f
    mov     (%rax), %eax
    test    %eax, %eax
-   jz      8f
+   jz      9f
    clac
 
    /* Set the Task Switch bit in CR0 to keep floating point happy */
-8: mov     %cr0, %rax
+9: mov     %cr0, %rax
    or      $(CR0_TS), %eax
    mov     %rax, %cr0
 
-   push    %r15
+/* As best I can tell we don't really need this. And it causes trouble on
+   recent minor releases of macOS 10.12 and 10.13. */
+/* push    %r15
    mov     %rsp, %r15
    and     $0xFFFFFFFFFFFFFFF0, %rsp
    call    EXT(reset_iotier_override)
    mov     %r15, %rsp
    pop     %r15
-
+*/
    /* R15 == x86_saved_state_t */
    /* RDX == trapfn */
    jmp     *%rdx
 
 /* R15 == x86_saved_state_t */
 Entry(teardown)
-   push    %r15
+/* As best I can tell we don't really need this. */
+/* push    %r15
    mov     %rsp, %r15
    and     $0xFFFFFFFFFFFFFFF0, %rsp
    call    EXT(reset_iotier_override)
    mov     %r15, %rsp
    pop     %r15
-
+*/
    /* Restore the floating point state */
-   push    %r15
+/* As best I can tell we don't really need this. */
+/* push    %r15
    mov     %rsp, %r15
    and     $0xFFFFFFFFFFFFFFF0, %rsp
    call    EXT(restore_fp)
    mov     %r15, %rsp
    pop     %r15
-
+*/
    /* Switch back to the user CR3, if appropriate */
-   mov     %gs:CPU_TASK_CR3, %rcx
+   mov     EXT(g_cpu_task_cr3_minus_offset)(%rip), %rax
+   mov     %gs:(%rax), %rcx
    mov     %rcx, %gs:CPU_ACTIVE_CR3
    mov     EXT(g_no_shared_cr3_ptr)(%rip), %rax
    cmp     $(-1), %rax

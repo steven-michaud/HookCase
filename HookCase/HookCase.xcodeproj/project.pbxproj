@@ -229,7 +229,7 @@
 				MODULE_NAME = org.smichaud.HookCase;
 				MODULE_START = HookCase_start;
 				MODULE_STOP = HookCase_stop;
-				MODULE_VERSION = 3.1.0;
+				MODULE_VERSION = 3.2;
 				PRODUCT_BUNDLE_IDENTIFIER = org.smichaud.HookCase;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				WRAPPER_EXTENSION = kext;
@@ -245,7 +245,7 @@
 				MODULE_NAME = org.smichaud.HookCase;
 				MODULE_START = HookCase_start;
 				MODULE_STOP = HookCase_stop;
-				MODULE_VERSION = 3.1.0;
+				MODULE_VERSION = 3.2;
 				PRODUCT_BUNDLE_IDENTIFIER = org.smichaud.HookCase;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				WRAPPER_EXTENSION = kext;

@@ -235,13 +235,30 @@ bool macOS_HighSierra_less_than_4()
   if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_10_13_HEX)) {
     return false;
   }
-  // The output of "uname -r" for macOS 10.3.4 is actually "17.5.0"
+  // The output of "uname -r" for macOS 10.13.4 is actually "17.5.0"
   return ((OSX_Version() & 0xFF) < 0x50);
 }
 
 bool macOS_Mojave()
 {
   return ((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_10_14_HEX);
+}
+
+bool macOS_Mojave_less_than_2()
+{
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_10_14_HEX)) {
+    return false;
+  }
+  return ((OSX_Version() & 0xFF) < 0x20);
+}
+
+bool macOS_Mojave_less_than_5()
+{
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_10_14_HEX)) {
+    return false;
+  }
+  // The output of "uname -r" for macOS 10.14.5 is actually "18.6.0"
+  return ((OSX_Version() & 0xFF) < 0x60);
 }
 
 bool OSX_Version_Unsupported()
@@ -879,6 +896,7 @@ typedef kern_return_t (*task_hold_t)(task_t task);
 typedef kern_return_t (*task_release_t)(task_t task);
 typedef kern_return_t (*task_wait_t)(task_t task, boolean_t until_not_runnable);
 typedef uint64_t (*cpuid_features_t)();
+typedef uint64_t (*cpuid_leaf7_features_t)();
 typedef kern_return_t (*vm_fault_t)(vm_map_t map,
                                     vm_map_offset_t vaddr,
                                     vm_prot_t fault_type,
@@ -953,6 +971,7 @@ static task_hold_t task_hold = NULL;
 static task_release_t task_release = NULL;
 static task_wait_t task_wait = NULL;
 static cpuid_features_t cpuid_features_ptr = NULL;
+static cpuid_leaf7_features_t cpuid_leaf7_features_ptr = NULL;
 static vm_fault_t vm_fault = NULL;
 static vm_map_page_mask_t vm_map_page_mask = NULL;
 static vm_map_page_size_t vm_map_page_size = NULL;
@@ -1175,6 +1194,13 @@ bool find_kernel_private_functions()
     cpuid_features_ptr = (cpuid_features_t)
       kernel_dlsym("_cpuid_features");
     if (!cpuid_features_ptr) {
+      return false;
+    }
+  }
+  if (!cpuid_leaf7_features_ptr) {
+    cpuid_leaf7_features_ptr = (cpuid_leaf7_features_t)
+      kernel_dlsym("_cpuid_leaf7_features");
+    if (!cpuid_leaf7_features_ptr) {
       return false;
     }
   }
@@ -3404,6 +3430,20 @@ typedef struct thread_fake_mojave_development
   void *ifps;           // Offset 0x478
 } thread_fake_mojave_development_t;
 
+// Apple changed some values in the macOS 10.14.2 minor release :-(
+typedef struct thread_fake_mojave_development_2
+{
+  uint32_t pad1[24];
+  integer_t options;    // Offset 0x60
+  uint32_t pad2[23];
+  int iotier_override;  // Offset 0xc0
+  uint32_t pad3[175];
+  vm_map_t map;         // Offset 0x380
+  uint32_t pad4[64];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0x488
+} thread_fake_mojave_development_2_t;
+
 typedef struct thread_fake_mojave_debug
 {
   uint32_t pad1[56];
@@ -3416,6 +3456,20 @@ typedef struct thread_fake_mojave_debug
   // Actually a member of thread_t's 'machine' member.
   void *ifps;           // Offset 0x580
 } thread_fake_mojave_debug_t;
+
+// Apple changed some values in the macOS 10.14.2 minor release :-(
+typedef struct thread_fake_mojave_debug_2
+{
+  uint32_t pad1[56];
+  integer_t options;    // Offset 0xe0
+  uint32_t pad2[23];
+  int iotier_override;  // Offset 0x140
+  uint32_t pad3[209];
+  vm_map_t map;         // Offset 0x488
+  uint32_t pad4[64];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0x590
+} thread_fake_mojave_debug_2_t;
 
 typedef struct thread_fake_highsierra
 {
@@ -3691,6 +3745,7 @@ wait_interrupt_t thread_interrupt_level(wait_interrupt_t new_level)
   return oldval;
 }
 
+#if (0)
 x86_fx_thread_state_fake_t *get_fp_thread_state()
 {
   thread_t thread = current_thread();
@@ -3768,7 +3823,9 @@ x86_fx_thread_state_fake_t *get_fp_thread_state()
 
   return retval;
 }
+#endif
 
+#if (0)
 vm_map_t thread_map(thread_t thread)
 {
   if (!thread) {
@@ -3844,12 +3901,17 @@ vm_map_t thread_map(thread_t thread)
 
   return retval;
 }
+#endif
 
+#if (0)
 // Is floating point currently in use (in user space) with an invalid
 // state?  Returns false if there isn't any floating point thread state
 // (which indicates that floating point isn't currently in use).  Don't do
 // too much here -- interrupts are cleared!  For example, the kernel panics
 // if you call get_kernel_type() for the first time, or if you call printf()!
+//
+// This method is probably unnecessary, so from now on we'll try to do
+// without it.
 extern "C" bool invalid_fp_thread_state()
 {
   bool retval = false;
@@ -3859,10 +3921,17 @@ extern "C" bool invalid_fp_thread_state()
   }
   return retval;
 }
+#endif
 
+#if (0)
 // Don't do too much here -- interrupts are cleared!  For example, the kernel
 // panics if you call get_kernel_type() for the first time, or if you call
 // printf() at all!
+//
+// This method causes trouble with the development kernel in recent minor
+// updates on macOS 12 and 13 -- kernel panics, often with the message
+// "Assertion failed: thread->user_promotion_basepri == 0".  And it is
+// probably unnecessary.  So from now on we'll try to do without it.
 extern "C" void reset_iotier_override()
 {
   thread_t thread = current_thread();
@@ -3943,10 +4012,15 @@ extern "C" void reset_iotier_override()
       THROTTLE_LEVEL_NONE;
   }
 }
+#endif
 
+#if (0)
 // Don't do too much here -- interrupts are cleared!  For example, the kernel
 // panics if you call get_kernel_type() for the first time, or if you call
 // printf() at all!
+//
+// This method is probably unnecessary, so from now on we'll try to do
+// without it.
 extern "C" void restore_fp()
 {
   thread_t current = current_thread();
@@ -3954,6 +4028,7 @@ extern "C" void restore_fp()
     fp_load(current);
   }
 }
+#endif
 
 // Possible value for uu_flag.
 #define UT_NOTCANCELPT 0x00000004  /* not a cancelation point */
@@ -4935,6 +5010,8 @@ typedef struct _task_fake_highsierra {
   mach_vm_size_t all_image_info_size;    // Offset 0x3d8
 } *task_fake_highsierra_t;
 
+// Apple messed with the development and debug versions of this structure in
+// the macOS 10.14.2 release :-(
 typedef struct _task_fake_mojave {
   lck_mtx_t lock;       // Size 0x10
   uint64_t pad1[6];
@@ -4945,6 +5022,18 @@ typedef struct _task_fake_mojave {
   mach_vm_address_t all_image_info_addr; // Offset 0x3c0
   mach_vm_size_t all_image_info_size;    // Offset 0x3c8
 } *task_fake_mojave_t;
+
+// Only valid on macOS 10.14.2 and up
+typedef struct _task_fake_mojave_dev_debug {
+  lck_mtx_t lock;       // Size 0x10
+  uint64_t pad1[8];
+  queue_head_t threads; // Size 0x10, offset 0x50
+  uint64_t pad2[109];
+  volatile uint32_t t_flags; /* Offset 0x3c8, general-purpose task flags protected by task_lock (TL) */
+  uint32_t pad3[1];
+  mach_vm_address_t all_image_info_addr; // Offset 0x3d0
+  mach_vm_size_t all_image_info_size;    // Offset 0x3d8
+} *task_fake_mojave_dev_debug_t;
 
 void task_lock(task_t task)
 {
@@ -4973,8 +5062,15 @@ mach_vm_address_t task_all_image_info_addr(task_t task)
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
     if (macOS_Mojave()) {
-      offset_in_struct =
-        offsetof(struct _task_fake_mojave, all_image_info_addr);
+      if (macOS_Mojave_less_than_2() || kernel_type_is_release()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_mojave, all_image_info_addr);
+      } else if (kernel_type_is_development() ||
+                 kernel_type_is_debug())
+      {
+        offset_in_struct =
+          offsetof(struct _task_fake_mojave_dev_debug, all_image_info_addr);
+      }
     } else if (macOS_HighSierra()) {
       offset_in_struct =
         offsetof(struct _task_fake_highsierra, all_image_info_addr);
@@ -5011,8 +5107,15 @@ mach_vm_size_t task_all_image_info_size(task_t task)
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
     if (macOS_Mojave()) {
-      offset_in_struct =
-        offsetof(struct _task_fake_mojave, all_image_info_size);
+      if (macOS_Mojave_less_than_2() || kernel_type_is_release()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_mojave, all_image_info_size);
+      } else if (kernel_type_is_development() ||
+                 kernel_type_is_debug())
+      {
+        offset_in_struct =
+          offsetof(struct _task_fake_mojave_dev_debug, all_image_info_size);
+      }
     } else if (macOS_HighSierra()) {
       offset_in_struct =
         offsetof(struct _task_fake_highsierra, all_image_info_size);
@@ -5049,7 +5152,14 @@ uint32_t task_flags(task_t task)
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
     if (macOS_Mojave()) {
-      offset_in_struct = offsetof(struct _task_fake_mojave, t_flags);
+      if (macOS_Mojave_less_than_2() || kernel_type_is_release()) {
+        offset_in_struct = offsetof(struct _task_fake_mojave, t_flags);
+      } else if (kernel_type_is_development() ||
+                 kernel_type_is_debug())
+      {
+        offset_in_struct =
+          offsetof(struct _task_fake_mojave_dev_debug, t_flags);
+      }
     } else if (macOS_HighSierra()) {
       offset_in_struct = offsetof(struct _task_fake_highsierra, t_flags);
     } else if (macOS_Sierra()) {
@@ -10202,8 +10312,16 @@ boolean_t *g_pmap_smap_enabled_ptr = (boolean_t *) -1;
 
 boolean_t g_kpti_enabled = (boolean_t) -1;
 
+boolean_t g_use_invpcid = (boolean_t) -1;
+
+uint64_t g_cpu_invpcid_target_offset = (uint64_t) -1;
+uint64_t g_cpu_task_map_offset = (uint64_t) -1;
+uint64_t g_cpu_task_cr3_offset = (uint64_t) -1;
+uint64_t g_cpu_task_cr3_minus_offset = (uint64_t) -1;
 uint64_t g_cpu_kernel_cr3_offset = (uint64_t) -1;
 uint64_t g_cpu_user_cr3_offset = (uint64_t) -1;
+uint64_t g_cpu_uber_isf_offset = (uint64_t) -1;
+uint64_t g_cpu_uber_tmp_offset = (uint64_t) -1;
 uint64_t g_cpu_excstack_offset = (uint64_t) -1;
 
 typedef struct __attribute__((packed)) {
@@ -10295,34 +10413,87 @@ bool is_kpti_enabled(idt64_entry **idt_base)
   return g_kpti_enabled;
 }
 
+void initialize_use_invpcid()
+{
+  if (!find_kernel_private_functions()) {
+    return;
+  }
+
+  if (!macOS_Mojave() || macOS_Mojave_less_than_5()) {
+    g_use_invpcid = false;
+  } else {
+    if ((cpuid_leaf7_features_ptr() & CPUID_LEAF7_FEATURE_INVPCID)) {
+      g_use_invpcid = true;
+    } else {
+      g_use_invpcid = false;
+    }
+  }
+}
+
 void initialize_cpu_data_offsets()
 {
   if (!find_kernel_private_functions()) {
     return;
   }
+
+  g_cpu_invpcid_target_offset =
+    offsetof(cpu_data_fake_t, cpu_invpcid_target);
+  g_cpu_task_map_offset =
+    offsetof(cpu_data_fake_t, cpu_task_map);
+  g_cpu_task_cr3_offset =
+    offsetof(cpu_data_fake_t, cpu_task_cr3);
+  g_cpu_task_cr3_minus_offset =
+    offsetof(cpu_data_fake_t, cpu_task_cr3);
   g_cpu_kernel_cr3_offset =
     offsetof(cpu_data_fake_t, cpu_kernel_cr3);
+  g_cpu_user_cr3_offset =
+    offsetof(cpu_data_fake_t, cpu_user_cr3);
+  g_cpu_uber_isf_offset =
+    offsetof(cpu_data_fake_t, cpu_uber_isf);
+  g_cpu_uber_tmp_offset =
+    offsetof(cpu_data_fake_t, cpu_uber_tmp);
+  g_cpu_excstack_offset =
+    offsetof(cpu_data_fake_t, cpu_excstack);
+
   if (!is_kpti_enabled(NULL)) {
     return;
   }
-  if (macOS_Mojave() || macOS_HighSierra()) {
-    if (macOS_HighSierra_less_than_4()) {
-      g_cpu_kernel_cr3_offset =
-        offsetof(cpu_data_fake_t, cpu_kernel_cr3_goofed);
-      g_cpu_user_cr3_offset =
-        offsetof(cpu_data_fake_t, cpu_user_cr3_goofed);
-    } else {
-      g_cpu_user_cr3_offset =
-        offsetof(cpu_data_fake_t, cpu_user_cr3);
-    }
-    g_cpu_excstack_offset =
-      offsetof(cpu_data_fake_t, cpu_excstack);
-  } else {
+
+  if (macOS_HighSierra_less_than_4()) {
+    g_cpu_kernel_cr3_offset =
+      offsetof(cpu_data_fake_t, cpu_kernel_cr3_goofed);
     g_cpu_user_cr3_offset =
-      offsetof(cpu_data_fake_t, cpu_user_cr3_bp);
-    g_cpu_excstack_offset =
-      offsetof(cpu_data_fake_t, cpu_excstack_bp);
+      offsetof(cpu_data_fake_t, cpu_user_cr3_goofed);
+    return;
   }
+
+  if (macOS_HighSierra() || macOS_Mojave_less_than_5()) {
+    return;
+  }
+
+  if (macOS_Mojave()) {
+    g_cpu_task_map_offset =
+      offsetof(cpu_data_fake_t, cpu_task_map_mds);
+    g_cpu_task_cr3_offset =
+      offsetof(cpu_data_fake_t, cpu_task_cr3_mds);
+    g_cpu_task_cr3_minus_offset =
+      offsetof(cpu_data_fake_t, cpu_task_cr3_minus);
+    g_cpu_kernel_cr3_offset =
+      offsetof(cpu_data_fake_t, cpu_kernel_cr3_mds);
+    g_cpu_user_cr3_offset =
+      offsetof(cpu_data_fake_t, cpu_user_cr3_mds);
+    g_cpu_uber_isf_offset =
+      offsetof(cpu_data_fake_t, cpu_uber_isf_mds);
+    g_cpu_uber_tmp_offset =
+      offsetof(cpu_data_fake_t, cpu_uber_tmp_mds);
+    g_cpu_excstack_offset =
+      offsetof(cpu_data_fake_t, cpu_excstack_mds);
+    return;
+  }
+
+  // KPTI enabled, backported to 10.12.6 and 10.11.6
+  g_cpu_excstack_offset =
+    offsetof(cpu_data_fake_t, cpu_excstack_bp);
 }
 
 #define RETURN_FROM_KEXT_PAGE_OFFSET 0xFA8
@@ -10517,10 +10688,13 @@ bool install_stub_dispatcher()
   dispatch_to_kext_bytecodes[23] = 0x48;
   dispatch_to_kext_bytecodes[24] = 0x8B;
   dispatch_to_kext_bytecodes[25] = 0x80;
-  dispatch_to_kext_bytecodes[26] = 0x10;
-  dispatch_to_kext_bytecodes[27] = 0x01;
-  dispatch_to_kext_bytecodes[28] = 0x00;
-  dispatch_to_kext_bytecodes[29] = 0x00;
+  //dispatch_to_kext_bytecodes[26] = 0x10;
+  //dispatch_to_kext_bytecodes[27] = 0x01;
+  //dispatch_to_kext_bytecodes[28] = 0x00;
+  //dispatch_to_kext_bytecodes[29] = 0x00;
+
+  uint32_t *cpu_task_cr3_addr = (uint32_t *) &dispatch_to_kext_bytecodes[26];
+  cpu_task_cr3_addr[0] = (uint32_t) g_cpu_task_cr3_offset;
 
   // 0F 22 D8
   dispatch_to_kext_bytecodes[30] = 0x0F; //    mov   %rax, %cr3
@@ -10731,7 +10905,7 @@ bool install_intr_handler(int intr_num)
     // 50
     our_stub[0]  = 0x50;     //   push   %rax
     // 6A NN
-    our_stub[1]  = 0x6A;     //   pushq  $(0x2N)
+    our_stub[1]  = 0x6A;     //   pushq  $(0xNN)
     our_stub[2]  = intr_num; //   (Do *not* use the 0x68 form of this instruction)
     // E9 00 00 00 00
     our_stub[3]  = 0xE9;     //   jmp    _dispatch_to_kext
@@ -10975,6 +11149,7 @@ kern_return_t HookCase_start(kmod_info_t * ki, void *d)
     kprintf("HookCase: Unknown kernel type\n");
     return KERN_FAILURE;
   }
+  initialize_use_invpcid();
   initialize_cpu_data_offsets();
   if (!install_intr_handlers()) {
     remove_intr_handlers();
