@@ -88,5 +88,5 @@ allow the original `dyld::InitializeMainExecutable()` method to run
 (which, among other things, runs the process's C++ initializers).
 
 For more information, the best place to start is the
-[long series of comments](HookCase/HookCase/HookCase.cpp#L6503)
+[long series of comments](HookCase/HookCase/HookCase.cpp#L6613)
 in `HookCase.cpp` before the definition of `C_64_REDZONE_LEN`.
