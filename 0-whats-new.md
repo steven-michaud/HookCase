@@ -61,12 +61,12 @@ can now hook methods that aren't in their module's symbol table.  For
 more information see
 [Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L817).
 
-* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L8614) that
+* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L8616) that
 prevented interpose hooks from working outside the shared cache of
 system modules.
 
 * Version 2.0
-[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L9919)
+[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L9921)
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0
