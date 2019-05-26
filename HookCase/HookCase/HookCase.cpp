@@ -5983,6 +5983,22 @@ bool get_module_info(proc_t proc, const char *module_name,
     if (!proc_copyinstr(proc_map, path_addr, path_local, sizeof(path_local))) {
       continue;
     }
+    // If possible, canonicalize path_local.
+    char fixed_path_local[PATH_MAX];
+    fixed_path_local[0] = 0;
+    vfs_context_t context = vfs_context_create(NULL);
+    if (context) {
+      vnode_t module_vnode;
+      if (!vnode_lookup(path_local, 0, &module_vnode, context)) {
+        int len = sizeof(fixed_path_local);
+        vn_getpath(module_vnode, fixed_path_local, &len);
+        vnode_put(module_vnode);
+      }
+      vfs_context_rele(context);
+    }
+    if (fixed_path_local[0]) {
+      strncpy(path_local, fixed_path_local, sizeof(path_local));
+    }
     if (module_name && module_name[0]) {
       if (module_name_is_basename) {
         matched = 
@@ -8779,6 +8795,22 @@ void set_interpose_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
     }
     if (!proc_copyinstr(proc_map, path_addr, path_local, sizeof(path_local))) {
       continue;
+    }
+    // If possible, canonicalize path_local.
+    char fixed_path_local[PATH_MAX];
+    fixed_path_local[0] = 0;
+    vfs_context_t context = vfs_context_create(NULL);
+    if (context) {
+      vnode_t module_vnode;
+      if (!vnode_lookup(path_local, 0, &module_vnode, context)) {
+        int len = sizeof(fixed_path_local);
+        vn_getpath(module_vnode, fixed_path_local, &len);
+        vnode_put(module_vnode);
+      }
+      vfs_context_rele(context);
+    }
+    if (fixed_path_local[0]) {
+      strncpy(path_local, fixed_path_local, sizeof(path_local));
     }
     // Don't set any interpose hooks in our hook library.  That would prevent
     // calls from hooks to their original functions from working properly.
