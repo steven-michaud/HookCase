@@ -7390,13 +7390,15 @@ bool maybe_cast_hook(proc_t proc)
     return false;
   }
 
+  wait_interrupt_t old_state = thread_interrupt_level(THREAD_UNINT);
   hc_path_t proc_path;
   hc_path_t dylib_path;
   pid_t hooked_parent;
   bool no_numerical_addrs;
-  if (!get_cast_info(proc, proc_path, dylib_path,
-                     &hooked_parent, &no_numerical_addrs))
-  {
+  bool rv = get_cast_info(proc, proc_path, dylib_path,
+                          &hooked_parent, &no_numerical_addrs);
+  thread_interrupt_level(old_state);
+  if (!rv) {
     return false;
   }
 
