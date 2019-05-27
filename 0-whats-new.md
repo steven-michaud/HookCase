@@ -5,8 +5,7 @@ kernel on macOS 10.14. For more information see
 [Issue #11](https://github.com/steven-michaud/HookCase/issues/11)
 and the following commit:
 
-[Resume resetting iotier_override, and restore support for debug kernel on 10.14]
-(https://github.com/steven-michaud/HookCase/commit/30dd592df4f4792e5487d6e53d72eb585fd10028)
+[Resume resetting iotier_override, and restore support for debug kernel on 10.14](https://github.com/steven-michaud/HookCase/commit/30dd592df4f4792e5487d6e53d72eb585fd10028)
 
 # What's New in Version 3.2
 
