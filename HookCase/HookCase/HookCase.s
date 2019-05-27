@@ -116,6 +116,7 @@
 #define SS_64                 15
 
 /* Offsets of cpu_data_fake_t fields in cpu_data_fake_t */
+#define CPU_ACTIVE_THREAD          8
 #define CPU_PREEMPTION_LEVEL       24
 #define CPU_NUMBER                 28
 #define CPU_INT_STATE              32
@@ -403,29 +404,20 @@ Entry(setup_continues)
    or      $(CR0_TS), %eax
    mov     %rax, %cr0
 
-/* As best I can tell we don't really need this. And it causes trouble on
-   recent minor releases of macOS 10.12 and 10.13. */
-/* push    %r15
-   mov     %rsp, %r15
-   and     $0xFFFFFFFFFFFFFFF0, %rsp
-   call    EXT(reset_iotier_override)
-   mov     %r15, %rsp
-   pop     %r15
-*/
+   mov     EXT(g_iotier_override_offset)(%rip), %rax
+   add     %gs:CPU_ACTIVE_THREAD, %rax
+   movl    $(-1), (%rax)
+
    /* R15 == x86_saved_state_t */
    /* RDX == trapfn */
    jmp     *%rdx
 
 /* R15 == x86_saved_state_t */
 Entry(teardown)
-/* As best I can tell we don't really need this. */
-/* push    %r15
-   mov     %rsp, %r15
-   and     $0xFFFFFFFFFFFFFFF0, %rsp
-   call    EXT(reset_iotier_override)
-   mov     %r15, %rsp
-   pop     %r15
-*/
+   mov     EXT(g_iotier_override_offset)(%rip), %rax
+   add     %gs:CPU_ACTIVE_THREAD, %rax
+   movl    $(-1), (%rax)
+
    /* Restore the floating point state */
 /* As best I can tell we don't really need this. */
 /* push    %r15

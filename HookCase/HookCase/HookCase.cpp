@@ -239,6 +239,43 @@ bool macOS_HighSierra_less_than_4()
   return ((OSX_Version() & 0xFF) < 0x50);
 }
 
+// Build 17G7020 is a post-10.13.6 security fix.
+bool macOS_HighSierra_less_than_17G7020()
+{
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_10_13_HEX)) {
+    return false;
+  }
+
+  // The output of "uname -r" for macOS 10.13.6 is actually "17.7.0"
+  if ((OSX_Version() & 0xFF) < 0x70) {
+    return false;
+  }
+
+  static long build_num = -1;
+  if (build_num == -1) {
+    size_t build_id_string_length;
+    sysctlbyname("kern.osversion", NULL, &build_id_string_length, NULL, 0);
+    char *build_id_string = (char *) IOMalloc(build_id_string_length);
+    if (!build_id_string) {
+      return false;
+    }
+    // Build ids for macOS 10.13.6 all start with "17G".  Remove that and
+    // use the rest as a build number.
+    if (sysctlbyname("kern.osversion", build_id_string,
+                     &build_id_string_length, NULL, 0) == 0)
+    {
+      const char *build_num_string = build_id_string + 3;
+      build_num = strtol(build_num_string, NULL, 16);
+    }
+    IOFree(build_id_string, build_id_string_length);
+    if (build_num == -1) {
+      return false;
+    }
+  }
+
+  return (build_num < 0x7020);
+}
+
 bool macOS_Mojave()
 {
   return ((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_10_14_HEX);
@@ -328,11 +365,16 @@ kernel_type get_kernel_type()
   // and without HookCase.  In fact all that's needed to trigger a panic is to
   // start Safari, visit apple.com, then quit it.  These panics all have the
   // error "Assertion failed: object->vo_purgeable_volatilizer == NULL".
+  //
+  // The macOS 10.14 DEBUG kernel is still a bit flaky (as of 10.14.5), but
+  // it's not nearly so bad as before.
+#if (0)
   if (macOS_Mojave()) {
     if (type == kernel_type_debug) {
       type = kernel_type_unknown;
     }
   }
+#endif
 
   return type;
 }
@@ -3484,6 +3526,21 @@ typedef struct thread_fake_highsierra
   int iotier_override;  // Offset 0x4b0
 } thread_fake_highsierra_t;
 
+// As of build 17G7020 the size of the 'machine' struct increased by one byte.
+// So the offset of 'iotier_override' was pushed down by one byte.
+typedef struct thread_fake_highsierra_17G7020
+{
+  uint32_t pad1[14];
+  integer_t options;    // Offset 0x38
+  uint32_t pad2[193];
+  vm_map_t map;         // Offset 0x340
+  uint32_t pad3[58];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0x430
+  uint32_t pad4[32];
+  int iotier_override;  // Offset 0x4b8
+} thread_fake_highsierra_17G7020_t;
+
 typedef struct thread_fake_highsierra_development
 {
   uint32_t pad1[16];
@@ -3497,6 +3554,21 @@ typedef struct thread_fake_highsierra_development
   int iotier_override;  // Offset 0x4c8
 } thread_fake_highsierra_development_t;
 
+// As of build 17G7020 the size of the 'machine' struct increased by one byte.
+// So the offset of 'iotier_override' was pushed down by one byte.
+typedef struct thread_fake_highsierra_development_17G7020
+{
+  uint32_t pad1[16];
+  integer_t options;    // Offset 0x40
+  uint32_t pad2[193];
+  vm_map_t map;         // Offset 0x348
+  uint32_t pad3[62];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0x448
+  uint32_t pad4[32];
+  int iotier_override;  // Offset 0x4d0
+} thread_fake_highsierra_development_17G7020_t;
+
 typedef struct thread_fake_highsierra_debug
 {
   uint32_t pad1[48];
@@ -3509,6 +3581,21 @@ typedef struct thread_fake_highsierra_debug
   uint32_t pad4[46];
   int iotier_override;  // Offset 0x610
 } thread_fake_highsierra_debug_t;
+
+// As of build 17G7020 the size of the 'machine' struct increased by one byte.
+// So the offset of 'iotier_override' was pushed down by one byte.
+typedef struct thread_fake_highsierra_debug_17G7020
+{
+  uint32_t pad1[48];
+  integer_t options;    // Offset 0xc0
+  uint32_t pad2[227];
+  vm_map_t map;         // Offset 0x450
+  uint32_t pad3[62];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0x550
+  uint32_t pad4[48];
+  int iotier_override;  // Offset 0x618
+} thread_fake_highsierra_debug_17G7020_t;
 
 typedef struct thread_fake_sierra
 {
@@ -3652,6 +3739,93 @@ typedef struct thread_fake_mavericks_debug
   uint32_t pad4[50];
   int iotier_override;  // Offset 0x570
 } thread_fake_mavericks_debug_t;
+
+uint64_t g_iotier_override_offset = (uint64_t) -1;
+
+void initialize_thread_offsets()
+{
+  if (!find_kernel_private_functions()) {
+    return;
+  }
+
+  if (macOS_Mojave()) {
+    if (kernel_type_is_release()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_mojave, iotier_override);
+    } else if (kernel_type_is_development()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_mojave_development, iotier_override);
+    } else if (kernel_type_is_debug()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_mojave_debug, iotier_override);
+    }
+  } else if (macOS_HighSierra()) {
+    if (macOS_HighSierra_less_than_17G7020()) {
+      if (kernel_type_is_release()) {
+        g_iotier_override_offset =
+          offsetof(struct thread_fake_highsierra, iotier_override);
+      } else if (kernel_type_is_development()) {
+        g_iotier_override_offset =
+          offsetof(struct thread_fake_highsierra_development, iotier_override);
+      } else if (kernel_type_is_debug()) {
+        g_iotier_override_offset =
+          offsetof(struct thread_fake_highsierra_debug, iotier_override);
+      }
+    } else {
+      if (kernel_type_is_release()) {
+        g_iotier_override_offset =
+          offsetof(struct thread_fake_highsierra_17G7020, iotier_override);
+      } else if (kernel_type_is_development()) {
+        g_iotier_override_offset =
+          offsetof(struct thread_fake_highsierra_development_17G7020, iotier_override);
+      } else if (kernel_type_is_debug()) {
+        g_iotier_override_offset =
+          offsetof(struct thread_fake_highsierra_debug_17G7020, iotier_override);
+      }
+    }
+  } else if (macOS_Sierra()) {
+    if (kernel_type_is_release()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_sierra, iotier_override);
+    } else if (kernel_type_is_development()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_sierra_development, iotier_override);
+    } else if (kernel_type_is_debug()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_sierra_debug, iotier_override);
+    }
+  } else if (OSX_ElCapitan()) {
+    if (kernel_type_is_release()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_elcapitan, iotier_override);
+    } else if (kernel_type_is_development()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_elcapitan_development, iotier_override);
+    } else if (kernel_type_is_debug()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_elcapitan_debug, iotier_override);
+    }
+  } else if (OSX_Yosemite()) {
+    if (kernel_type_is_release()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_yosemite, iotier_override);
+    } else if (kernel_type_is_development()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_yosemite_development, iotier_override);
+    } else if (kernel_type_is_debug()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_yosemite_debug, iotier_override);
+    }
+  } else if (OSX_Mavericks()) {
+    if (kernel_type_is_release()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_mavericks, iotier_override);
+    } else if (kernel_type_is_debug()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_mavericks_debug, iotier_override);
+    }
+  }
+}
 
 // From the xnu kernel's osfmk/kern/thread.h
 #define TH_OPT_INTMASK  0x0003  /* interrupt / abort level */
@@ -3920,97 +4094,6 @@ extern "C" bool invalid_fp_thread_state()
     retval = (thread_state->fp_valid == 0);
   }
   return retval;
-}
-#endif
-
-#if (0)
-// Don't do too much here -- interrupts are cleared!  For example, the kernel
-// panics if you call get_kernel_type() for the first time, or if you call
-// printf() at all!
-//
-// This method causes trouble with the development kernel in recent minor
-// updates on macOS 12 and 13 -- kernel panics, often with the message
-// "Assertion failed: thread->user_promotion_basepri == 0".  And it is
-// probably unnecessary.  So from now on we'll try to do without it.
-extern "C" void reset_iotier_override()
-{
-  thread_t thread = current_thread();
-  if (!thread) {
-    return;
-  }
-
-  static vm_map_offset_t offset_in_struct = -1;
-  if (offset_in_struct == -1) {
-    if (macOS_Mojave()) {
-      if (kernel_type_is_release()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_mojave, iotier_override);
-      } else if (kernel_type_is_development()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_mojave_development, iotier_override);
-      } else if (kernel_type_is_debug()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_mojave_debug, iotier_override);
-      }
-    } else if (macOS_HighSierra()) {
-      if (kernel_type_is_release()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_highsierra, iotier_override);
-      } else if (kernel_type_is_development()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_highsierra_development, iotier_override);
-      } else if (kernel_type_is_debug()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_highsierra_debug, iotier_override);
-      }
-    } else if (macOS_Sierra()) {
-      if (kernel_type_is_release()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_sierra, iotier_override);
-      } else if (kernel_type_is_development()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_sierra_development, iotier_override);
-      } else if (kernel_type_is_debug()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_sierra_debug, iotier_override);
-      }
-    } else if (OSX_ElCapitan()) {
-      if (kernel_type_is_release()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_elcapitan, iotier_override);
-      } else if (kernel_type_is_development()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_elcapitan_development, iotier_override);
-      } else if (kernel_type_is_debug()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_elcapitan_debug, iotier_override);
-      }
-    } else if (OSX_Yosemite()) {
-      if (kernel_type_is_release()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_yosemite, iotier_override);
-      } else if (kernel_type_is_development()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_yosemite_development, iotier_override);
-      } else if (kernel_type_is_debug()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_yosemite_debug, iotier_override);
-      }
-    } else if (OSX_Mavericks()) {
-      if (kernel_type_is_release()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_mavericks, iotier_override);
-      } else if (kernel_type_is_debug()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_mavericks_debug, iotier_override);
-      }
-    }
-  }
-
-  if (offset_in_struct != -1) {
-    *((int *)((vm_map_offset_t)thread + offset_in_struct)) =
-      THROTTLE_LEVEL_NONE;
-  }
 }
 #endif
 
@@ -11183,6 +11266,7 @@ kern_return_t HookCase_start(kmod_info_t * ki, void *d)
     kprintf("HookCase: Unknown kernel type\n");
     return KERN_FAILURE;
   }
+  initialize_thread_offsets();
   initialize_use_invpcid();
   initialize_cpu_data_offsets();
   if (!install_intr_handlers()) {
