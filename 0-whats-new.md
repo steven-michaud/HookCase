@@ -1,3 +1,20 @@
+# What's New in Version 3.2.1
+
+Version 3.2.1 fixes some bugs, and restores support for the debug
+kernel on macOS 10.14. For more information see
+[Issue #11](https://github.com/steven-michaud/HookCase/issues/11)
+and the following commit:
+
+[Resume resetting iotier_override, and restore support for debug kernel on 10.14]
+(https://github.com/steven-michaud/HookCase/commit/30dd592df4f4792e5487d6e53d72eb585fd10028)
+
+# What's New in Version 3.2
+
+Version 3.2 works around changes in macOS 10.14.5 that broke
+HookCase. These were part of Apple's workaround for Intel's MDS bug.
+For more information see
+[Issue #9](https://github.com/steven-michaud/HookCase/issues/9).
+
 # What's New in Version 3.1
 
 HookCase now supports enabling all parts of "system integrity
@@ -31,7 +48,7 @@ HookCase now supports macOS Mojave (10.14).
 
 But Mojave's Debug kernel is currently very flaky -- lots of panics,
 with and without HookCase.  So support for the Debug kernel
-[has been disabled](HookCase/HookCase/HookCase.cpp#L326), at least
+[has been disabled](HookCase/HookCase/HookCase.cpp#L363), at least
 temporarily.
 
 # What's New in Version 2.1
@@ -61,12 +78,12 @@ can now hook methods that aren't in their module's symbol table.  For
 more information see
 [Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L817).
 
-* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L8616) that
+* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L8715) that
 prevented interpose hooks from working outside the shared cache of
 system modules.
 
 * Version 2.0
-[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L9921)
+[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L10036)
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0
