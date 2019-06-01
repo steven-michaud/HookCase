@@ -265,7 +265,7 @@ bool macOS_HighSierra_less_than_17G7020()
                      &build_id_string_length, NULL, 0) == 0)
     {
       const char *build_num_string = build_id_string + 3;
-      build_num = strtol(build_num_string, NULL, 16);
+      build_num = strtol(build_num_string, NULL, 10);
     }
     IOFree(build_id_string, build_id_string_length);
     if (build_num == -1) {
@@ -273,7 +273,7 @@ bool macOS_HighSierra_less_than_17G7020()
     }
   }
 
-  return (build_num < 0x7020);
+  return (build_num < 7020);
 }
 
 bool macOS_Mojave()
