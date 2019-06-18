@@ -1,6 +1,6 @@
 # The MIT License (MIT)
 #
-# Copyright (c) 2017 Steven Michaud
+# Copyright (c) 2019 Steven Michaud
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -21,27 +21,34 @@
 # SOFTWARE.
 
 CC=/usr/bin/clang++
+MOJAVE_OR_ABOVE=$(shell expr `uname -r | cut -c 1-2` \>= 18)
+# 32-bit builds no longer work on Mojave with some versions of XCode
+ifeq ($(MOJAVE_OR_ABOVE), 1)
+ARCHS=-arch x86_64
+else
+ARCHS=-arch i386 -arch x86_64
+endif
 
 all : secinitd-hook.dylib hook.dylib
 
 secinitd-hook.dylib : secinitd-hook.o
-	$(CC) -arch i386 -arch x86_64 -o secinitd-hook.dylib secinitd-hook.o \
+	$(CC) $(ARCHS) -o secinitd-hook.dylib secinitd-hook.o \
 		-lobjc -framework Cocoa -framework Carbon \
 		-Wl,-F/System/Library/PrivateFrameworks -framework CoreSymbolication \
 		-dynamiclib
 
 hook.dylib : hook.o
-	$(CC) -arch i386 -arch x86_64 -o hook.dylib hook.o \
+	$(CC) $(ARCHS) -o hook.dylib hook.o \
 		-lobjc -framework Cocoa -framework Carbon \
 		-Wl,-F/System/Library/PrivateFrameworks -framework CoreSymbolication \
 		-dynamiclib
 
 secinitd-hook.o : secinitd-hook.mm
-	$(CC) -arch i386 -arch x86_64 -o secinitd-hook.o \
+	$(CC) $(ARCHS) -o secinitd-hook.o \
 		-Wno-deprecated-declarations -c secinitd-hook.mm
 
 hook.o : hook.mm
-	$(CC) -arch i386 -arch x86_64 -o hook.o \
+	$(CC) $(ARCHS) -o hook.o \
 		-Wno-deprecated-declarations -c hook.mm
 
 clean :

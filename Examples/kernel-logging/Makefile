@@ -1,6 +1,6 @@
 # The MIT License (MIT)
 #
-# Copyright (c) 2018 Steven Michaud
+# Copyright (c) 2019 Steven Michaud
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -21,27 +21,34 @@
 # SOFTWARE.
 
 CC=/usr/bin/clang++
+MOJAVE_OR_ABOVE=$(shell expr `uname -r | cut -c 1-2` \>= 18)
+# 32-bit builds no longer work on Mojave with some versions of XCode
+ifeq ($(MOJAVE_OR_ABOVE), 1)
+ARCHS=-arch x86_64
+else
+ARCHS=-arch i386 -arch x86_64
+endif
 
 all : diagnosticd-hook.dylib logger-hook.dylib
 
 diagnosticd-hook.dylib : diagnosticd-hook.o
-	$(CC) -arch i386 -arch x86_64 -o diagnosticd-hook.dylib diagnosticd-hook.o \
+	$(CC) $(ARCHS) -o diagnosticd-hook.dylib diagnosticd-hook.o \
 		-lobjc -framework Cocoa -framework Carbon \
 		-Wl,-F/System/Library/PrivateFrameworks -framework CoreSymbolication \
 		-framework LoggingSupport -dynamiclib
 
 logger-hook.dylib : logger-hook.o
-	$(CC) -arch i386 -arch x86_64 -o logger-hook.dylib logger-hook.o \
+	$(CC) $(ARCHS) -o logger-hook.dylib logger-hook.o \
 		-lobjc -framework Cocoa -framework Carbon \
 		-Wl,-F/System/Library/PrivateFrameworks -framework CoreSymbolication \
 		-dynamiclib
 
 diagnosticd-hook.o : diagnosticd-hook.mm
-	$(CC) -arch i386 -arch x86_64 -o diagnosticd-hook.o \
+	$(CC) $(ARCHS) -o diagnosticd-hook.o \
 		-Wno-deprecated-declarations -c diagnosticd-hook.mm
 
 logger-hook.o : logger-hook.mm
-	$(CC) -arch i386 -arch x86_64 -o logger-hook.o \
+	$(CC) $(ARCHS) -o logger-hook.o \
 		-Wno-deprecated-declarations -c logger-hook.mm
 
 clean :

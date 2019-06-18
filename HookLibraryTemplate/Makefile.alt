@@ -1,6 +1,6 @@
 # The MIT License (MIT)
 #
-# Copyright (c) 2018 Steven Michaud
+# Copyright (c) 2019 Steven Michaud
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -43,51 +43,88 @@
 # HighSierra seems to require the LLVM 4.0.0 Clang download:
 # http://releases.llvm.org/4.0.0/clang+llvm-4.0.0-x86_64-apple-darwin.tar.xz.
 
-#LLVM_HOME=/usr/local/clang+llvm-4.0.0-x86_64-apple-darwin
+MOJAVE_OR_ABOVE=$(shell expr `uname -r | cut -c 1-2` \>= 18)
+# 32-bit builds no longer work on Mojave with some versions of XCode
+ifeq ($(MOJAVE_OR_ABOVE), 1)
+ARCHS=-arch x86_64
+else
+ARCHS=-arch i386 -arch x86_64
+endif
+
+HIGHSIERRA_OR_ABOVE=$(shell expr `uname -r | cut -c 1-2` \>= 17)
+ifeq ($(HIGHSIERRA_OR_ABOVE), 1)
+LLVM_HOME=/usr/local/clang+llvm-4.0.0-x86_64-apple-darwin
+else
 LLVM_HOME=/usr/local/clang+llvm-3.9.0-x86_64-apple-darwin
+endif
 CLANG=$(LLVM_HOME)/bin/clang++
 LLAS=$(LLVM_HOME)/bin/llvm-as
 LLC=$(LLVM_HOME)/bin/llc
 LIPO=lipo
 SED=sed
+MV=mv
 
 hook.dylib : hook.o
-	$(CLANG) -arch i386 -arch x86_64 -o hook.dylib hook.o \
+ifeq ($(MOJAVE_OR_ABOVE), 1)
+	$(CLANG) $(ARCHS) -o hook.dylib hook.o \
+		-lobjc -framework Cocoa -framework Carbon \
+		-Wl,-F/System/Library/PrivateFrameworks -framework CoreSymbolication \
+		-dynamiclib
+else
+	$(CLANG) $(ARCHS) -o hook.dylib hook.o \
 		-Wl,-read_only_relocs,suppress \
 		-lobjc -framework Cocoa -framework Carbon \
 		-Wl,-F/System/Library/PrivateFrameworks -framework CoreSymbolication \
 		-dynamiclib
+endif
 
+ifeq ($(MOJAVE_OR_ABOVE), 1)
+hook.o : hook-x86_64.o
+	$(MV) hook-x86_64.o hook.o
+else
 hook.o : hook-i386.o hook-x86_64.o
 	$(LIPO) -create -arch i386 hook-i386.o -arch x86_64 hook-x86_64.o \
 		-output hook.o
+endif
 
 hook-x86_64.o : hook-x86_64.s
 	$(CLANG) -arch x86_64 -o hook-x86_64.o -c hook-x86_64.s
 
+ifneq ($(MOJAVE_OR_ABOVE), 1)
 hook-i386.o : hook-i386.s
 	$(CLANG) -arch i386 -o hook-i386.o -c hook-i386.s
+endif
 
 hook-x86_64.s : hook-x86_64.bc
 	$(LLC) hook-x86_64.bc -o hook-x86_64.s
 
+ifneq ($(MOJAVE_OR_ABOVE), 1)
 hook-i386.s : hook-i386.bc
 	$(LLC) hook-i386.bc -o hook-i386.s
+endif
 
 hook-x86_64.bc : hook-x86_64.ii
 	$(LLAS) -o=hook-x86_64.bc hook-x86_64.ii
 
+ifneq ($(MOJAVE_OR_ABOVE), 1)
 hook-i386.bc : hook-i386.ii
 	$(LLAS) -o=hook-i386.bc hook-i386.ii
+endif
 
 hook-x86_64.ii : hook.mm
 	$(CLANG) -arch x86_64 -S -emit-llvm -o hook-x86_64.ii \
 		-Wno-deprecated-declarations -c hook.mm
 
+ifneq ($(MOJAVE_OR_ABOVE), 1)
 hook-i386.ii : hook.mm
 	$(CLANG) -arch i386 -S -emit-llvm -o hook-i386.iii \
 		-Wno-deprecated-declarations -c hook.mm
 	$(SED) -e 's/ x86_fastcallcc / fastcc /' hook-i386.iii > hook-i386.ii
+endif
 
 clean :
+ifeq ($(MOJAVE_OR_ABOVE), 1)
+	rm hook.o hook.dylib hook-x86_64*
+else
 	rm hook.o hook.dylib hook-i386* hook-x86_64*
+endif
