@@ -1,6 +1,6 @@
 /* The MIT License (MIT)
  *
- * Copyright (c) 2018 Steven Michaud
+ * Copyright (c) 2019 Steven Michaud
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -161,6 +161,7 @@ typedef enum {
 #define HC_INT2 0x31UL
 #define HC_INT3 0x32UL
 #define HC_INT4 0x33UL
+#define HC_INT5 0x34UL
 
 #ifndef __ASSEMBLER__
 
@@ -376,6 +377,7 @@ extern "C" void hc_int1_raw_handler(void);
 extern "C" void hc_int2_raw_handler(void);
 extern "C" void hc_int3_raw_handler(void);
 extern "C" void hc_int4_raw_handler(void);
+extern "C" void hc_int5_raw_handler(void);
 
 extern "C" void stub_handler(void);
 

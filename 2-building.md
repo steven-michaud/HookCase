@@ -1,12 +1,12 @@
 # Building
 
 HookCase requires a compatible version of OS X -- OS X 10.9
-(Mavericks) through macOS 10.13 (High Sierra).  Building it also
-requires a relatively recent version of XCode.  I recommend building
-on the version of OS X where you'll be using HookCase, and using the
-most recent version of XCode available for that version.  But the
-version of XCode you use must contain an SDK matching the version of
-macOS/OS X on which you're building.  Check in the
+(Mavericks) through macOS 10.14 (Mojave).  Building it also requires a
+relatively recent version of XCode.  I recommend building on the
+version of OS X where you'll be using HookCase, and using the most
+recent version of XCode available for that version.  But the version
+of XCode you use must contain an SDK matching the version of macOS/OS
+X on which you're building.  Check in the
 `Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs`
 directory of your XCode.app package.
 

@@ -31,7 +31,7 @@ implement the hook.  This is analogous to what a debugger does when it
 sets a breakpoint (though it uses `int 3` instead of `int 0x30`).
 Software interrupts are mostly not used on BSD-style operating systems
 like macOS and OS X, so we have plenty to choose among.  For now we're
-using those in the range `0x30-0x33`.
+using those in the range `0x30-0x34`.
 
 Whatever their disadvantages, interpose hooks are very performant.
 They're implemented by changing a pointer, so they impose no
@@ -88,5 +88,5 @@ allow the original `dyld::InitializeMainExecutable()` method to run
 (which, among other things, runs the process's C++ initializers).
 
 For more information, the best place to start is the
-[long series of comments](HookCase/HookCase/HookCase.cpp#L6712)
+[long series of comments](HookCase/HookCase/HookCase.cpp#L6713)
 in `HookCase.cpp` before the definition of `C_64_REDZONE_LEN`.

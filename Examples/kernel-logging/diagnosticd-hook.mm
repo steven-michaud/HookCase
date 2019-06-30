@@ -1,6 +1,6 @@
 // The MIT License (MIT)
 //
-// Copyright (c) 2018 Steven Michaud
+// Copyright (c) 2019 Steven Michaud
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -755,6 +755,34 @@ void reset_hook(void *hook)
   __asm__ ("int %0" :: "N" (0x32));
 }
 
+// Dynamically add a patch hook for orig_func(). Note that it's best to patch
+// orig_func() before it's actually in use -- otherwise there's some danger
+// of a race condition, especially if orig_func() can be used on different
+// threads from the one that calls add_patch_hook().
+void add_patch_hook(void *orig_func, void *hook)
+{
+  __asm__ ("int %0" :: "N" (0x33));
+}
+
+// Since several dynamically added patch hooks may share the same hook
+// function, we can't use a global "caller" variable.  So instead we use
+// the following to get an appropriate value into a local "caller" variable.
+// This must be called first in every "dynamic" hook function, to lessen the
+// chances that a race condition will cause the wrong original function's
+// "caller" to be returned.
+void *get_dynamic_caller(void *hook)
+{
+  void *retval;
+#ifdef __i386__
+  __asm__ volatile("int %0" :: "N" (0x34));
+  __asm__ volatile("mov %%eax, %0" : "=r" (retval));
+#else
+  __asm__ volatile("int %0" :: "N" (0x34));
+  __asm__ volatile("mov %%rax, %0" : "=r" (retval));
+#endif
+  return retval;
+}
+
 class loadHandler
 {
 public:
@@ -813,17 +841,43 @@ static void *Hooked_NSPushAutoreleasePool()
 }
 
 #if (0)
-// If the PATCH_FUNCTION macro is used below, this will be set to the correct
-// value by the the HookCase extension.
-int (*patch_example_caller)(char *arg) = NULL;
+// An example of a hook function for a dynamically added patch hook.  Since
+// there's no way to prevent more than one original function from sharing this
+// hook function, we can't use a global "caller".  So instead we call
+// get_dynamic_caller() to get an appropriate value into a local "caller"
+// variable.
+typedef int (*dynamic_patch_example_caller)(char *arg);
 
-static int Hooked_patch_example(char *arg)
+static int dynamic_patch_example(char *arg)
 {
-  int retval = patch_example_caller(arg);
-  LogWithFormat(true, "Hook.mm: example(): arg \"%s\", returning \'%i\'", arg, retval);
+  // get_dynamic_caller() must be the first thing called here.
+  dynamic_patch_example_caller caller = (dynamic_patch_example_caller)
+    get_dynamic_caller(reinterpret_cast<void*>(dynamic_patch_example));
+  int retval = caller(arg);
+  LogWithFormat(true, "Hook.mm: dynamic_patch_example(): arg \"%s\", returning \'%i\'",
+                arg, retval);
   PrintStackTrace();
   // Not always required, but using it when not required does no harm.
-  reset_hook(reinterpret_cast<void*>(Hooked_example));
+  reset_hook(reinterpret_cast<void*>(dynamic_patch_example));
+  return retval;
+}
+
+// If the PATCH_FUNCTION macro is used below, this will be set to the correct
+// value by the HookCase extension.
+int (*patch_example_caller)(char *arg1, int (*arg2)(char *)) = NULL;
+
+static int Hooked_patch_example(char *arg1, int (*arg2)(char *))
+{
+  int retval = patch_example_caller(arg1, arg2);
+  LogWithFormat(true, "Hook.mm: patch_example(): arg1 \"%s\", arg2 \'%p\', returning \'%i\'",
+                arg1, arg2, retval);
+  PrintStackTrace();
+  // Example of using add_patch_hook() to dynamically add a patch hook for
+  // 'arg2'.
+  add_patch_hook(reinterpret_cast<void*>(arg2),
+                 reinterpret_cast<void*>(dynamic_patch_example));
+  // Not always required, but using it when not required does no harm.
+  reset_hook(reinterpret_cast<void*>(Hooked_patch_example));
   return retval;
 }
 
@@ -844,13 +898,18 @@ static int Hooked_sub_123abc(char *arg)
   return retval;
 }
 
-extern "C" int interpose_example(char *arg);
+extern "C" int interpose_example(char *arg1, int (*arg2)(char *));
 
-static int Hooked_interpose_example(char *arg)
+static int Hooked_interpose_example(char *arg1, int (*arg2)(char *))
 {
-  int retval = interpose_example(arg);
-  LogWithFormat(true, "Hook.mm: example(): arg \"%s\", returning \'%i\'", arg, retval);
+  int retval = interpose_example(arg1, arg2);
+  LogWithFormat(true, "Hook.mm: interpose_example(): arg1 \"%s\", arg2 \'%p\', returning \'%i\'",
+                arg1, arg2, retval);
   PrintStackTrace();
+  // Example of using add_patch_hook() to dynamically add a patch hook for
+  // 'arg2'.
+  add_patch_hook(reinterpret_cast<void*>(arg2),
+                 reinterpret_cast<void*>(dynamic_patch_example));
   return retval;
 }
 
@@ -863,6 +922,7 @@ static int Hooked_interpose_example(char *arg)
 - (id)Example_doSomethingWith:(id)whatever
 {
   id retval = [self Example_doSomethingWith:whatever];
+  Class ExampleClass = ::NSClassFromString(@"Example");
   if ([self isKindOfClass:ExampleClass]) {
     LogWithFormat(true, "Hook.mm: [Example doSomethingWith:]: self %@, whatever %@, returning %@",
                   self, whatever, retval);

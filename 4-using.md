@@ -34,9 +34,10 @@ services, which don't inherit their parent's environment.  HookCase
 can keep track of "XPC children", but only on OS X 10.11 and up (not
 on OS X 10.10 (Yosemite) or 10.9 (Mavericks)).
 
-HookCase now supports creating a patch hook for an (un-named) method
-at a particular address in a given module.  (For more information see
-[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L817).)
+Recent versions of HookCase support creating a patch hook for an
+(un-named) method at a particular address in a given module.  (For
+more information see
+[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L871).)
 So, for example, creating a patch hook for a function named
 "sub_123abc" would (by default) specify that the hook should be
 inserted at offset 0x123abc (hexadecimal notation) in the module.  But
@@ -44,3 +45,9 @@ this convention prevents you from creating a patch hook for a method
 that's actually named "sub_123abc" (in its module's symbol table).  To
 do so, you'll need turn off this behavior by setting the
 `HC_NO_NUMERICAL_ADDRS` environment variable.
+
+HookCase now also supports dynamically adding patch hooks for raw
+function pointers. This is useful in hooks for methods that use
+callbacks -- for example CFRunLoopObserverCreate(). For more
+information see
+[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L831).
