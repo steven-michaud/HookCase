@@ -6930,7 +6930,7 @@ typedef struct _hook {
   vm_size_t inserted_dylib_textseg_len;
   user_addr_t call_orig_func_addr;      // Only used in patch hook
   IORecursiveLock *patch_hook_lock;     // Only used in patch hook
-  bool is_last_called_dynamic_hook;     // Only used in patch hook
+  thread_t last_called_dynamic_hook;    // Only used in patch hook
   bool is_dynamic_hook;                 // Only used in patch hook
   x86_saved_state_t orig_intr_state;    // Only used in cast hook
   user_addr_t dyld_runInitializers;     // Only used in cast hook
@@ -7337,6 +7337,14 @@ hook_t *find_cast_hook(uint64_t unique_pid)
   return hookp;
 }
 
+// It's likely that dynamically added patch hooks will be used almost
+// exclusively on callback functions.  It's also likely that a given callback
+// will only ever be called on a single thread.  In those cases this method
+// will always return the correct result.  But there's an unavoidable race
+// condition here if a dynamically patched original function might be called
+// on more than one thread:  It's possible that the original function hook's
+// last_called_dynamic_hook might get changed on another thread (in
+// process_hook_set()) before we've had a chance to "find" it here.
 hook_t *find_last_called_dynamic_hook(uint64_t unique_pid)
 {
   if (!check_init_locks() || !unique_pid) {
@@ -7346,10 +7354,10 @@ hook_t *find_last_called_dynamic_hook(uint64_t unique_pid)
   hook_t *hookp = NULL;
   LIST_FOREACH(hookp, &g_all_hooks, list_entry) {
     if ((hookp->unique_pid == unique_pid) &&
-        hookp->is_last_called_dynamic_hook)
+        (current_thread() == hookp->last_called_dynamic_hook))
     {
-      // Reset this as soon as possible, to help ameliorate a race condition.
-      hookp->is_last_called_dynamic_hook = false;
+      // Reset this as soon as possible.
+      hookp->last_called_dynamic_hook = NULL;
       break;
     }
   }
@@ -9471,10 +9479,10 @@ void process_hook_set(hook_t *hookp, x86_saved_state_t *intr_state)
     }
   }
 
-  // Set this as late as possible, to minimize the chances of us returning
-  // the "wrong" caller in get_dynamic_caller() below.
+  // Set this as late as possible, to minimize the chances of us
+  // inappropriately returning a NULL caller in get_dynamic_caller() below.
   if (hookp->is_dynamic_hook) {
-    hookp->is_last_called_dynamic_hook = true;
+    hookp->last_called_dynamic_hook = current_thread();
   }
 
   vm_map_deallocate(proc_map);
@@ -9780,13 +9788,13 @@ void add_patch_hook(x86_saved_state_t *intr_state)
 // A hook has called get_dynamic_caller() in the hook library.  This is
 // because a single function may end up being the hook for more than one
 // dynamically added patch hook.  So we can't use a global "caller" variable
-// there.  Though I've tried to ameliorate it as much as possible, there's an
-// unavoidable race condition that could cause get_dynamic_caller() to
-// return a caller for the wrong original function.  Note that we can't use
-// IOMalloc() here, directly or indirectly.  Doing that very often and very
-// quickly triggers an Apple bug in the kernel's memory allocation code, which
-// causes kernel panics with error messages like "Element 0xNNNNNNNNNNNNNNNN
-// from zone kalloc.32 caught being freed to wrong zone kalloc.16".
+// there.  Though I've tried very hard to minimize its impact, there's a
+// potentially unavoidable race condition that could cause this method to
+// inappropriately return NULL.  Note that we can't use IOMalloc() here,
+// directly or indirectly.  Doing that very often and very quickly triggers
+// an Apple bug in the kernel's memory allocation code, which causes kernel
+// panics with error messages like "Element 0xNNNNNNNNNNNNNNNN from zone
+// kalloc.32 caught being freed to wrong zone kalloc.16".
 void get_dynamic_caller(x86_saved_state_t *intr_state)
 {
   if (!intr_state) {
@@ -9821,10 +9829,13 @@ void get_dynamic_caller(x86_saved_state_t *intr_state)
     return;
   }
 
-  // There is some small chance that find_last_called_dynamic_hook() will
-  // return the "wrong" hook.  It's not possible to know for sure, from a
-  // hook function shared by several dynamically created patch hooks, which
-  // original function triggered the call.
+  // There's a small chance that find_last_called_dynamic_hook() will
+  // inappropriately return NULL here.  The basic problem is that, now that
+  // multiple dynamically added patch hooks can share a single hook function,
+  // we have no sure way of knowing here which original function triggered the
+  // call.  Our workaround is to use hook_t.last_called_dynamic_hook.  But a
+  // side effect is that we might not be able to "find" our caller.  See
+  // find_last_called_dynamic_hook().
   hook_t *caller_hook =
     find_last_called_dynamic_hook(proc_uniqueid(proc));
   if (!caller_hook) {

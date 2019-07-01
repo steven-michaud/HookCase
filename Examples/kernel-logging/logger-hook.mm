@@ -761,8 +761,7 @@ void add_patch_hook(void *orig_func, void *hook)
 // function, we can't use a global "caller" variable.  So instead we use
 // the following to get an appropriate value into a local "caller" variable.
 // This must be called first in every "dynamic" hook function, to lessen the
-// chances that a race condition will cause the wrong original function's
-// "caller" to be returned.
+// chances that a race condition will cause the caller not to be found.
 void *get_dynamic_caller(void *hook)
 {
   void *retval;

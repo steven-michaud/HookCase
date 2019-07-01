@@ -17,7 +17,7 @@ applications that have
 
 HookCase runs on OS X 10.9 (Mavericks) through macOS 10.14 (Mojave).
 
-Steven Michaud, 10/2018
+Steven Michaud, 7/2019
 
 ## Table of Contents
 
