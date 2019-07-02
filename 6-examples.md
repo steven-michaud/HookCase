@@ -16,6 +16,7 @@ system directories.  However, they will work fine if you turn off both
 "kernel extension protection" and "filesystem protection" (`csrutil
 enable --without kext --without fs`).
 
+* [Dynamic patch hooks](examples-dynamic-hooking.md)
 * [xpcproxy trampoline](examples-xpcproxy.md)
 * [secinit subsystem](examples-secinit.md)
 * [System events](examples-events.md)
