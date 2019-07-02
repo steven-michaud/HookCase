@@ -48,6 +48,7 @@ do so, you'll need turn off this behavior by setting the
 
 HookCase now also supports dynamically adding patch hooks for raw
 function pointers. This is useful in hooks for methods that use
-callbacks -- for example CFRunLoopObserverCreate(). For more
-information see
-[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L830).
+callbacks -- for example CFMachPortCreate() and
+CFRunLoopObserverCreate(). For more information see
+[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L831)
+and [the dynamic patch hooks example](examples-dynamic-hooking.md).
