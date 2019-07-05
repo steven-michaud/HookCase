@@ -37,7 +37,7 @@ on OS X 10.10 (Yosemite) or 10.9 (Mavericks)).
 Recent versions of HookCase support creating a patch hook for an
 (un-named) method at a particular address in a given module.  (For
 more information see
-[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L870).)
+[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L867).)
 So, for example, creating a patch hook for a function named
 "sub_123abc" would (by default) specify that the hook should be
 inserted at offset 0x123abc (hexadecimal notation) in the module.  But
@@ -49,6 +49,10 @@ do so, you'll need turn off this behavior by setting the
 HookCase now also supports dynamically adding patch hooks for raw
 function pointers. This is useful in hooks for methods that use
 callbacks -- for example CFMachPortCreate() and
-CFRunLoopObserverCreate(). For more information see
-[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L830)
+CFRunLoopObserverCreate(). It's best to patch callbacks in their
+"create" methods, before they start being used. Otherwise there's some
+danger of a race condition, especially if the callback can be used on
+different threads from the one that calls add_patch_hook(). For more
+information see
+[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L828)
 and [the dynamic patch hooks example](examples-dynamic-hooking.md).

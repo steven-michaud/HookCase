@@ -6930,8 +6930,6 @@ typedef struct _hook {
   vm_size_t inserted_dylib_textseg_len;
   user_addr_t call_orig_func_addr;      // Only used in patch hook
   IORecursiveLock *patch_hook_lock;     // Only used in patch hook
-  thread_t last_called_dynamic_hook;    // Only used in patch hook
-  bool is_dynamic_hook;                 // Only used in patch hook
   x86_saved_state_t orig_intr_state;    // Only used in cast hook
   user_addr_t dyld_runInitializers;     // Only used in cast hook
   user_addr_t add_image_func_addr;      // Only used in cast hook
@@ -6945,9 +6943,32 @@ typedef struct _hook {
   uint32_t num_patch_hooks;             // Only used in cast hook
   uint32_t num_interpose_hooks;         // Only used in cast hook
   bool no_numerical_addrs;              // Only used in cast hook
+  bool is_dynamic_hook;                 // Only used in patch hook
   bool is_cast_hook;
   uint16_t orig_code;
 } hook_t;
+
+// We use this linked list to ensure that the "current" patch hook can always
+// be found when we need it (in methods that have been "called", indirectly,
+// from the hook function, like reset_hook() and get_dynamic_caller() below).
+// Now that we support dynamically added patch hooks, we can no longer depend
+// on being able to look up a patch hook using its hook address.  There's no
+// reasonable way we can prevent a hook function from being used by more than
+// one dynamically added patch hook.  So the linked list of hook_t objects may
+// contain more than one with the same hook_addr.
+typedef struct _hook_thread_info {
+  LIST_ENTRY(_hook_thread_info) list_entry;
+  // A thread on which one or more patch hooks has recently executed.  Each
+  // value of hook_thread is unique in this list, per process.
+  thread_t hook_thread;
+  // The patch hook that has executed most recently on hook_thread. This
+  // value will remain current (and correct) while patch_hook->hook_addr is
+  // running, if hook_thread is the current thread.  The same patch_hook may
+  // appear more than once in this list, per process.  This will happen if
+  // patch_hook runs on different threads.
+  hook_t *patch_hook;
+  uint64_t unique_pid;
+} hook_thread_info_t;
 
 #define CALL_ORIG_FUNC_SIZE 0x20
 #define MAX_CALL_ORIG_FUNCS 128 // PAGE_SIZE / CALL_ORIG_FUNC_SIZE
@@ -7068,6 +7089,8 @@ lck_attr_t *all_hooks_attr = NULL;
 lck_mtx_t *all_hooks_mlock = NULL;
 LIST_HEAD(hook_list, _hook);
 struct hook_list g_all_hooks;
+LIST_HEAD(hook_thread_info_list, _hook_thread_info);
+struct hook_thread_info_list g_all_hook_thread_infos;
 
 bool check_init_locks()
 {
@@ -7076,6 +7099,7 @@ bool check_init_locks()
   }
 
   LIST_INIT(&g_all_hooks);
+  LIST_INIT(&g_all_hook_thread_infos);
   all_hooks_grp_attr = lck_grp_attr_alloc_init();
   if (!all_hooks_grp_attr) {
     return false;
@@ -7120,6 +7144,16 @@ hook_t *create_hook()
   return retval;
 }
 
+hook_thread_info_t *create_hook_thread_info()
+{
+  hook_thread_info_t *retval = (hook_thread_info_t *)
+    IOMalloc(sizeof(hook_thread_info_t));
+  if (retval) {
+    bzero(retval, sizeof(hook_thread_info_t));
+  }
+  return retval;
+}
+
 void add_hook(hook_t *hookp)
 {
   if (!hookp || !check_init_locks()) {
@@ -7127,6 +7161,16 @@ void add_hook(hook_t *hookp)
   }
   all_hooks_lock();
   LIST_INSERT_HEAD(&g_all_hooks, hookp, list_entry);
+  all_hooks_unlock();
+}
+
+void add_hook_thread_info(hook_thread_info_t *infop)
+{
+  if (!infop || !check_init_locks()) {
+    return;
+  }
+  all_hooks_lock();
+  LIST_INSERT_HEAD(&g_all_hook_thread_infos, infop, list_entry);
   all_hooks_unlock();
 }
 
@@ -7154,6 +7198,14 @@ void free_hook(hook_t *hookp)
   IOFree(hookp, sizeof(hook_t));
 }
 
+void free_hook_thread_info(hook_thread_info_t *infop)
+{
+  if (!infop) {
+    return;
+  }
+  IOFree(infop, sizeof(hook_thread_info_t));
+}
+
 void remove_hook(hook_t *hookp)
 {
   if (!hookp || !check_init_locks()) {
@@ -7162,6 +7214,17 @@ void remove_hook(hook_t *hookp)
   all_hooks_lock();
   LIST_REMOVE(hookp, list_entry);
   free_hook(hookp);
+  all_hooks_unlock();
+}
+
+void remove_hook_thread_info(hook_thread_info_t *infop)
+{
+  if (!infop || !check_init_locks()) {
+    return;
+  }
+  all_hooks_lock();
+  LIST_REMOVE(infop, list_entry);
+  free_hook_thread_info(infop);
   all_hooks_unlock();
 }
 
@@ -7183,66 +7246,44 @@ hook_t *find_hook(user_addr_t orig_addr, uint64_t unique_pid)
   return hookp;
 }
 
+hook_thread_info_t *find_hook_thread_info(thread_t thread, uint64_t unique_pid)
+{
+  if (!check_init_locks() || !thread || !unique_pid) {
+    return NULL;
+  }
+  all_hooks_lock();
+  hook_thread_info_t *infop = NULL;
+  LIST_FOREACH(infop, &g_all_hook_thread_infos, list_entry) {
+    if ((infop->hook_thread == thread) && (infop->unique_pid == unique_pid)) {
+      break;
+    }
+  }
+  all_hooks_unlock();
+  return infop;
+}
+
+hook_t *find_hook_by_thread(thread_t thread, uint64_t unique_pid)
+{
+  if (!check_init_locks() || !thread || !unique_pid) {
+    return NULL;
+  }
+  all_hooks_lock();
+  hook_t *hookp = NULL;
+  hook_thread_info_t *infop = NULL;
+  LIST_FOREACH(infop, &g_all_hook_thread_infos, list_entry) {
+    if ((infop->hook_thread == thread) && (infop->unique_pid == unique_pid)) {
+      hookp = infop->patch_hook;
+      break;
+    }
+  }
+  all_hooks_unlock();
+  return hookp;
+}
+
 // There's no reasonable way to prevent a hook function from being used by
 // more than one dynamically added patch hook.  So we've now got to live with
 // the possibility that a given hook function will have been used more than
-// once.  '*hooks' must be released by caller using IOFree().  Note that we
-// can't call this method too often or too quickly.  Doing that triggers a
-// bug in the kernel's memory allocation code, which causes kernel panics with
-// error messages like "Element 0xNNNNNNNNNNNNNNNN from zone kalloc.32 caught
-// being freed to wrong zone kalloc.16".
-bool find_hooks_with_hook_addr(user_addr_t hook_addr, uint64_t unique_pid,
-                               unsigned *num_hooks, hook_t ***hooks)
-{
-  if (!check_init_locks() || !hook_addr || !unique_pid ||
-      !num_hooks || !hooks)
-  {
-    return false;
-  }
-
-  *num_hooks = 0;
-  *hooks = NULL;
-
-  all_hooks_lock();
-
-  unsigned num_hooks_local = 0;
-  hook_t *hookp = NULL;
-  LIST_FOREACH(hookp, &g_all_hooks, list_entry) {
-    if ((hookp->hook_addr == hook_addr) &&
-        (hookp->unique_pid == unique_pid))
-    {
-      ++num_hooks_local;
-    }
-  }
-
-  if (!num_hooks_local) {
-    all_hooks_unlock();
-    return false;
-  }
-  hook_t **hooks_local = (hook_t **)
-    IOMalloc(num_hooks_local * sizeof(hook_t *));
-  if (!hooks_local) {
-    all_hooks_unlock();
-    return false;
-  }
-
-  unsigned i = 0;
-  LIST_FOREACH(hookp, &g_all_hooks, list_entry) {
-    if ((hookp->hook_addr == hook_addr) &&
-        (hookp->unique_pid == unique_pid))
-    {
-      hooks_local[i] = hookp;
-      ++i;
-    }
-  }
-
-  all_hooks_unlock();
-
-  *num_hooks = num_hooks_local;
-  *hooks = hooks_local;
-  return true;
-}
-
+// once.
 bool hook_exists_with_hook_addr(user_addr_t hook_addr, uint64_t unique_pid)
 {
   if (!check_init_locks() || !hook_addr || !unique_pid) {
@@ -7261,48 +7302,6 @@ bool hook_exists_with_hook_addr(user_addr_t hook_addr, uint64_t unique_pid)
   }
   all_hooks_unlock();
   return retval;
-}
-
-bool unset_exists_with_hook_addr(user_addr_t hook_addr,
-                                 uint64_t unique_pid)
-{
-  if (!check_init_locks() || !hook_addr || !unique_pid) {
-    return false;
-  }
-  all_hooks_lock();
-  bool retval = false;
-  hook_t *hookp = NULL;
-  LIST_FOREACH(hookp, &g_all_hooks, list_entry) {
-    if ((hookp->hook_addr == hook_addr) &&
-        (hookp->unique_pid == unique_pid) &&
-        (hookp->state == hook_state_unset))
-    {
-      retval = true;
-      break;
-    }
-  }
-  all_hooks_unlock();
-  return retval;
-}
-
-hook_t *find_next_unset_with_hook_addr(user_addr_t hook_addr,
-                                       uint64_t unique_pid)
-{
-  if (!check_init_locks() || !hook_addr || !unique_pid) {
-    return NULL;
-  }
-  all_hooks_lock();
-  hook_t *hookp = NULL;
-  LIST_FOREACH(hookp, &g_all_hooks, list_entry) {
-    if ((hookp->hook_addr == hook_addr) &&
-        (hookp->unique_pid == unique_pid) &&
-        (hookp->state == hook_state_unset))
-    {
-      break;
-    }
-  }
-  all_hooks_unlock();
-  return hookp;
 }
 
 hook_t *find_hook_with_add_image_func(uint64_t unique_pid)
@@ -7337,40 +7336,20 @@ hook_t *find_cast_hook(uint64_t unique_pid)
   return hookp;
 }
 
-// It's likely that dynamically added patch hooks will be used almost
-// exclusively on callback functions.  It's also likely that a given callback
-// will only ever be called on a single thread.  In those cases this method
-// will always return the correct result.  But there's an unavoidable race
-// condition here if a dynamically patched original function might be called
-// on more than one thread:  It's possible that the original function hook's
-// last_called_dynamic_hook might get changed on another thread (in
-// process_hook_set()) before we've had a chance to "find" it here.
-hook_t *find_last_called_dynamic_hook(uint64_t unique_pid)
-{
-  if (!check_init_locks() || !unique_pid) {
-    return NULL;
-  }
-  all_hooks_lock();
-  hook_t *hookp = NULL;
-  LIST_FOREACH(hookp, &g_all_hooks, list_entry) {
-    if ((hookp->unique_pid == unique_pid) &&
-        (current_thread() == hookp->last_called_dynamic_hook))
-    {
-      // Reset this as soon as possible.
-      hookp->last_called_dynamic_hook = NULL;
-      break;
-    }
-  }
-  all_hooks_unlock();
-  return hookp;
-}
-
 void remove_process_hooks(uint64_t unique_pid)
 {
   if (!check_init_locks() || !unique_pid) {
     return;
   }
   all_hooks_lock();
+  hook_thread_info_t *infop = NULL;
+  hook_thread_info_t *tmp_infop = NULL;
+  LIST_FOREACH_SAFE(infop, &g_all_hook_thread_infos, list_entry, tmp_infop) {
+    if (infop->unique_pid == unique_pid) {
+      LIST_REMOVE(infop, list_entry);
+      free_hook_thread_info(infop);
+    }
+  }
   hook_t *hookp = NULL;
   hook_t *tmp_hookp = NULL;
   LIST_FOREACH_SAFE(hookp, &g_all_hooks, list_entry, tmp_hookp) {
@@ -7455,6 +7434,12 @@ void destroy_all_hooks()
     return;
   }
   all_hooks_lock();
+  hook_thread_info_t *infop = NULL;
+  hook_thread_info_t *tmp_infop = NULL;
+  LIST_FOREACH_SAFE(infop, &g_all_hook_thread_infos, list_entry, tmp_infop) {
+    LIST_REMOVE(infop, list_entry);
+    free_hook_thread_info(infop);
+  }
   hook_t *hookp = NULL;
   hook_t *tmp_hookp = NULL;
   LIST_FOREACH_SAFE(hookp, &g_all_hooks, list_entry, tmp_hookp) {
@@ -9412,6 +9397,8 @@ void process_hook_set(hook_t *hookp, x86_saved_state_t *intr_state)
     return;
   }
 
+  uint64_t unique_pid = proc_uniqueid(proc);
+
   user_addr_t call_orig_func_addr = hookp->call_orig_func_addr;
 
   user_addr_t return_address = 0;
@@ -9425,11 +9412,11 @@ void process_hook_set(hook_t *hookp, x86_saved_state_t *intr_state)
   user_addr_t hook_textseg = hookp->inserted_dylib_textseg;
   user_addr_t hook_textseg_end =
     hook_textseg + hookp->inserted_dylib_textseg_len;
-  bool called_from_hook =
+  bool called_from_hook_library =
     ((return_address >= hook_textseg) && (return_address < hook_textseg_end));
 
   if (call_orig_func_addr) {
-    if (called_from_hook) {
+    if (called_from_hook_library) {
       if (intr_state->flavor == x86_SAVED_STATE64) {
         intr_state->ss_64.isf.rip = call_orig_func_addr;
       } else {     // flavor == x86_SAVED_STATE32
@@ -9458,7 +9445,7 @@ void process_hook_set(hook_t *hookp, x86_saved_state_t *intr_state)
       {
         hookp->state = hook_state_unset;
       }
-      if (called_from_hook) {
+      if (called_from_hook_library) {
         if (intr_state->flavor == x86_SAVED_STATE64) {
           intr_state->ss_64.isf.rip = hookp->orig_addr;
         } else {     // flavor == x86_SAVED_STATE32
@@ -9479,10 +9466,24 @@ void process_hook_set(hook_t *hookp, x86_saved_state_t *intr_state)
     }
   }
 
-  // Set this as late as possible, to minimize the chances of us
-  // inappropriately returning a NULL caller in get_dynamic_caller() below.
-  if (hookp->is_dynamic_hook) {
-    hookp->last_called_dynamic_hook = current_thread();
+  // Keep g_all_hook_thread_infos up to date.
+  hook_thread_info_t *infop =
+    find_hook_thread_info(current_thread(), unique_pid);
+  if (infop) {
+    if (check_init_locks()) {
+      all_hooks_lock();
+      infop->patch_hook = hookp;
+      infop->unique_pid = unique_pid;
+      all_hooks_unlock();
+    }
+  } else {
+    infop = create_hook_thread_info();
+    if (infop) {
+      infop->patch_hook = hookp;
+      infop->hook_thread = current_thread();
+      infop->unique_pid = unique_pid;
+      add_hook_thread_info(infop);
+    }
   }
 
   vm_map_deallocate(proc_map);
@@ -9533,11 +9534,12 @@ void check_hook_state(x86_saved_state_t *intr_state)
 // A hook has called reset_hook() in the hook library.  We don't need to do
 // anything if it's not a patch hook, or if its original method doesn't have a
 // standard C/C++ prologue -- in either of those cases, the hook's state won't
-// be hook_state_unset.  Note that we can't use IOMalloc() here, directly or
-// indirectly.  Doing that very often and very quickly triggers an Apple bug
-// in the kernel's memory allocation code, which causes kernel panics with
-// error messages like "Element 0xNNNNNNNNNNNNNNNN from zone kalloc.32 caught
-// being freed to wrong zone kalloc.16".
+// be hook_state_unset.  Note that we can't call IOMalloc() every time this
+// method runs, directly or indirectly.  Calling IOMalloc() that often and
+// that quickly triggers an Apple bug in the kernel's memory allocation code,
+// which causes kernel panics with error messages like "Element
+// 0xNNNNNNNNNNNNNNNN from zone kalloc.32 caught being freed to wrong zone
+// kalloc.16".
 void reset_hook(x86_saved_state_t *intr_state)
 {
   if (!intr_state) {
@@ -9565,7 +9567,10 @@ void reset_hook(x86_saved_state_t *intr_state)
     return;
   }
 
-  if (!unset_exists_with_hook_addr(hook_addr, proc_uniqueid(proc))) {
+  hook_t *hookp = find_hook_by_thread(current_thread(), proc_uniqueid(proc));
+  if (!hookp || (hookp->hook_addr != hook_addr) ||
+      (hookp->state != hook_state_unset))
+  {
     vm_map_deallocate(proc_map);
     return;
   }
@@ -9573,39 +9578,24 @@ void reset_hook(x86_saved_state_t *intr_state)
   // As in process_hook_set() we need to take precautions against thread
   // contention -- even though they impose a high cost in CPU time.  See
   // process_hook_set() for more information.
-  task_t task = proc_task(proc);
-  if (task) {
-    task_reference(task);
-    task_hold(task);
-    task_wait(task, false);
-  }
-
-  // Now that we support dynamically added patch hooks, a given hook function
-  // might have been used more than once.  And (aside from checking each
-  // hook's state) we have no way of knowing which is "ours".  So we reset
-  // every hook we find whose state is hook_state_unset.
-  unsigned i;
-  uint16_t new_code = HC_INT1_OPCODE_SHORT;
-  for (i = 0; ; ++i) {
-    hook_t *hook =
-      find_next_unset_with_hook_addr(hook_addr, proc_uniqueid(proc));
-    if (!hook) {
-      break;
+  if (lock_hook(hookp->patch_hook_lock)) {
+    task_t task = proc_task(proc);
+    if (task) {
+      task_reference(task);
+      task_hold(task);
+      task_wait(task, false);
     }
-    if (!lock_hook(hook->patch_hook_lock)) {
-      continue;
-    }
-    if (proc_copyout(proc_map, &new_code, hook->orig_addr,
+    uint16_t new_code = HC_INT1_OPCODE_SHORT;
+    if (proc_copyout(proc_map, &new_code, hookp->orig_addr,
                      sizeof(new_code), true, false))
     {
-      hook->state = hook_state_set;
+      hookp->state = hook_state_set;
     }
-    unlock_hook(hook->patch_hook_lock);
-  }
-
-  if (task) {
-    task_release(task);
-    task_deallocate(task);
+    if (task) {
+      task_release(task);
+      task_deallocate(task);
+    }
+    unlock_hook(hookp->patch_hook_lock);
   }
 
   vm_map_deallocate(proc_map);
@@ -9699,11 +9689,12 @@ void on_add_image(x86_saved_state_t *intr_state)
 // the same orig_func_addr and hook_addr).  And if a patch hook for
 // orig_func_addr already exists with a different hook function, we change its
 // hook_addr to point to the new hook function.  Otherwise we dynamically add
-// a new patch hook.  Note that we can't use IOMalloc() here, directly or
-// indirectly.  Doing that very often and very quickly triggers an Apple bug
-// in the kernel's memory allocation code, which causes kernel panics with
-// error messages like "Element 0xNNNNNNNNNNNNNNNN from zone kalloc.32 caught
-// being freed to wrong zone kalloc.16".
+// a new patch hook.  Note that we can't call IOMalloc() every time this
+// method runs, directly or indirectly.  Calling IOMalloc() that often and
+// that quickly triggers an Apple bug in the kernel's memory allocation code,
+// which causes kernel panics with error messages like "Element
+// 0xNNNNNNNNNNNNNNNN from zone kalloc.32 caught being freed to wrong zone
+// kalloc.16".
 void add_patch_hook(x86_saved_state_t *intr_state)
 {
   if (!intr_state) {
@@ -9753,10 +9744,15 @@ void add_patch_hook(x86_saved_state_t *intr_state)
   }
 
   // If a patch hook for orig_func_addr already exists with a different hook
-  // function, just change its hook_addr to point to the new hook function.
+  // function, change its hook_addr to point to the new hook function.  But
+  // don't allow this for a non-dynamically created hook.  An original
+  // function can't be assigned more than one hook.
   if (orig_func_hook) {
-    OSCompareAndSwapPtr((void *) orig_func_hook->hook_addr, (void *) hook_addr,
-                        (void **) &orig_func_hook->hook_addr);
+    if (orig_func_hook->is_dynamic_hook && check_init_locks()) {
+      all_hooks_lock();
+      orig_func_hook->hook_addr = hook_addr;
+      all_hooks_unlock();
+    }
     vm_map_deallocate(proc_map);
     return;
   }
@@ -9785,16 +9781,15 @@ void add_patch_hook(x86_saved_state_t *intr_state)
   vm_map_deallocate(proc_map);
 }
 
-// A hook has called get_dynamic_caller() in the hook library.  This is
-// because a single function may end up being the hook for more than one
-// dynamically added patch hook.  So we can't use a global "caller" variable
-// there.  Though I've tried very hard to minimize its impact, there's a
-// potentially unavoidable race condition that could cause this method to
-// inappropriately return NULL.  Note that we can't use IOMalloc() here,
-// directly or indirectly.  Doing that very often and very quickly triggers
-// an Apple bug in the kernel's memory allocation code, which causes kernel
-// panics with error messages like "Element 0xNNNNNNNNNNNNNNNN from zone
-// kalloc.32 caught being freed to wrong zone kalloc.16".
+// A dynamically added patch hook has called get_dynamic_caller() in the hook
+// library.  This is because a single hook function may end up hooking
+// more than one dynamically patched original function.  So we can't use a
+// global "caller" variable there.  Note that we can't call IOMalloc() every
+// time this method runs, directly or indirectly.  Calling IOMalloc() that
+// often and that quickly triggers an Apple bug in the kernel's memory
+// allocation code, which causes kernel panics with error messages like
+// "Element 0xNNNNNNNNNNNNNNNN from zone kalloc.32 caught being freed to wrong
+// zone kalloc.16".
 void get_dynamic_caller(x86_saved_state_t *intr_state)
 {
   if (!intr_state) {
@@ -9829,23 +9824,15 @@ void get_dynamic_caller(x86_saved_state_t *intr_state)
     return;
   }
 
-  // There's a small chance that find_last_called_dynamic_hook() will
-  // inappropriately return NULL here.  The basic problem is that, now that
-  // multiple dynamically added patch hooks can share a single hook function,
-  // we have no sure way of knowing here which original function triggered the
-  // call.  Our workaround is to use hook_t.last_called_dynamic_hook.  But a
-  // side effect is that we might not be able to "find" our caller.  See
-  // find_last_called_dynamic_hook().
-  hook_t *caller_hook =
-    find_last_called_dynamic_hook(proc_uniqueid(proc));
-  if (!caller_hook) {
+  hook_t *hookp = find_hook_by_thread(current_thread(), proc_uniqueid(proc));
+  if (!hookp || !hookp->is_dynamic_hook || (hookp->hook_addr != hook_addr)) {
     vm_map_deallocate(proc_map);
     return;
   }
 
-  user_addr_t caller_addr = caller_hook->orig_addr;
-  if (caller_hook->call_orig_func_addr) {
-    caller_addr = caller_hook->call_orig_func_addr;
+  user_addr_t caller_addr = hookp->orig_addr;
+  if (hookp->call_orig_func_addr) {
+    caller_addr = hookp->call_orig_func_addr;
   }
 
   // Set "return value".

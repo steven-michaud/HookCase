@@ -767,8 +767,6 @@ void add_patch_hook(void *orig_func, void *hook)
 // Since several dynamically added patch hooks may share the same hook
 // function, we can't use a global "caller" variable.  So instead we use
 // the following to get an appropriate value into a local "caller" variable.
-// This must be called first in every "dynamic" hook function, to lessen the
-// chances that a race condition will cause the caller not to be found.
 void *get_dynamic_caller(void *hook)
 {
   void *retval;
@@ -849,7 +847,6 @@ typedef int (*dynamic_patch_example_caller)(char *arg);
 
 static int dynamic_patch_example(char *arg)
 {
-  // get_dynamic_caller() must be the first thing called here.
   dynamic_patch_example_caller caller = (dynamic_patch_example_caller)
     get_dynamic_caller(reinterpret_cast<void*>(dynamic_patch_example));
   int retval = caller(arg);

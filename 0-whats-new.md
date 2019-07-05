@@ -4,7 +4,7 @@ HookCase now supports dynamically adding patch hooks for raw function
 pointers. This is useful in hooks for methods that use callbacks --
 for example CFMachPortCreate() and CFRunLoopObserverCreate(). For more
 information see
-[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L830)
+[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L828)
 and [the dynamic patch hooks example](examples-dynamic-hooking.md).
 
 # What's New in Version 3.2.1
@@ -84,16 +84,16 @@ instead of `int 0x22`, as follows:
 at a particular address in a given module.  This means that HookCase
 can now hook methods that aren't in their module's symbol table.  For
 more information see
-[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L870).
+[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L867).
 
-* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L8886) that
+* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L8871) that
 prevented interpose hooks from working outside the shared cache of
 system modules.
 
 * Version 2.0
-[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L10384)
+[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L10369)
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0
-[fixes a premature-release bug](Examples/events/hook.mm#L1336)
+[fixes a premature-release bug](Examples/events/hook.mm#L1333)
 in the "System Events" example's hook library.
