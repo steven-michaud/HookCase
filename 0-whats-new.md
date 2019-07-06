@@ -1,3 +1,14 @@
+# What's New in Version 3.3.1
+
+This version of HookCase tightens up the code that supports
+dynamically adding patch hooks. Among other things, it completely
+fixes a race condition that effected interactions between a hook
+library and the HookCase kernel extension, particularly in the
+get_dynamic_caller() methods. (Previous code just minimized its
+effect.) For more information see the following commit:
+
+[Actual fix for race condition in get_dynamic_caller() and elsewhere](https://github.com/steven-michaud/HookCase/commit/7d6b56ac070eaab758c13a75b8cd8f6ada1b5978)
+
 # What's New in Version 3.3
 
 HookCase now supports dynamically adding patch hooks for raw function
@@ -91,7 +102,7 @@ prevented interpose hooks from working outside the shared cache of
 system modules.
 
 * Version 2.0
-[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L10369)
+[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L10371)
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0
