@@ -2,6 +2,11 @@
 
 ## The Bug
 
+This example currently doesn't work on macOS Catalina (10.15). The
+reason is that Catalina's system files live on a special partition
+that is mounted read-only, and I don't yet know of a reasonable
+workaround.
+
 Apple implemented a new logging subsystem on macOS Sierra (10.12) and
 up.  It's controlled by the `/usr/libexec/diagnosticd daemon`, which
 gets launched on demand at the behest of log message clients like the
@@ -16,7 +21,7 @@ kernel extensions whose `start()` method fails.
 
 Note that there's a workaround, which involves installing a serial
 port and using `kprintf()` to write to it.  For more information see
-[HookCase_start()](HookCase/HookCase/HookCase.cpp#L11602).
+[HookCase_start()](HookCase/HookCase/HookCase.cpp#L11228).
 
 The root of the problem is that the messages received by Apple's new
 logging subsystem no longer contain full strings.  Instead each

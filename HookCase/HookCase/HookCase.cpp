@@ -85,7 +85,7 @@
 
 // HookCase.kext is compatible with DYLD_INSERT_LIBRARIES, and doesn't stomp on
 // any of the changes it may have been used to make.  So a
-// DYLD_INTERPOSE_LIBRARIES hook will always override the "same" HookCase.kext
+// DYLD_INSERT_LIBRARIES hook will always override the "same" HookCase.kext
 // interpose hook.  This is because Apple often uses DYLD_INSERT_LIBRARIES
 // internally, in ways it doesn't document.  HookCase.kext would likely break
 // Apple functionality if it could override Apple's hooks.  But this doesn't
@@ -116,6 +116,7 @@
 #include <sys/types.h>
 #include <sys/kernel_types.h>
 #include <mach/mach_types.h>
+#include <sys/fcntl.h>
 #include <sys/lock.h>
 #include <sys/proc.h>
 #include <sys/queue.h>
@@ -150,12 +151,6 @@ extern "C" void *get_bsdtask_info(task_t);
 
 /*------------------------------*/
 
-// If DEBUG_LOG is defined, HookCase.kext will attempt to log debugging
-// information to the system log via sandboxmirrord from the SandboxMirror
-// project (https://github.com/steven-michaud/SandboxMirror).
-
-//#define DEBUG_LOG 1
-
 // "kern.osrelease" is what's returned by 'uname -r', which uses a different
 // numbering system than the "standard" one.  These defines translate from
 // that (kernel) system to the "standard" one.
@@ -166,6 +161,7 @@ extern "C" void *get_bsdtask_info(task_t);
 #define MAC_OS_X_VERSION_10_12_HEX 0x00001000
 #define MAC_OS_X_VERSION_10_13_HEX 0x00001100
 #define MAC_OS_X_VERSION_10_14_HEX 0x00001200
+#define MAC_OS_X_VERSION_10_15_HEX 0x00001300
 
 char *gOSVersionString = NULL;
 size_t gOSVersionStringLength = 0;
@@ -299,10 +295,15 @@ bool macOS_Mojave_less_than_5()
   return ((OSX_Version() & 0xFF) < 0x60);
 }
 
+bool macOS_Catalina()
+{
+  return ((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_10_15_HEX);
+}
+
 bool OSX_Version_Unsupported()
 {
   return (((OSX_Version() & 0xFF00) < MAC_OS_X_VERSION_10_9_HEX) ||
-          ((OSX_Version() & 0xFF00) > MAC_OS_X_VERSION_10_14_HEX));
+          ((OSX_Version() & 0xFF00) > MAC_OS_X_VERSION_10_15_HEX));
 }
 
 // When using the debug kernel, set "kernel_stack_pages=6" in the boot args
@@ -402,6 +403,7 @@ bool kernel_type_is_unknown()
 
 #define VM_MIN_KERNEL_ADDRESS ((vm_offset_t) 0xFFFFFF8000000000UL)
 #define VM_MIN_KERNEL_AND_KEXT_ADDRESS (VM_MIN_KERNEL_ADDRESS - 0x80000000ULL)
+#define VM_MAX_USER_PAGE_ADDRESS ((user_addr_t)0x00007FFFFFFFF000ULL)
 
 // The system kernel (stored in /System/Library/Kernels on OS X 10.10 and up)
 // is (in some senses) an ordinary Mach-O binary.  You can use 'otool -hv' to
@@ -426,11 +428,12 @@ bool find_kernel_header()
     return true;
   }
 
-#if (defined(MAC_OS_X_VERSION_10_11) || defined(MAC_OS_X_VERSION_10_12) || \
-             defined(MAC_OS_X_VERSION_10_13) || defined(MAC_OS_X_VERSION_10_14)) && \
+#if (defined(MAC_OS_X_VERSION_10_11)) && \
     (MAC_OS_X_VERSION_MAX_ALLOWED / 100) >= (MAC_OS_X_VERSION_10_11 / 100)
   // vm_kernel_unslide_or_perm_external() is only available on OS X 10.11 and up.
-  if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
+  if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra() ||
+      macOS_Mojave() || macOS_Catalina())
+  {
     vm_offset_t func_address = (vm_offset_t) vm_kernel_unslide_or_perm_external;
     vm_offset_t func_address_unslid = 0;
     vm_kernel_unslide_or_perm_external(func_address, &func_address_unslid);
@@ -462,8 +465,7 @@ bool find_kernel_header()
     if (!kernel_header_found) {
       return false;
     }
-#if (defined(MAC_OS_X_VERSION_10_11) || defined(MAC_OS_X_VERSION_10_12) || \
-             defined(MAC_OS_X_VERSION_10_13) || defined(MAC_OS_X_VERSION_10_14)) && \
+#if (defined(MAC_OS_X_VERSION_10_11)) && \
     (MAC_OS_X_VERSION_MAX_ALLOWED / 100) >= (MAC_OS_X_VERSION_10_11 / 100)
   }
 #endif
@@ -629,7 +631,10 @@ bool find_sysent_table()
   struct section_64 *data_sections = NULL;
   const char *data_segment_name;
   const char *const_section_name;
-  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
+  if (macOS_Catalina()) {
+    data_segment_name = "__DATA_CONST";
+    const_section_name = "__const";
+  } else if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
     data_segment_name = "__CONST";
     const_section_name = "__constdata";
   } else {
@@ -639,9 +644,10 @@ bool find_sysent_table()
 
   // The definition of the sysent table is "const struct sysent sysent[]",
   // so we look for it in the __DATA segment's __const section (on ElCapitan
-  // and below) or in the __CONST segment's __constdata section (on Sierra and
-  // above). Note that this section's contents have been set read-only, which
-  // we need to work around below in hook_sysent_call().
+  // and below), or in the __CONST segment's __constdata section (on Sierra
+  // through Mojave), or in the __DATA_CONST segment's __const section (on
+  // Catalina and above). Note that this section's contents have been set
+  // read-only, which we need to work around below in hook_sysent_call().
   uint32_t num_commands = g_kernel_header->ncmds;
   const struct load_command *load_command = (struct load_command *)
     ((vm_offset_t)g_kernel_header + sizeof(struct mach_header_64));
@@ -725,9 +731,6 @@ typedef void (*enable_preemption_t)(void);
 static disable_preemption_t disable_preemption = NULL;
 static enable_preemption_t enable_preemption = NULL;
 
-bool set_kernel_physmap_protection(vm_map_offset_t start, vm_map_offset_t end,
-                                   vm_prot_t new_prot, bool use_pmap_protect);
-
 bool hook_sysent_call(uint32_t offset, sy_call_t *hook, sy_call_t **orig)
 {
   if (orig) {
@@ -760,27 +763,10 @@ bool hook_sysent_call(uint32_t offset, sy_call_t *hook, sy_call_t **orig)
     orig_addr = &(table[offset].sy_call);
   }
 
-  // On macOS 10.14 (Mojave), set_kernel_physmap_protection() is no longer
-  // able to add VM_PROT_WRITE where it wasn't already present, so we need to
-  // use brute force here.  Changing CR0's write protect bit has caused us
-  // trouble in the past -- sometimes a write-protect page fault still
-  // happened when we tried to change kernel memory.  Hopefully we'll be able
-  // to avoid that by temporarily disabling preemption and interrupts.
-  boolean_t org_int_level = false;
-  uintptr_t org_cr0 = 0;
-  if (macOS_Mojave()) {
-    org_int_level = ml_set_interrupts_enabled(false);
-    disable_preemption();
-    org_cr0 = get_cr0();
-    set_cr0(org_cr0 & ~CR0_WP);
-  } else {
-    if (!set_kernel_physmap_protection((vm_map_offset_t) orig_addr,
-                                       (vm_map_offset_t) orig_addr + sizeof(void *),
-                                       VM_PROT_READ | VM_PROT_WRITE, true))
-    {
-      return false;
-    }
-  }
+  boolean_t org_int_level = ml_set_interrupts_enabled(false);
+  disable_preemption();
+  uintptr_t org_cr0 = get_cr0();
+  set_cr0(org_cr0 & ~CR0_WP);
 
   bool retval = true;
 
@@ -790,15 +776,9 @@ bool hook_sysent_call(uint32_t offset, sy_call_t *hook, sy_call_t **orig)
     retval = false;
   }
 
-  if (macOS_Mojave()) {
-    set_cr0(org_cr0);
-    enable_preemption();
-    ml_set_interrupts_enabled(org_int_level);
-  } else {
-    set_kernel_physmap_protection((vm_map_offset_t) orig_addr,
-                                  (vm_map_offset_t) orig_addr + sizeof(void *),
-                                  VM_PROT_READ, true);
-  }
+  set_cr0(org_cr0);
+  enable_preemption();
+  ml_set_interrupts_enabled(org_int_level);
 
   if (orig && retval) {
     *orig = orig_local;
@@ -859,36 +839,13 @@ typedef struct vm_map_version {
   unsigned int main_timestamp;
 } vm_map_version_t;
 
-extern "C" void lck_mtx_lock_spin(lck_mtx_t *lck);
-
-// From the xnu kernel's osfmk/i386/locks.h
+// From the xnu kernel's osfmk/i386/locks.h.  This struct is the same size
+// as struct _IOLock, with which it seems interchangeable.
 struct __lck_mtx_t__ {
  unsigned long opaque[2];
 };
 
-// From the xnu kernel's osfmk/vm/vm_page.h
-typedef struct vm_locks_array {
-  char pad  __attribute__ ((aligned (64)));
-  lck_mtx_t vm_page_queue_lock2 __attribute__ ((aligned (64)));
-  lck_mtx_t vm_page_queue_free_lock2 __attribute__ ((aligned (64)));
-  char pad2  __attribute__ ((aligned (64)));
-} vm_locks_array_t;
-
 // Kernel private globals (begin)
-
-vm_locks_array_t *g_vm_page_locks = NULL;
-#define vm_page_queue_lock (g_vm_page_locks->vm_page_queue_lock2)
-#define vm_page_unlock_queues() lck_mtx_unlock(&vm_page_queue_lock)
-#define vm_page_lockspin_queues() lck_mtx_lock_spin(&vm_page_queue_lock)
-
-uint64_t *g_max_mem = NULL; /* Size of physical memory (bytes), adjusted by maxmem */
-uint64_t *g_mem_actual = NULL;
-
-unsigned int *g_vm_page_wire_count = NULL;
-uint32_t *g_vm_lopage_free_count = NULL;
-vm_map_size_t *g_vm_global_no_user_wire_amount = NULL;
-vm_map_size_t *g_vm_global_user_wire_limit = NULL;
-vm_map_size_t *g_vm_user_wire_limit = NULL;
 
 // Only used on Sierra (and up).
 vm_page_t *g_vm_pages = NULL;
@@ -928,7 +885,6 @@ typedef void (*task_act_iterate_wth_args_t)(task_t task,
                                             void (*func_callback)(thread_t, void *),
                                             void *func_arg);
 typedef uthread_t (*get_bsdthread_info_t)(thread_t th);
-typedef void (*fp_load_t)(thread_t thr_act);
 typedef kern_return_t (*vm_map_region_recurse_64_t)(vm_map_t map,
                                                     vm_map_offset_t *address,        /* IN/OUT */
                                                     vm_map_size_t *size,             /* OUT */
@@ -963,14 +919,6 @@ typedef kern_return_t (*vm_map_lookup_locked_t)(vm_map_t *var_map,
                                                 boolean_t *wired,
                                                 vm_object_fault_info_t fault_info,
                                                 vm_map_t *real_map);
-typedef void (*vm_map_clip_start_t)(vm_map_t map,
-                                    vm_map_entry_t entry,
-                                    vm_map_offset_t startaddr);
-typedef void (*vm_map_clip_end_t)(vm_map_t map,
-                                  vm_map_entry_t entry,
-                                  vm_map_offset_t endaddr);
-typedef void (*pmap_change_wiring_t)(pmap_t map, vm_map_offset_t vaddr,
-                                     boolean_t wired);
 typedef void (*pmap_protect_t)(pmap_t map,
                                vm_map_offset_t sva,
                                vm_map_offset_t eva,
@@ -984,10 +932,6 @@ typedef kern_return_t (*pmap_enter_t)(pmap_t pmap,
                                       boolean_t wired);
 typedef vm_page_t (*vm_page_lookup_t)(vm_object_t object,
                                       vm_object_offset_t offset);
-typedef void (*vm_page_wire_t)(vm_page_t page,
-                               vm_tag_t tag,
-                               boolean_t check_memorystatus);
-typedef vm_page_t (*vm_page_alloc_t)(vm_object_t object, vm_object_offset_t offset);
 typedef void (*vm_object_lock_t)(vm_object_t object);
 typedef void (*pmap_sync_page_attributes_phys_t)(ppnum_t pa);
 typedef task_t (*get_threadtask_t)(thread_t th);
@@ -1008,7 +952,6 @@ static vm_map_switch_t vm_map_switch = NULL;
 static thread_get_tag_t thread_get_tag = NULL;
 static task_act_iterate_wth_args_t task_act_iterate_wth_args = NULL;
 static get_bsdthread_info_t get_bsdthread_info = NULL;
-static fp_load_t fp_load = NULL;
 static vm_map_region_recurse_64_t vm_map_region_recurse_64 = NULL;
 static task_hold_t task_hold = NULL;
 static task_release_t task_release = NULL;
@@ -1020,14 +963,9 @@ static vm_map_page_mask_t vm_map_page_mask = NULL;
 static vm_map_page_size_t vm_map_page_size = NULL;
 static vm_map_lookup_entry_t vm_map_lookup_entry = NULL;
 static vm_map_lookup_locked_t vm_map_lookup_locked = NULL;
-static vm_map_clip_start_t vm_map_clip_start = NULL;
-static vm_map_clip_end_t vm_map_clip_end = NULL;
-static pmap_change_wiring_t pmap_change_wiring = NULL;
 static pmap_protect_t pmap_protect = NULL;
 static pmap_enter_t pmap_enter = NULL;
 static vm_page_lookup_t vm_page_lookup = NULL;
-static vm_page_wire_t vm_page_wire = NULL;
-static vm_page_alloc_t vm_page_alloc = NULL;
 static vm_object_lock_t vm_object_lock = NULL;
 static pmap_sync_page_attributes_phys_t pmap_sync_page_attributes_phys = NULL;
 static get_threadtask_t get_threadtask = NULL;
@@ -1049,63 +987,9 @@ bool find_kernel_private_functions()
     return true;
   }
 
-  if (!g_vm_page_locks) {
-    g_vm_page_locks = (vm_locks_array_t *)
-      kernel_dlsym("_vm_page_locks");
-    if (!g_vm_page_locks) {
-      return false;
-    }
-  }
-  if (!g_max_mem) {
-    g_max_mem = (uint64_t *)
-      kernel_dlsym("_max_mem");
-    if (!g_max_mem) {
-      return false;
-    }
-  }
-  if (!g_mem_actual) {
-    g_mem_actual = (uint64_t *)
-      kernel_dlsym("_mem_actual");
-    if (!g_mem_actual) {
-      return false;
-    }
-  }
-  if (!g_vm_page_wire_count) {
-    g_vm_page_wire_count = (unsigned int *)
-      kernel_dlsym("_vm_page_wire_count");
-    if (!g_vm_page_wire_count) {
-      return false;
-    }
-  }
-  if (!g_vm_lopage_free_count) {
-    g_vm_lopage_free_count = (uint32_t *)
-      kernel_dlsym("_vm_lopage_free_count");
-    if (!g_vm_lopage_free_count) {
-      return false;
-    }
-  }
-  if (!g_vm_global_no_user_wire_amount) {
-    g_vm_global_no_user_wire_amount = (vm_map_size_t *)
-      kernel_dlsym("_vm_global_no_user_wire_amount");
-    if (!g_vm_global_no_user_wire_amount) {
-      return false;
-    }
-  }
-  if (!g_vm_global_user_wire_limit) {
-    g_vm_global_user_wire_limit = (vm_map_size_t *)
-      kernel_dlsym("_vm_global_user_wire_limit");
-    if (!g_vm_global_user_wire_limit) {
-      return false;
-    }
-  }
-  if (!g_vm_user_wire_limit) {
-    g_vm_user_wire_limit = (vm_map_size_t *)
-      kernel_dlsym("_vm_user_wire_limit");
-    if (!g_vm_user_wire_limit) {
-      return false;
-    }
-  }
-  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
+      macOS_Catalina())
+  {
     if (!g_vm_pages) {
       g_vm_pages = (vm_page_t *)
         kernel_dlsym("_vm_pages");
@@ -1198,13 +1082,6 @@ bool find_kernel_private_functions()
       return false;
     }
   }
-  if (!fp_load) {
-    fp_load = (fp_load_t)
-      kernel_dlsym("_fp_load");
-    if (!fp_load) {
-      return false;
-    }
-  }
   if (!vm_map_region_recurse_64) {
     vm_map_region_recurse_64 = (vm_map_region_recurse_64_t)
       kernel_dlsym("_vm_map_region_recurse_64");
@@ -1282,27 +1159,6 @@ bool find_kernel_private_functions()
       return false;
     }
   }
-  if (!vm_map_clip_start) {
-    vm_map_clip_start = (vm_map_clip_start_t)
-      kernel_dlsym("_vm_map_clip_start");
-    if (!vm_map_clip_start) {
-      return false;
-    }
-  }
-  if (!vm_map_clip_end) {
-    vm_map_clip_end = (vm_map_clip_end_t)
-      kernel_dlsym("_vm_map_clip_end");
-    if (!vm_map_clip_end) {
-      return false;
-    }
-  }
-  if (!pmap_change_wiring) {
-    pmap_change_wiring = (pmap_change_wiring_t)
-      kernel_dlsym("_pmap_change_wiring");
-    if (!pmap_change_wiring) {
-      return false;
-    }
-  }
   if (!pmap_protect) {
     pmap_protect = (pmap_protect_t)
       kernel_dlsym("_pmap_protect");
@@ -1321,20 +1177,6 @@ bool find_kernel_private_functions()
     vm_page_lookup = (vm_page_lookup_t)
       kernel_dlsym("_vm_page_lookup");
     if (!vm_page_lookup) {
-      return false;
-    }
-  }
-  if (!vm_page_wire) {
-    vm_page_wire = (vm_page_wire_t)
-      kernel_dlsym("_vm_page_wire");
-    if (!vm_page_wire) {
-      return false;
-    }
-  }
-  if (!vm_page_alloc) {
-    vm_page_alloc = (vm_page_alloc_t)
-      kernel_dlsym("_vm_page_alloc");
-    if (!vm_page_alloc) {
       return false;
     }
   }
@@ -1373,7 +1215,9 @@ bool find_kernel_private_functions()
       return false;
     }
   }
-  if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
+  if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra() ||
+      macOS_Mojave() || macOS_Catalina())
+  {
     if (!task_coalition_ids) {
       task_coalition_ids = (task_coalition_ids_t)
         kernel_dlsym("_task_coalition_ids");
@@ -1403,7 +1247,9 @@ bool find_kernel_private_functions()
       }
     }
   }
-  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
+      macOS_Catalina())
+  {
     if (!vm_object_unlock_ptr) {
       vm_object_unlock_ptr = (vm_object_unlock_t)
         kernel_dlsym("_vm_object_unlock");
@@ -1560,12 +1406,40 @@ typedef struct _vm_map_fake_mojave {
   unsigned int timestamp; // Offset 0xf0
 } *vm_map_fake_mojave_t;
 
+typedef struct _vm_map_fake_catalina {
+  lck_rw_t lock;
+  struct vm_map_links links; // Actually 1st member of "struct vm_map_header hdr"
+#define hdr links
+  uint64_t pad1[3];
+  pmap_t pmap;            // Offset 0x48
+  vm_map_size_t size;
+  vm_map_size_t user_wire_limit;
+  vm_map_size_t user_wire_size;
+  uint32_t pad2[34];
+  unsigned int timestamp; // Offset 0xf0
+} *vm_map_fake_catalina_t;
+
+typedef struct _vm_map_fake_catalina_dev_debug {
+  lck_rw_t lock;
+  struct vm_map_links links; // Actually 1st member of "struct vm_map_header hdr"
+#define hdr links
+  uint64_t pad1[3];
+  pmap_t pmap;            // Offset 0x48
+  vm_map_size_t size;
+  vm_map_size_t user_wire_limit;
+  vm_map_size_t user_wire_size;
+  uint32_t pad2[37];
+  unsigned int timestamp; // Offset 0xfc
+} *vm_map_fake_catalina_dev_debug_t;
+
 pmap_t vm_map_pmap(vm_map_t map)
 {
   if (!map) {
     return NULL;
   }
-  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
+      macOS_Catalina())
+  {
     vm_map_fake_sierra_t m = (vm_map_fake_sierra_t) map;
     return m->pmap;
   } else {
@@ -1579,8 +1453,19 @@ unsigned int vm_map_timestamp(vm_map_t map)
   if (!map) {
     return 0;
   }
-  unsigned int retval;
-  if (macOS_Mojave()) {
+  unsigned int retval = 0;
+  if (macOS_Catalina()) {
+    if (kernel_type_is_release()) {
+      vm_map_fake_catalina_t map_local = (vm_map_fake_catalina_t) map;
+      retval = map_local->timestamp;
+    } else if (kernel_type_is_development() ||
+               kernel_type_is_debug())
+    {
+      vm_map_fake_catalina_dev_debug_t map_local =
+        (vm_map_fake_catalina_dev_debug_t) map;
+      retval = map_local->timestamp;
+    }
+  } else if (macOS_Mojave()) {
     vm_map_fake_mojave_t map_local = (vm_map_fake_mojave_t) map;
     retval = map_local->timestamp;
   } else if (macOS_HighSierra()) {
@@ -1620,7 +1505,9 @@ vm_map_size_t vm_map_user_wire_limit(vm_map_t map)
     return 0;
   }
   vm_map_size_t retval;
-  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
+      macOS_Catalina())
+  {
     vm_map_fake_sierra_t m = (vm_map_fake_sierra_t) map;
     retval = m->user_wire_limit;
   } else {
@@ -1636,7 +1523,9 @@ vm_map_size_t vm_map_user_wire_size(vm_map_t map)
     return 0;
   }
   vm_map_size_t retval;
-  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
+      macOS_Catalina())
+  {
     vm_map_fake_sierra_t m = (vm_map_fake_sierra_t) map;
     retval = m->user_wire_size;
   } else {
@@ -1651,7 +1540,9 @@ void vm_map_set_user_wire_size(vm_map_t map, vm_map_size_t new_size)
   if (!map) {
     return;
   }
-  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
+      macOS_Catalina())
+  {
     vm_map_fake_sierra_t m = (vm_map_fake_sierra_t) map;
     m->user_wire_size = new_size;
   } else {
@@ -1756,7 +1647,9 @@ bool vm_map_entry_get_superpage_size(vm_map_entry_t entry)
     return false;
   }
   bool retval = false;
-  if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
+  if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra() ||
+      macOS_Mojave() || macOS_Catalina())
+  {
     vm_map_entry_fake_elcapitan_t entry_local =
       (vm_map_entry_fake_elcapitan_t) entry;
     retval = entry_local->superpage_size;
@@ -1826,7 +1719,20 @@ void vm_map_lock_write_to_read(vm_map_t map)
   if (!map) {
     return;
   }
-  if (macOS_Mojave()) {
+  if (macOS_Catalina()) {
+    if (kernel_type_is_release()) {
+      vm_map_fake_catalina_t map_local = (vm_map_fake_catalina_t) map;
+      ++map_local->timestamp;
+      lck_rw_lock_exclusive_to_shared(&(map_local->lock));
+    } else if (kernel_type_is_development() ||
+               kernel_type_is_debug())
+    {
+      vm_map_fake_catalina_dev_debug_t map_local =
+        (vm_map_fake_catalina_dev_debug_t) map;
+      ++map_local->timestamp;
+      lck_rw_lock_exclusive_to_shared(&(map_local->lock));
+    }
+  } else if (macOS_Mojave()) {
     vm_map_fake_mojave_t map_local = (vm_map_fake_mojave_t) map;
     ++map_local->timestamp;
     lck_rw_lock_exclusive_to_shared(&(map_local->lock));
@@ -1850,7 +1756,20 @@ void vm_map_unlock(vm_map_t map)
   if (!map) {
     return;
   }
-  if (macOS_Mojave()) {
+  if (macOS_Catalina()) {
+    if (kernel_type_is_release()) {
+      vm_map_fake_catalina_t map_local = (vm_map_fake_catalina_t) map;
+      ++map_local->timestamp;
+      lck_rw_done(&(map_local->lock));
+    } else if (kernel_type_is_development() ||
+               kernel_type_is_debug())
+    {
+      vm_map_fake_catalina_dev_debug_t map_local =
+        (vm_map_fake_catalina_dev_debug_t) map;
+      ++map_local->timestamp;
+      lck_rw_done(&(map_local->lock));
+    }
+  } else if (macOS_Mojave()) {
     vm_map_fake_mojave_t map_local = (vm_map_fake_mojave_t) map;
     ++map_local->timestamp;
     lck_rw_done(&(map_local->lock));
@@ -2286,7 +2205,9 @@ typedef struct vm_page_fake_highsierra {
 
 vm_page_packed_t vm_page_pack_ptr(uintptr_t p)
 {
-  if (!p || (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave())) {
+  if (!p || (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave() &&
+             !macOS_Catalina()))
+  {
     return 0;
   }
 
@@ -2325,7 +2246,9 @@ vm_page_packed_t vm_page_pack_ptr(uintptr_t p)
 
 uintptr_t vm_page_unpack_ptr(uintptr_t p)
 {
-  if (!p || (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave())) {
+  if (!p || (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave() &&
+             !macOS_Catalina()))
+  {
     return 0;
   }
 
@@ -2360,7 +2283,9 @@ ppnum_t page_phys_page(vm_page_t page)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
+    if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
+        macOS_Catalina())
+    {
       offset_in_struct = offsetof(struct vm_page_fake_sierra, phys_page);
     } else if (OSX_ElCapitan()) {
       offset_in_struct = offsetof(struct vm_page_fake_elcapitan, phys_page);
@@ -2390,7 +2315,9 @@ bool page_is_wpmapped(vm_page_t page)
     return false;
   }
   bool retval = false;
-  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
+      macOS_Catalina())
+  {
     vm_page_fake_sierra_t page_local = (vm_page_fake_sierra_t) page;
     retval = page_local->wpmapped;
   } else if (OSX_ElCapitan()) {
@@ -2411,7 +2338,9 @@ void page_set_wpmapped(vm_page_t page, bool flag)
   if (!page) {
     return;
   }
-  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
+      macOS_Catalina())
+  {
     vm_page_fake_sierra_t page_local = (vm_page_fake_sierra_t) page;
     page_local->wpmapped = flag;
   } else if (OSX_ElCapitan()) {
@@ -2432,7 +2361,7 @@ bool page_is_cs_validated(vm_page_t page)
     return false;
   }
   bool retval = false;
-  if (macOS_HighSierra() || macOS_Mojave()) {
+  if (macOS_HighSierra() || macOS_Mojave() || macOS_Catalina()) {
     vm_page_fake_highsierra_t page_local = (vm_page_fake_highsierra_t) page;
     retval = page_local->cs_validated;
   } else if (macOS_Sierra()) {
@@ -2456,7 +2385,7 @@ void page_set_cs_validated(vm_page_t page, bool flag)
   if (!page) {
     return;
   }
-  if (macOS_HighSierra() || macOS_Mojave()) {
+  if (macOS_HighSierra() || macOS_Mojave() || macOS_Catalina()) {
     vm_page_fake_highsierra_t page_local = (vm_page_fake_highsierra_t) page;
     page_local->cs_validated = flag;
   } else if (macOS_Sierra()) {
@@ -2480,7 +2409,7 @@ bool page_is_cs_tainted(vm_page_t page)
     return false;
   }
   bool retval = false;
-  if (macOS_HighSierra() || macOS_Mojave()) {
+  if (macOS_HighSierra() || macOS_Mojave() || macOS_Catalina()) {
     vm_page_fake_highsierra_t page_local = (vm_page_fake_highsierra_t) page;
     retval = page_local->cs_tainted;
   } else if (macOS_Sierra()) {
@@ -2504,7 +2433,7 @@ void page_set_cs_tainted(vm_page_t page, bool flag)
   if (!page) {
     return;
   }
-  if (macOS_HighSierra() || macOS_Mojave()) {
+  if (macOS_HighSierra() || macOS_Mojave() || macOS_Catalina()) {
     vm_page_fake_highsierra_t page_local = (vm_page_fake_highsierra_t) page;
     page_local->cs_tainted = flag;
   } else if (macOS_Sierra()) {
@@ -2528,7 +2457,7 @@ bool page_is_cs_nx(vm_page_t page)
     return false;
   }
   bool retval = false;
-  if (macOS_HighSierra() || macOS_Mojave()) {
+  if (macOS_HighSierra() || macOS_Mojave() || macOS_Catalina()) {
     vm_page_fake_highsierra_t page_local = (vm_page_fake_highsierra_t) page;
     retval = page_local->cs_nx;
   } else if (macOS_Sierra()) {
@@ -2549,7 +2478,7 @@ void page_set_cs_nx(vm_page_t page, bool flag)
   if (!page) {
     return;
   }
-  if (macOS_HighSierra() || macOS_Mojave()) {
+  if (macOS_HighSierra() || macOS_Mojave() || macOS_Catalina()) {
     vm_page_fake_highsierra_t page_local = (vm_page_fake_highsierra_t) page;
     page_local->cs_nx = flag;
   } else if (macOS_Sierra()) {
@@ -2566,8 +2495,9 @@ void page_set_cs_nx(vm_page_t page, bool flag)
 
 bool page_is_slid(vm_page_t page)
 {
-  // As best I can tell, the notion of slid pages is absent in macOS Mojave.
-  if (!page || macOS_Mojave()) {
+  // As best I can tell, the notion of slid pages is absent in macOS Mojave
+  // and Catalina.
+  if (!page || macOS_Mojave() || macOS_Catalina()) {
     return false;
   }
   bool retval = false;
@@ -2592,8 +2522,9 @@ bool page_is_slid(vm_page_t page)
 
 void page_set_slid(vm_page_t page, bool flag)
 {
-  // As best I can tell, the notion of slid pages is absent in macOS Mojave.
-  if (!page || macOS_Mojave()) {
+  // As best I can tell, the notion of slid pages is absent in macOS Mojave
+  // and Catalina.
+  if (!page || macOS_Mojave() || macOS_Catalina()) {
     return;
   }
   if (macOS_HighSierra()) {
@@ -2622,7 +2553,9 @@ vm_object_t page_object(vm_page_t page)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
+    if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
+        macOS_Catalina())
+    {
       offset_in_struct = offsetof(struct vm_page_fake_sierra, vm_page_object);
     } else if (OSX_ElCapitan()) {
       offset_in_struct = offsetof(struct vm_page_fake_elcapitan, object);
@@ -2635,7 +2568,9 @@ vm_object_t page_object(vm_page_t page)
 
   vm_object_t retval = NULL;
   if (offset_in_struct != -1) {
-    if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
+    if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
+        macOS_Catalina())
+    {
       vm_page_object_t packed =
         *((vm_page_object_t *)((vm_map_offset_t)page + offset_in_struct));
       retval = (vm_object_t) vm_page_unpack_ptr(packed);
@@ -2655,7 +2590,9 @@ vm_object_offset_t page_object_offset(vm_page_t page)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
+    if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
+        macOS_Catalina())
+    {
       offset_in_struct = offsetof(struct vm_page_fake_sierra, offset);
     } else if (OSX_ElCapitan()) {
       offset_in_struct = offsetof(struct vm_page_fake_elcapitan, offset);
@@ -2983,6 +2920,84 @@ typedef struct _vm_object_fake_highsierra_dev_debug {
     __object2_unused_bits:7; /* for expansion */
 } *vm_object_fake_highsierra_dev_debug_t;
 
+typedef struct _vm_object_fake_catalina {
+  uint64_t pad1[1];
+  lck_rw_t Lock;
+  uint64_t pad2[5];
+  vm_object_t shadow; // Offset 0x40
+  uint64_t pad3[1];
+  union {
+    vm_object_offset_t vou_shadow_offset; /* Offset into shadow (offset 0x50) */
+    clock_sec_t vou_cache_ts; /* age of an external object
+                               * present in cache
+                               */
+    task_t vou_owner; /* If the object is purgeable
+                       * or has a "ledger_tag", this
+                       * is the task that owns it.
+                       */
+  } vo_un2;
+  uint32_t pad4[19];
+  /* hold object lock when altering */
+  unsigned int // Offset 0xa4
+    wimg_bits:8,    /* cache WIMG bits         */
+    code_signed:1,  /* pages are signed and should be
+                       validated; the signatures are stored
+                       with the pager */
+    transposed:1,   /* object was transposed with another */
+    mapping_in_progress:1, /* pager being mapped/unmapped */
+    phantom_isssd:1,
+    volatile_empty:1,
+    volatile_fault:1,
+    all_reusable:1,
+    blocked_access:1,
+    set_cache_attr:1,
+    object_is_shared_cache:1,
+    purgeable_queue_type:2,
+    purgeable_queue_group:3,
+    io_tracking:1,
+    no_tag_update:1,
+    __object2_unused_bits:7; /* for expansion */
+} *vm_object_fake_catalina_t;
+
+typedef struct _vm_object_fake_catalina_dev_debug {
+  uint64_t pad1[1];
+  lck_rw_t Lock;
+  uint64_t pad2[6];
+  vm_object_t shadow; // Offset 0x48
+  uint64_t pad3[1];
+  union {
+    vm_object_offset_t vou_shadow_offset; /* Offset into shadow (offset 0x58) */
+    clock_sec_t vou_cache_ts; /* age of an external object
+                               * present in cache
+                               */
+    task_t vou_owner; /* If the object is purgeable
+                       * or has a "ledger_tag", this
+                       * is the task that owns it.
+                       */
+  } vo_un2;
+  uint32_t pad4[19];
+  /* hold object lock when altering */
+  unsigned int // Offset 0xac
+    wimg_bits:8,    /* cache WIMG bits         */
+    code_signed:1,  /* pages are signed and should be
+                       validated; the signatures are stored
+                       with the pager */
+    transposed:1,   /* object was transposed with another */
+    mapping_in_progress:1, /* pager being mapped/unmapped */
+    phantom_isssd:1,
+    volatile_empty:1,
+    volatile_fault:1,
+    all_reusable:1,
+    blocked_access:1,
+    set_cache_attr:1,
+    object_is_shared_cache:1,
+    purgeable_queue_type:2,
+    purgeable_queue_group:3,
+    io_tracking:1,
+    no_tag_update:1,
+    __object2_unused_bits:7; /* for expansion */
+} *vm_object_fake_catalina_dev_debug_t;
+
 bool object_is_code_signed(vm_object_t object)
 {
   if (!object) {
@@ -3021,6 +3036,18 @@ bool object_is_code_signed(vm_object_t object)
     {
       vm_object_fake_highsierra_dev_debug_t object_local =
         (vm_object_fake_highsierra_dev_debug_t) object;
+      retval = object_local->code_signed;
+    }
+  } else if (macOS_Catalina()) {
+    if (kernel_type_is_release()) {
+      vm_object_fake_catalina_t object_local =
+        (vm_object_fake_catalina_t) object;
+      retval = object_local->code_signed;
+    } else if (kernel_type_is_development() ||
+               kernel_type_is_debug())
+    {
+      vm_object_fake_catalina_dev_debug_t object_local =
+        (vm_object_fake_catalina_dev_debug_t) object;
       retval = object_local->code_signed;
     }
   } else {
@@ -3078,6 +3105,18 @@ void object_set_code_signed(vm_object_t object, bool flag)
         (vm_object_fake_highsierra_dev_debug_t) object;
       object_local->code_signed = flag;
     }
+  } else if (macOS_Catalina()) {
+    if (kernel_type_is_release()) {
+      vm_object_fake_catalina_t object_local =
+        (vm_object_fake_catalina_t) object;
+      object_local->code_signed = flag;
+    } else if (kernel_type_is_development() ||
+               kernel_type_is_debug())
+    {
+      vm_object_fake_catalina_dev_debug_t object_local =
+        (vm_object_fake_catalina_dev_debug_t) object;
+      object_local->code_signed = flag;
+    }
   } else {
     if (kernel_type_is_release()) {
       vm_object_fake_yosemite_t object_local =
@@ -3095,8 +3134,9 @@ void object_set_code_signed(vm_object_t object, bool flag)
 
 bool object_is_slid(vm_object_t object)
 {
-  // As best I can tell, the notion of slid objects is absent in macOS Mojave.
-  if (!object || macOS_Mojave()) {
+  // As best I can tell, the notion of slid objects is absent in macOS Mojave
+  // and Catalina.
+  if (!object || macOS_Mojave() || macOS_Catalina()) {
     return false;
   }
   bool retval = false;
@@ -3156,7 +3196,9 @@ vm_object_t object_get_shadow(vm_object_t object)
     return NULL;
   }
   vm_object_t retval = NULL;
-  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
+      macOS_Catalina())
+  {
     if (kernel_type_is_release()) {
       vm_object_fake_sierra_t object_local =
         (vm_object_fake_sierra_t) object;
@@ -3182,7 +3224,19 @@ vm_object_offset_t object_get_shadow_offset(vm_object_t object)
     return 0;
   }
   vm_object_offset_t retval = 0;
-  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
+  if (macOS_Catalina()) {
+    if (kernel_type_is_release()) {
+      vm_object_fake_catalina_t object_local =
+        (vm_object_fake_catalina_t) object;
+      retval = object_local->vo_un2.vou_shadow_offset;
+    } else if (kernel_type_is_development() ||
+               kernel_type_is_debug())
+    {
+      vm_object_fake_catalina_dev_debug_t object_local =
+        (vm_object_fake_catalina_dev_debug_t) object;
+      retval = object_local->vo_un2.vou_shadow_offset;
+    }
+  } else if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
     if (kernel_type_is_release()) {
       vm_object_fake_sierra_t object_local =
         (vm_object_fake_sierra_t) object;
@@ -3208,7 +3262,9 @@ vm_object_offset_t object_get_shadow_offset(vm_object_t object)
 
 void vm_object_unlock(vm_object_t object)
 {
-  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
+      macOS_Catalina())
+  {
     vm_object_unlock_ptr(object);
     return;
   }
@@ -3304,10 +3360,32 @@ typedef struct _proc_fake_mojave {
   u_short p_acflag;       // Offset 0x374
 } *proc_fake_mojave_t;
 
+typedef struct _proc_fake_catalina {
+  uint32_t pad1[4];
+  task_t task;            // Offset 0x10
+  uint32_t pad2[12];
+  uint64_t p_uniqueid;    // Offset 0x48
+  uint32_t pad3[6];
+  pid_t p_pid;            // Offset 0x68
+  uint32_t pad4[70];
+  unsigned int p_flag;    // P_* flags (offset 0x184)
+  unsigned int p_lflag;
+  uint32_t pad5[75];
+  uint32_t p_argslen;     // Length of "string area" at beginning of user stack (offset 0x2b8)
+  int32_t p_argc;         // Offset 0x2bc
+  user_addr_t user_stack; // Where user stack was allocated (offset 0x2c0)
+  uint32_t pad6[55];
+  u_short p_acflag;       // Offset 0x3a4
+} *proc_fake_catalina_t;
+
 static uint64_t proc_uniqueid(proc_t proc)
 {
   if (!proc) {
     return 0;
+  }
+  if (macOS_Catalina()) {
+    proc_fake_catalina_t p = (proc_fake_catalina_t) proc;
+    return p->p_uniqueid;
   }
   if (macOS_Mojave()) {
     proc_fake_mojave_t p = (proc_fake_mojave_t) proc;
@@ -3322,7 +3400,7 @@ static task_t proc_task(proc_t proc)
   if (!proc) {
     return NULL;
   }
-  if (macOS_Mojave()) {
+  if (macOS_Mojave() || macOS_Catalina()) {
     proc_fake_mojave_t p = (proc_fake_mojave_t) proc;
     return p->task;
   }
@@ -3334,6 +3412,10 @@ static bool IS_64BIT_PROCESS(proc_t proc)
 {
   if (!proc) {
     return false;
+  }
+  if (macOS_Catalina()) {
+    proc_fake_catalina_t p = (proc_fake_catalina_t) proc;
+    return (p && (p->p_flag & P_LP64));
   }
   if (macOS_Mojave()) {
     proc_fake_mojave_t p = (proc_fake_mojave_t) proc;
@@ -3351,6 +3433,10 @@ u_short get_acflag(proc_t proc)
 {
   if (!proc) {
     return 0;
+  }
+  if (macOS_Catalina()) {
+    proc_fake_catalina_t p = (proc_fake_catalina_t) proc;
+    return p->p_acflag;
   }
   if (macOS_Mojave()) {
     proc_fake_mojave_t p = (proc_fake_mojave_t) proc;
@@ -3374,6 +3460,10 @@ unsigned int get_lflag(proc_t proc)
   if (!proc) {
     return 0;
   }
+  if (macOS_Catalina()) {
+    proc_fake_catalina_t p = (proc_fake_catalina_t) proc;
+    return p->p_lflag;
+  }
   if (macOS_Mojave()) {
     proc_fake_mojave_t p = (proc_fake_mojave_t) proc;
     return p->p_lflag;
@@ -3390,6 +3480,10 @@ unsigned int get_flag(proc_t proc)
 {
   if (!proc) {
     return 0;
+  }
+  if (macOS_Catalina()) {
+    proc_fake_catalina_t p = (proc_fake_catalina_t) proc;
+    return p->p_flag;
   }
   if (macOS_Mojave()) {
     proc_fake_mojave_t p = (proc_fake_mojave_t) proc;
@@ -3420,32 +3514,48 @@ typedef enum {
   FP_UNUSED = 5
 } fp_save_layout_t;
 
-// "struct x86_fx_thread_state" and "struct x86_avx_thread_state" are defined
-// in the xnu kernel's osfmk/mach/i386/fp_reg.h.  "struct thread" is defined
-// in osfmk/kern/thread.h.  "struct machine_thread" is defined in
-// osfmk/i386/thread.h.  For the offsets of fp_valid and ifps, look at the
-// machine code for fp_setvalid().  For the offset of iotier_override, look at
-// the machine code for set_thread_iotier_override().
+// "struct thread" is defined in osfmk/kern/thread.h.  "struct machine_thread"
+// is defined in osfmk/i386/thread.h.  For the offset of iotier_override, look
+// at the machine code for set_thread_iotier_override().
 
-typedef struct x86_fx_thread_state_fake
+typedef struct thread_fake_catalina
 {
-  uint64_t pad1[20];
-  unsigned short fx_XMM_reg[8][16];
-  uint64_t pad2[10];
-  unsigned int fp_valid; // Offset 0x1f0
-  fp_save_layout_t fp_save_layout;
-} x86_fx_thread_state_fake_t;
+  uint32_t pad1[24];
+  integer_t options;    // Offset 0x60
+  uint32_t pad2[21];
+  int iotier_override;  // Offset 0xb8
+  uint32_t pad3[147];
+  vm_map_t map;         // Offset 0x308
+  uint32_t pad4[84];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0x460
+} thread_fake_catalina_t;
 
-typedef struct x86_avx_thread_state_fake
+typedef struct thread_fake_catalina_development
 {
-  uint64_t pad1[20];
-  unsigned short fx_XMM_reg[8][16];
-  uint64_t pad2[10];
-  unsigned int fp_valid; // Offset 0x1f0
-  fp_save_layout_t fp_save_layout;
-  uint64_t pad3[8];
-  unsigned int x_YMMH_reg[4][16];
-} x86_avx_thread_state_fake_t;
+  uint32_t pad1[26];
+  integer_t options;    // Offset 0x68
+  uint32_t pad2[21];
+  int iotier_override;  // Offset 0xc0
+  uint32_t pad3[151];
+  vm_map_t map;         // Offset 0x320
+  uint32_t pad4[90];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0x490
+} thread_fake_catalina_development_t;
+
+typedef struct thread_fake_catalina_debug
+{
+  uint32_t pad1[58];
+  integer_t options;    // Offset 0xe8
+  uint32_t pad2[21];
+  int iotier_override;  // Offset 0x140
+  uint32_t pad3[169];
+  vm_map_t map;         // Offset 0x3e8
+  uint32_t pad4[106];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0x598
+} thread_fake_catalina_debug_t;
 
 typedef struct thread_fake_mojave
 {
@@ -3556,7 +3666,7 @@ typedef struct thread_fake_highsierra_development
 } thread_fake_highsierra_development_t;
 
 // As of build 17G7020 the size of the 'machine' struct increased by one byte.
-// So the offset of 'iotier_override' was pushed down by one byte.
+// So the offset of 'iotier_override' was pushed down by eight bytes.
 typedef struct thread_fake_highsierra_development_17G7020
 {
   uint32_t pad1[16];
@@ -3584,7 +3694,7 @@ typedef struct thread_fake_highsierra_debug
 } thread_fake_highsierra_debug_t;
 
 // As of build 17G7020 the size of the 'machine' struct increased by one byte.
-// So the offset of 'iotier_override' was pushed down by one byte.
+// So the offset of 'iotier_override' was pushed down by eight bytes.
 typedef struct thread_fake_highsierra_debug_17G7020
 {
   uint32_t pad1[48];
@@ -3749,7 +3859,18 @@ void initialize_thread_offsets()
     return;
   }
 
-  if (macOS_Mojave()) {
+  if (macOS_Catalina()) {
+    if (kernel_type_is_release()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_catalina, iotier_override);
+    } else if (kernel_type_is_development()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_catalina_development, iotier_override);
+    } else if (kernel_type_is_debug()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_catalina_debug, iotier_override);
+    }
+  } else if (macOS_Mojave()) {
     if (kernel_type_is_release()) {
       g_iotier_override_offset =
         offsetof(struct thread_fake_mojave, iotier_override);
@@ -3844,7 +3965,17 @@ wait_interrupt_t thread_interrupt_level(wait_interrupt_t new_level)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Mojave()) {
+    if (macOS_Catalina()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct = offsetof(struct thread_fake_catalina, options);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct thread_fake_catalina_development, options);
+      } else if (kernel_type_is_debug()) {
+        offset_in_struct =
+          offsetof(struct thread_fake_catalina_debug, options);
+      }
+    } else if (macOS_Mojave()) {
       if (kernel_type_is_release()) {
         offset_in_struct = offsetof(struct thread_fake_mojave, options);
       } else if (kernel_type_is_development()) {
@@ -3920,202 +4051,14 @@ wait_interrupt_t thread_interrupt_level(wait_interrupt_t new_level)
   return oldval;
 }
 
-#if (0)
-x86_fx_thread_state_fake_t *get_fp_thread_state()
-{
-  thread_t thread = current_thread();
-  if (!thread) {
-    return NULL;
-  }
-
-  static vm_map_offset_t offset_in_struct = -1;
-  if (offset_in_struct == -1) {
-    if (macOS_Mojave()) {
-      if (kernel_type_is_release()) {
-        offset_in_struct = offsetof(struct thread_fake_mojave, ifps);
-      } else if (kernel_type_is_development()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_mojave_development, ifps);
-      } else if (kernel_type_is_debug()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_mojave_debug, ifps);
-      }
-    } else if (macOS_HighSierra()) {
-      if (kernel_type_is_release()) {
-        offset_in_struct = offsetof(struct thread_fake_highsierra, ifps);
-      } else if (kernel_type_is_development()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_highsierra_development, ifps);
-      } else if (kernel_type_is_debug()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_highsierra_debug, ifps);
-      }
-    } else if (macOS_Sierra()) {
-      if (kernel_type_is_release()) {
-        offset_in_struct = offsetof(struct thread_fake_sierra, ifps);
-      } else if (kernel_type_is_development()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_sierra_development, ifps);
-      } else if (kernel_type_is_debug()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_sierra_debug, ifps);
-      }
-    } else if (OSX_ElCapitan()) {
-      if (kernel_type_is_release()) {
-        offset_in_struct = offsetof(struct thread_fake_elcapitan, ifps);
-      } else if (kernel_type_is_development()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_elcapitan_development, ifps);
-      } else if (kernel_type_is_debug()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_elcapitan_debug, ifps);
-      }
-    } else if (OSX_Yosemite()) {
-      if (kernel_type_is_release()) {
-        offset_in_struct = offsetof(struct thread_fake_yosemite, ifps);
-      } else if (kernel_type_is_development()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_yosemite_development, ifps);
-      } else if (kernel_type_is_debug()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_yosemite_debug, ifps);
-      }
-    } else if (OSX_Mavericks()) {
-      if (kernel_type_is_release()) {
-        offset_in_struct = offsetof(struct thread_fake_mavericks, ifps);
-      } else if (kernel_type_is_debug()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_mavericks_debug, ifps);
-      }
-    }
-  }
-
-  x86_fx_thread_state_fake_t *retval = NULL;
-  if (offset_in_struct != -1) {
-    retval = *((x86_fx_thread_state_fake_t **)
-               ((vm_map_offset_t) thread + offset_in_struct));
-  }
-
-  return retval;
-}
-#endif
-
-#if (0)
-vm_map_t thread_map(thread_t thread)
-{
-  if (!thread) {
-    return NULL;
-  }
-
-  static vm_map_offset_t offset_in_struct = -1;
-  if (offset_in_struct == -1) {
-    if (macOS_Mojave()) {
-      if (kernel_type_is_release()) {
-        offset_in_struct = offsetof(struct thread_fake_mojave, map);
-      } else if (kernel_type_is_development()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_mojave_development, map);
-      } else if (kernel_type_is_debug()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_mojave_debug, map);
-      }
-    } else if (macOS_HighSierra()) {
-      if (kernel_type_is_release()) {
-        offset_in_struct = offsetof(struct thread_fake_highsierra, map);
-      } else if (kernel_type_is_development()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_highsierra_development, map);
-      } else if (kernel_type_is_debug()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_highsierra_debug, map);
-      }
-    } else if (macOS_Sierra()) {
-      if (kernel_type_is_release()) {
-        offset_in_struct = offsetof(struct thread_fake_sierra, map);
-      } else if (kernel_type_is_development()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_sierra_development, map);
-      } else if (kernel_type_is_debug()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_sierra_debug, map);
-      }
-    } else if (OSX_ElCapitan()) {
-      if (kernel_type_is_release()) {
-        offset_in_struct = offsetof(struct thread_fake_elcapitan, map);
-      } else if (kernel_type_is_development()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_elcapitan_development, map);
-      } else if (kernel_type_is_debug()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_elcapitan_debug, map);
-      }
-    } else if (OSX_Yosemite()) {
-      if (kernel_type_is_release()) {
-        offset_in_struct = offsetof(struct thread_fake_yosemite, map);
-      } else if (kernel_type_is_development()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_yosemite_development, map);
-      } else if (kernel_type_is_debug()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_yosemite_debug, map);
-      }
-    } else if (OSX_Mavericks()) {
-      if (kernel_type_is_release()) {
-        offset_in_struct = offsetof(struct thread_fake_mavericks, map);
-      } else if (kernel_type_is_debug()) {
-        offset_in_struct =
-          offsetof(struct thread_fake_mavericks_debug, map);
-      }
-    }
-  }
-
-  vm_map_t retval = NULL;
-  if (offset_in_struct != -1) {
-    retval = *((vm_map_t *)((vm_map_offset_t)thread + offset_in_struct));
-  }
-
-  return retval;
-}
-#endif
-
-#if (0)
-// Is floating point currently in use (in user space) with an invalid
-// state?  Returns false if there isn't any floating point thread state
-// (which indicates that floating point isn't currently in use).  Don't do
-// too much here -- interrupts are cleared!  For example, the kernel panics
-// if you call get_kernel_type() for the first time, or if you call printf()!
-//
-// This method is probably unnecessary, so from now on we'll try to do
-// without it.
-extern "C" bool invalid_fp_thread_state()
-{
-  bool retval = false;
-  x86_fx_thread_state_fake_t *thread_state = get_fp_thread_state();
-  if (thread_state) {
-    retval = (thread_state->fp_valid == 0);
-  }
-  return retval;
-}
-#endif
-
-#if (0)
-// Don't do too much here -- interrupts are cleared!  For example, the kernel
-// panics if you call get_kernel_type() for the first time, or if you call
-// printf() at all!
-//
-// This method is probably unnecessary, so from now on we'll try to do
-// without it.
-extern "C" void restore_fp()
-{
-  thread_t current = current_thread();
-  if (current && get_fp_thread_state()) {
-    fp_load(current);
-  }
-}
-#endif
-
 // Possible value for uu_flag.
 #define UT_NOTCANCELPT 0x00000004  /* not a cancelation point */
+
+typedef struct uthread_fake_catalina
+{
+  uint64_t pad[33];
+  int uu_flag;        // Offset 0x108
+} *uthread_fake_catalina_t;
 
 typedef struct uthread_fake_mojave
 {
@@ -4161,7 +4104,9 @@ int get_uu_flag(uthread_t uthread)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Mojave()) {
+    if (macOS_Catalina()) {
+      offset_in_struct = offsetof(struct uthread_fake_catalina, uu_flag);
+    } else if (macOS_Mojave()) {
       offset_in_struct = offsetof(struct uthread_fake_mojave, uu_flag);
     } else if (macOS_HighSierra()) {
       offset_in_struct = offsetof(struct uthread_fake_highsierra, uu_flag);
@@ -4239,15 +4184,16 @@ void report_proc_thread_state(const char *header, thread_t thread)
 // standard kernel memory (or in the double-mapped HIB segment that's used to
 // implement KPTI in recent versions of macOS and OS X).
 //
-// This method no longer works properly on macOS Mojave (10.14) -- neither
-// pmap_protect() nor pmap_enter().  pmap_enter() returns no error (when you
-// use it), but attempting to write the target memory still triggers a
-// write-protect page fault (error code 3, T_PF_PROT | T_PF_WRITE).  This
-// only happens when VM_PROT_WRITE is newly added (not when it was already
-// present).  It doesn't happen when VM_PROT_EXECUTE is newly added.  I don't
-// know what tricks Apple has played, though I may learn more when they
-// release the source code for Mojave's xnu kernel.  In the meantime we'll use
-// use brute force where necessary -- by changing CR0's write protect bit.
+// This method no longer works properly on macOS Mojave (10.14) and above for
+// most of our purposes -- neither pmap_protect() nor pmap_enter().
+// pmap_enter() returns no error (when you use it), but attempting to write
+// the target memory still triggers a write-protect page fault (error code 3,
+// T_PF_PROT | T_PF_WRITE).  This only happens when VM_PROT_WRITE is newly
+// added (not when it was already present).  It doesn't happen when
+// VM_PROT_EXECUTE is newly added.  I don't know what tricks Apple has played,
+// though I may learn more when they release the source code for Mojave's xnu
+// kernel.  In the meantime we'll use use brute force where necessary -- by
+// changing CR0's write protect bit.
 bool set_kernel_physmap_protection(vm_map_offset_t start, vm_map_offset_t end,
                                    vm_prot_t new_prot, bool use_pmap_protect)
 {
@@ -4263,7 +4209,7 @@ bool set_kernel_physmap_protection(vm_map_offset_t start, vm_map_offset_t end,
   // Though we don't access kernel_map here, holding a lock on it seems to
   // help prevent weirdness.  But on Mojave we hang, even if we use
   // vm_map_trylock() instead.
-  if (!macOS_Mojave()) {
+  if (!macOS_Mojave() && !macOS_Catalina()) {
     vm_map_lock(kernel_map);
   }
 
@@ -4296,7 +4242,7 @@ bool set_kernel_physmap_protection(vm_map_offset_t start, vm_map_offset_t end,
     }
   }
 
-  if (!macOS_Mojave()) {
+  if (!macOS_Mojave() && !macOS_Catalina()) {
     vm_map_unlock(kernel_map);
   }
 
@@ -4533,8 +4479,7 @@ void unsign_user_pages(vm_map_t map, vm_map_offset_t start,
                        vm_map_offset_t end);
 
 bool proc_copyout(vm_map_t proc_map, const void *source,
-                  user_addr_t dest, size_t len,
-                  bool needs_exec_prot, bool needs_write_prot)
+                  user_addr_t dest, size_t len)
 {
   if (!proc_map || !source || !dest || !len) {
     return false;
@@ -4574,10 +4519,10 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
     // temporarily.  Doing so can upset macOS 10.14 (Mojave), if SIP is
     // only disabled for kernel extensions (and not for anything else).
     new_prot = VM_PROT_READ | VM_PROT_WRITE;
-    if (macOS_Mojave()) {
-      // Though shared libraries are all "copy on write", Mojave somehow needs
-      // us to request this specifically, if SIP is only disabled for kernel
-      // extensions.
+    if (macOS_Mojave() || macOS_Catalina()) {
+      // Though shared libraries are all "copy on write", Mojave and Catalina
+      // somehow need us to request this specifically, if SIP is only disabled
+      // for kernel extensions.
       if (info.share_mode == SM_COW) {
         new_prot |= VM_PROT_COPY;
       }
@@ -4587,9 +4532,9 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
     // write permission on a region that should remain unchanged.  We don't
     // need to worry about this for a shared region, because the region we
     // write to will be a private copy of it (generated via COW).  On Mojave
-    // we need to do this for all private regions.
+    // and Catalina we need to do this for all private regions.
     if (info.share_mode == SM_PRIVATE) {
-      if (macOS_Mojave() || codesigned) {
+      if (macOS_Mojave() || macOS_Catalina() || codesigned) {
         unsign_user_pages(proc_map, dest, dest + len);
       }
     }
@@ -4637,10 +4582,11 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
 
   // If we've altered a write-protected codesigned region, we need to "sign"
   // it ourselves to prevent later rechecks from finding the signature no
-  // longer matches.  On macOS 10.14 (Mojave) we need to "sign" every
-  // write-protected page we change, whether or not it's codesigned.
+  // longer matches.  On macOS 10.14 (Mojave) and 10.15 (Catalina) we need to
+  // "sign" every write-protected page we change, whether or not it's
+  // codesigned.
   if (prot_needs_restore) {
-    if (macOS_Mojave() || codesigned) {
+    if (macOS_Mojave() || macOS_Catalina() || codesigned) {
       sign_user_pages(proc_map, dest, dest + len);
     }
   }
@@ -4654,18 +4600,6 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
   //}
 
   if (prot_needs_restore) {
-#if (0)
-    // As best I can tell, these are no longer necessary, now that we've fixed
-    // how we call vm_map_region_recurse_64() in vm_region_get_info() above.
-    // I'll probably remove 'needs_exec_prot' and 'needs_write_prot' in a
-    // future version of HookCase.
-    if (needs_exec_prot) {
-      old_prot |= VM_PROT_EXECUTE;
-    }
-    if (needs_write_prot) {
-      old_prot |= VM_PROT_WRITE;
-    }
-#endif
     vm_protect(proc_map, dest_rounded, len_rounded, false, old_prot);
   }
 
@@ -4696,8 +4630,9 @@ bool proc_mapout(vm_map_t proc_map, const void *source,
     vm_map_copy_discard(copy);
     return false;
   }
-  // On macOS 10.14 (Mojave) we need to "sign" every page we add to proc_map.
-  if (macOS_Mojave()) {
+  // On macOS 10.14 (Mojave) and 10.15 (Catalina) we need to "sign" every page
+  // we add to proc_map.
+  if (macOS_Mojave() || macOS_Catalina()) {
     sign_user_pages(proc_map, out, out + len);
   }
   *target = out;
@@ -4797,7 +4732,7 @@ pid_t get_xpc_parent(pid_t possible_child)
 {
   if (!possible_child ||
       (!OSX_ElCapitan() && !macOS_Sierra() &&
-       !macOS_HighSierra() && !macOS_Mojave()))
+       !macOS_HighSierra() && !macOS_Mojave() && !macOS_Catalina()))
   {
     return 0;
   }
@@ -4910,7 +4845,14 @@ bool get_proc_info(int32_t pid, char **path,
   uint32_t p_argslen = 0;
   int32_t p_argc = 0;
   user_addr_t user_stack = 0;
-  if (macOS_Mojave()) {
+  if (macOS_Catalina()) {
+    proc_fake_catalina_t p = (proc_fake_catalina_t) our_proc;
+    if (p) {
+      p_argslen = p->p_argslen;
+      p_argc = p->p_argc;
+      user_stack = p->user_stack;
+    }
+  } else if (macOS_Mojave()) {
     proc_fake_mojave_t p = (proc_fake_mojave_t) our_proc;
     if (p) {
       p_argslen = p->p_argslen;
@@ -5119,6 +5061,28 @@ typedef struct _task_fake_mojave_dev_debug {
   mach_vm_size_t all_image_info_size;    // Offset 0x3d8
 } *task_fake_mojave_dev_debug_t;
 
+typedef struct _task_fake_catalina {
+  lck_mtx_t lock;       // Size 0x10
+  uint64_t pad1[9];
+  queue_head_t threads; // Size 0x10, offset 0x58
+  uint64_t pad2[110];
+  volatile uint32_t t_flags; /* Offset 0x3d8, general-purpose task flags protected by task_lock (TL) */
+  uint32_t pad3[3];
+  mach_vm_address_t all_image_info_addr; // Offset 0x3e8
+  mach_vm_size_t all_image_info_size;    // Offset 0x3f0
+} *task_fake_catalina_t;
+
+typedef struct _task_fake_catalina_dev_debug {
+  lck_mtx_t lock;       // Size 0x10
+  uint64_t pad1[10];
+  queue_head_t threads; // Size 0x10, offset 0x60
+  uint64_t pad2[110];
+  volatile uint32_t t_flags; /* Offset 0x3e0, general-purpose task flags protected by task_lock (TL) */
+  uint32_t pad3[3];
+  mach_vm_address_t all_image_info_addr; // Offset 0x3f0
+  mach_vm_size_t all_image_info_size;    // Offset 0x3f8
+} *task_fake_catalina_dev_debug_t;
+
 void task_lock(task_t task)
 {
   if (!task) {
@@ -5140,12 +5104,22 @@ void task_unlock(task_t task)
 mach_vm_address_t task_all_image_info_addr(task_t task)
 {
   if (!task) {
-    return NULL;
+    return 0;
   }
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Mojave()) {
+    if (macOS_Catalina()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_catalina, all_image_info_addr);
+      } else if (kernel_type_is_development() ||
+                 kernel_type_is_debug())
+      {
+        offset_in_struct =
+          offsetof(struct _task_fake_catalina_dev_debug, all_image_info_addr);
+      }
+    } else if (macOS_Mojave()) {
       if (macOS_Mojave_less_than_2() || kernel_type_is_release()) {
         offset_in_struct =
           offsetof(struct _task_fake_mojave, all_image_info_addr);
@@ -5173,7 +5147,7 @@ mach_vm_address_t task_all_image_info_addr(task_t task)
     }
   }
 
-  mach_vm_address_t retval = NULL;
+  mach_vm_address_t retval = 0;
   if (offset_in_struct != -1) {
     retval = *((mach_vm_address_t *)
                ((vm_map_offset_t) task + offset_in_struct));
@@ -5185,12 +5159,22 @@ mach_vm_address_t task_all_image_info_addr(task_t task)
 mach_vm_size_t task_all_image_info_size(task_t task)
 {
   if (!task) {
-    return NULL;
+    return 0;
   }
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Mojave()) {
+    if (macOS_Catalina()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_catalina, all_image_info_size);
+      } else if (kernel_type_is_development() ||
+                 kernel_type_is_debug())
+      {
+        offset_in_struct =
+          offsetof(struct _task_fake_catalina_dev_debug, all_image_info_size);
+      }
+    } else if (macOS_Mojave()) {
       if (macOS_Mojave_less_than_2() || kernel_type_is_release()) {
         offset_in_struct =
           offsetof(struct _task_fake_mojave, all_image_info_size);
@@ -5218,7 +5202,7 @@ mach_vm_size_t task_all_image_info_size(task_t task)
     }
   }
 
-  mach_vm_size_t retval = NULL;
+  mach_vm_size_t retval = 0;
   if (offset_in_struct != -1) {
     retval = *((mach_vm_size_t *)
                ((vm_map_offset_t) task + offset_in_struct));
@@ -5235,7 +5219,16 @@ uint32_t task_flags(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Mojave()) {
+    if (macOS_Catalina()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct = offsetof(struct _task_fake_catalina, t_flags);
+      } else if (kernel_type_is_development() ||
+                 kernel_type_is_debug())
+      {
+        offset_in_struct =
+          offsetof(struct _task_fake_catalina_dev_debug, t_flags);
+      }
+    } else if (macOS_Mojave()) {
       if (macOS_Mojave_less_than_2() || kernel_type_is_release()) {
         offset_in_struct = offsetof(struct _task_fake_mojave, t_flags);
       } else if (kernel_type_is_development() ||
@@ -5935,14 +5928,22 @@ bool get_module_info(proc_t proc, const char *module_name,
   if (module_name && module_name[0] &&
       !strcmp(basename(module_name), "dyld"))
   {
-    // dyld_image_load_address is inaccurate (zero or unslid) if the process's
-    // executable image hasn't yet been initialized (if _dyld_start hasn't
-    // yet been called).  So we need to look for the header (and compute its
-    // slide) ourselves.
+    bool dyld_image_load_address_good = true;
+    // dyld_image_load_address is inaccurate (zero or unslid, or on Catalina
+    // some impossibly large value) if the process's executable image hasn't
+    // yet been initialized (if _dyld_start hasn't yet been called).  So we
+    // need to look for the header (and compute its slide) ourselves.
     if (!libSystem_initialized) {
+      dyld_image_load_address_good = false;
+      // On Catalina dyld_image_load_address is initialized to
+      // 0x0020000000000000!
+      if (dyld_image_load_address > VM_MAX_USER_PAGE_ADDRESS)
+        dyld_image_load_address = 0;
       // all_image_info_addr is always in dyld, and dyld's size is about 1MB.
-      int64_t search_start =
-        (all_image_info_addr & 0xfffffffffff00000) - 0x100000;
+      uint64_t search_start = (all_image_info_addr & 0xfffffffffff00000);
+      if (search_start > 0x100000) {
+        search_start -= 0x100000;
+      }
       if (search_start > dyld_image_load_address) {
         dyld_image_load_address = search_start;
       }
@@ -6013,11 +6014,15 @@ bool get_module_info(proc_t proc, const char *module_name,
         }
         vm_deallocate(kernel_map, buffer, copyin_size);
         dyld_image_load_address += dyld_slide;
+        dyld_image_load_address_good = true;
         break;
       }
     }
 
     vm_map_deallocate(proc_map);
+    if (!dyld_image_load_address_good) {
+      return false;
+    }
     strncpy(module_info->path, module_name, sizeof(module_info->path));
     module_info->load_address = dyld_image_load_address;
     module_info->shared_cache_slide = shared_cache_slide;
@@ -6156,205 +6161,6 @@ user_addr_t find_symbol(const char *symbol_name, symbol_table_t *symbol_table)
 
   return retval;
 }
-
-// If DEBUG_LOG is defined, HookCase.kext will attempt to log debugging
-// information to the system log via sandboxmirrord from the SandboxMirror
-// project (https://github.com/steven-michaud/SandboxMirror).
-
-#ifdef DEBUG_LOG
-
-#define SM_FILENAME_SIZE 1024
-typedef char sm_filename_t[SM_FILENAME_SIZE];
-#define SM_PATH_SIZE 1024
-typedef char sm_path_t[SM_PATH_SIZE];
-#define SM_REPORT_SIZE 2048
-typedef char sm_report_t[SM_REPORT_SIZE];
-
-void get_proc_path(sm_path_t proc_path)
-{
-  if (!proc_path) {
-    return;
-  }
-  proc_path[0] = 0;
-
-  char *path_ptr = NULL;
-  char **envp = NULL;
-  vm_size_t envp_size = 0;
-  void *buffer = NULL;
-  vm_size_t buf_size = 0;
-  if (!get_proc_info(proc_selfpid(), &path_ptr, &envp, &envp_size,
-                     &buffer, &buf_size))
-  {
-    return;
-  }
-
-  if (path_ptr) {
-    strncpy(proc_path, path_ptr, SM_PATH_SIZE);
-  }
-
-  if (envp) {
-    IOFree(envp, envp_size);
-  }
-  IOFree(buffer, buf_size);
-}
-
-// We need a "host port" to communicate with sandboxmirrord.  But in recent
-// versions of the OS X kernel, Apple reserves all "legal" host ports for its
-// own purposes.  So, if possible, we need to steal one.  Apple's CHUD kernel
-// extension is obsolete, and very unlikely to be present.  So it's very
-// likely that we can safely steal its "host port".
-mach_port_t get_server_port()
-{
-  mach_port_t server_port = 0;
-  host_get_special_port(host_priv_self(), HOST_LOCAL_NODE,
-                        HOST_CHUD_PORT, &server_port);
-  return server_port;
-}
-
-// sm_report() and its associated structures and defines are derived from the
-// sm_report* files that come with the sandboxmirrord distro -- specifically
-// from the files that are generated from sm_report.defs by running 'mig' on
-// it.  'mig' "generates" an "interface" whereby we can send Mach messages to
-// sandboxmirrord (and receive messages from it).
-
-#define MSGID_BASE 666
-
-#pragma pack(4)
-typedef struct {
-  mach_msg_header_t Head;
-  /* start of the kernel processed data */
-  mach_msg_body_t msgh_body;
-  mach_msg_port_descriptor_t task;
-  /* end of the kernel processed data */
-  NDR_record_t NDR;
-  int32_t do_stacktrace;
-  int32_t pid;
-  uint64_t tid;
-  mach_msg_type_number_t log_fileOffset; /* MiG doesn't use it */
-  mach_msg_type_number_t log_fileCnt;
-  char log_file[SM_FILENAME_SIZE];
-  mach_msg_type_number_t proc_pathOffset; /* MiG doesn't use it */
-  mach_msg_type_number_t proc_pathCnt;
-  char proc_path[SM_PATH_SIZE];
-  mach_msg_type_number_t reportOffset; /* MiG doesn't use it */
-  mach_msg_type_number_t reportCnt;
-  char report[SM_REPORT_SIZE];
-} Request;
-
-typedef struct {
-  mach_msg_header_t Head;
-  NDR_record_t NDR;
-  kern_return_t RetCode;
-} Reply;
-#pragma pack()
-
-#define _WALIGN_(x) (((x) + 3) & ~3)
-
-// Kernel private functions needed by sm_report().
-typedef mach_port_t (*convert_task_to_port_t)(task_t);
-typedef void (*ipc_port_release_send_t)(ipc_port_t port);
-
-kern_return_t sm_report(mach_port_t server_port,
-                        task_t task,
-                        int32_t do_stacktrace,
-                        int32_t pid,
-                        uint64_t tid,
-                        sm_filename_t log_file,
-                        sm_path_t proc_path,
-                        sm_report_t report)
-{
-  static convert_task_to_port_t convert_task_to_port = NULL;
-  if (!convert_task_to_port) {
-    convert_task_to_port = (convert_task_to_port_t)
-      kernel_dlsym("_convert_task_to_port");
-    if (!convert_task_to_port) {
-      return KERN_FAILURE;
-    }
-  }
-  static ipc_port_release_send_t ipc_port_release_send = NULL;
-  if (!ipc_port_release_send) {
-    ipc_port_release_send = (ipc_port_release_send_t)
-      kernel_dlsym("_ipc_port_release_send");
-    if (!ipc_port_release_send) {
-      return KERN_FAILURE;
-    }
-  }
-
-  Request Out;
-
-  Out.msgh_body.msgh_descriptor_count = 1;
-  if (task && do_stacktrace) {
-    task_reference(task);
-    Out.task.name = convert_task_to_port(task);
-  } else {
-    Out.task.name = MACH_PORT_NULL;
-  }
-  Out.task.disposition = MACH_MSG_TYPE_COPY_SEND;
-  Out.task.type = MACH_MSG_PORT_DESCRIPTOR;
-
-  Out.NDR = NDR_record;
-  Out.do_stacktrace = do_stacktrace;
-  Out.pid = pid;
-  Out.tid = tid;
-
-  Out.log_fileCnt =
-    mig_strncpy(Out.log_file, log_file, SM_FILENAME_SIZE);
-  unsigned int msgh_size_delta = _WALIGN_(Out.log_fileCnt);
-  unsigned int msgh_size = (mach_msg_size_t)
-    (sizeof(Request) - (SM_FILENAME_SIZE + SM_PATH_SIZE + SM_REPORT_SIZE)) +
-    msgh_size_delta;
-
-  Request *OutP = (Request *)
-    (((pointer_t) &Out) + msgh_size_delta - SM_FILENAME_SIZE);
-  OutP->proc_pathCnt = mig_strncpy(OutP->proc_path, proc_path, SM_PATH_SIZE);
-  msgh_size_delta = _WALIGN_(OutP->proc_pathCnt);
-  msgh_size += msgh_size_delta;
-
-  OutP = (Request *)
-    (((pointer_t) OutP) + msgh_size_delta - SM_PATH_SIZE);
-  OutP->reportCnt = mig_strncpy(OutP->report, report, SM_REPORT_SIZE);
-  msgh_size += _WALIGN_(OutP->reportCnt);
-
-  Out.Head.msgh_bits = MACH_MSGH_BITS_COMPLEX |
-                       MACH_MSGH_BITS(19, MACH_MSG_TYPE_MAKE_SEND_ONCE);
-  Out.Head.msgh_remote_port = server_port;
-  Out.Head.msgh_local_port = mig_get_reply_port();
-  Out.Head.msgh_id = MSGID_BASE;
-
-  // This method sends a Mach message concurrently to sandboxmirrord, which
-  // makes it possible for sandboxmirrord to take an up-to-date snapshot of
-  // the current process.
-  mach_msg_return_t msg_result =
-    mach_msg_rpc_from_kernel(&Out.Head, msgh_size,
-                             (mach_msg_size_t) sizeof(Reply));
-
-  if (msg_result != KERN_SUCCESS) {
-    ipc_port_release_send(Out.task.name);
-  }
-
-  return msg_result;
-}
-
-void do_report(sm_report_t report)
-{
-  if (!report) {
-    return;
-  }
-
-  sm_path_t proc_path;
-  sm_filename_t log_file;
-  get_proc_path(proc_path);
-  log_file[0] = 0;
-
-  uint32_t pid = proc_selfpid();
-  uint64_t tid = thread_tid(current_thread());
-  task_t task = current_task();
-
-  sm_report(get_server_port(), task, true, pid, tid,
-            log_file, proc_path, report);
-}
-
-#endif // #ifdef DEBUG_LOG
 
 #if (0)
 typedef struct report_region_info {
@@ -6610,106 +6416,6 @@ void unsign_user_pages(vm_map_t map, vm_map_offset_t start,
   vm_map_iterate_entries(map, start, end, sign_user_pages_iterator, (void *) false);
 }
 
-#if (0)
-typedef struct ensure_user_region_wired_info {
-  bool retval;
-} *ensure_user_region_wired_info_t;
-
-void ensure_user_region_wired_iterator(vm_map_t map, vm_map_entry_t entry,
-                                       uint32_t submap_level, void *info)
-{
-  if (!map || !entry || !info) {
-    return;
-  }
-  ensure_user_region_wired_info_t info_local =
-    (ensure_user_region_wired_info_t) info;
-
-  vm_map_entry_fake_t an_entry = (vm_map_entry_fake_t) entry;
-
-  if (an_entry->wired_count) {
-    return;
-  }
-
-  vm_prot_t entry_prot = an_entry->protection;
-  vm_map_offset_t entry_start = an_entry->vme_start;
-  vm_map_offset_t entry_end = an_entry->vme_end;
-  vm_object_t object = an_entry->vme_object.vmo_object;
-  vm_object_offset_t offset = map_entry_offset(entry);
-
-  if (!object) {
-    info_local->retval = false;
-    return;
-  }
-
-  uint32_t total_wire_count = *g_vm_page_wire_count + *g_vm_lopage_free_count;
-  vm_map_size_t entry_size = entry_end - entry_start;
-  vm_map_size_t map_wired_size = vm_map_user_wire_size(map);
-  vm_map_size_t global_wired_size = ptoa_64(total_wire_count);
-  vm_map_size_t map_wired_limit =
-    MIN(vm_map_user_wire_limit(map), *g_vm_user_wire_limit);
-  vm_map_size_t global_wired_limit =
-    MIN(*g_vm_global_user_wire_limit, 
-        *g_max_mem - *g_vm_global_no_user_wire_amount);
-  if ((entry_size + map_wired_size > map_wired_limit) ||
-      (entry_size + global_wired_size > global_wired_limit))
-  {
-    info_local->retval = false;
-    return;
-  }
-
-  vm_object_lock(object);
-
-  vm_page_t page = vm_page_lookup(object, offset);
-  while (!page) {
-    vm_object_t shadow = object_get_shadow(object);
-    if (!shadow) {
-      break;
-    }
-    vm_object_lock(shadow);
-    vm_object_unlock(object);
-    offset += object_get_shadow_offset(object);
-    object = shadow;
-    page = vm_page_lookup(object, offset);
-  }
-
-  ++an_entry->wired_count;
-  ++an_entry->user_wired_count;
-  vm_map_set_user_wire_size(map, map_wired_size + entry_size);
-
-  if (page) {
-    vm_page_lockspin_queues();
-    vm_page_wire(page, VM_PROT_MEMORY_TAG(entry_prot), false);
-    vm_page_unlock_queues();
-  }
-
-  pmap_t pmap = vm_map_pmap(map);
-  if (pmap) {
-    ppnum_t page_num = pmap_find_phys(pmap, entry_start);
-    if (page_num) {
-      pmap_change_wiring(pmap, entry_start, true);
-    }
-  }
-
-  vm_object_unlock(object);
-}
-
-bool ensure_user_region_wired(vm_map_t map, vm_map_offset_t start,
-                              vm_map_offset_t end)
-{
-  if (!map || (map == kernel_map)) {
-    return false;
-  }
-
-  struct ensure_user_region_wired_info info;
-  bzero(&info, sizeof(info));
-  info.retval = true;
-
-  vm_map_iterate_entries(map, start, end, ensure_user_region_wired_iterator, &info);
-
-  return info.retval;
-}
-#endif
-
 // At the heart of HookCase.kext's infrastructure is a lock-protected linked
 // list of hook_t structures.  Think of these as something like fish hooks.
 // There are "cast hooks" and "user hooks".  There are also two different
@@ -6936,7 +6642,6 @@ typedef struct _hook {
   user_addr_t call_orig_func_block;     // Only used in cast hook
   hook_desc *patch_hooks;               // Only used in cast hook
   hook_desc *interpose_hooks;           // Only used in cast hook
-  task_t held_parent_task;              // Only used in cast hook
   pid_t hooked_parent;                  // Only used in cast hook
   uint32_t orig_dyld_runInitializers;   // Only used in cast hook
   uint32_t num_call_orig_funcs;         // Only used in cast hook
@@ -7190,10 +6895,6 @@ void free_hook(hook_t *hookp)
   if (hookp->interpose_hooks) {
     IOFree(hookp->interpose_hooks,
            hookp->num_interpose_hooks * sizeof(hook_desc));
-  }
-  if (hookp->held_parent_task) {
-    task_release(hookp->held_parent_task);
-    task_deallocate(hookp->held_parent_task);
   }
   IOFree(hookp, sizeof(hook_t));
 }
@@ -7687,7 +7388,7 @@ bool maybe_cast_hook(proc_t proc)
       dyld_runInitializers =
         find_symbol("__ZN4dyld15runInitializersEP11ImageLoader", &symbol_table);
       if (IS_64BIT_PROCESS(proc)) {
-        if (macOS_Mojave()) {
+        if (macOS_Mojave() || macOS_Catalina()) {
           dyld_launchWithClosure =
             find_symbol("__ZN4dyldL17launchWithClosureEPKN5dyld37closure13LaunchClosureEPK15DyldSharedCachePKNS0_11MachOLoadedEmiPPKcSD_SD_PmSE_",
                         &symbol_table);
@@ -7746,65 +7447,39 @@ bool maybe_cast_hook(proc_t proc)
   hookp->no_numerical_addrs = no_numerical_addrs;
   hookp->is_cast_hook = true;
 
-  // If debug logging is on, suspend the parent process if we might have hooks
-  // in it.  Our initialization can take a while if debug logging is on, and
-  // might confuse timers running in our parent.  (Suspending the parent also
-  // suspends its timers, of course.)  If it hasn't already happened by other
-  // means, the parent gets resumed when our cast hook is deleted.
   if (hooked_parent) {
     hookp->hooked_parent = hooked_parent;
-#ifdef DEBUG_LOG
-    proc_t parent_proc = proc_find(hooked_parent);
-    if (parent_proc) {
-      task_t parent_task = proc_task(parent_proc);
-      proc_rele(parent_proc);
-      if (parent_task) {
-        task_reference(parent_task);
-        task_hold(parent_task);
-        task_wait(parent_task, false);
-        hookp->held_parent_task = parent_task;
-      }
-    }
-#endif
   }
 
   uint16_t new_code = HC_INT1_OPCODE_SHORT;
   bool rv1 = proc_copyout(proc_map, &new_code, initializeMainExecutable,
-                          sizeof(new_code), true, false);
+                          sizeof(new_code));
   bool rv2 = true, rv3 = true;
-  // If a 64-bit process is being launched on macOS 10.13 or 10.14, dyld might
-  // call dyld::launchWithClosure(), and take a code path that never calls
-  // dyld::initializeMainExecutable().  To prevent this we patch
+  // If a 64-bit process is being launched on macOS 10.13 through 10.15, dyld
+  // might call dyld::launchWithClosure(), and take a code path that never
+  // calls dyld::initializeMainExecutable().  To prevent this we patch
   // dyld::launchWithClosure() to make it always "return false".  This makes
   // dyld fail over to the code path that calls
-  // dyld::initializeMainExecutable().  On 10.14 dyld::launchWithClosure() is
-  // (potentially) called twice, and dyld::buildLaunchClosure() is called if
-  // first call fails.  So on 10.14 we also need to make
-  // dyld::buildLaunchClosure() "return NULL".  This prevents the second call
-  // to dyld::launchWithClosure(), and stops us wasting time to rebuild
-  // closures that already exist.
+  // dyld::initializeMainExecutable().  On 10.14 and 10.15
+  // dyld::launchWithClosure() is (potentially) called twice, and
+  // dyld::buildLaunchClosure() is called if the first call fails.  So on
+  // 10.14 and 10.15 we also need to make dyld::buildLaunchClosure() "return
+  // NULL".  This prevents the second call to dyld::launchWithClosure(), and
+  // stops us wasting time to rebuild closures that already exist.
   uint32_t new_lwc = RETURN_NULL_64BIT_INT;
   if (dyld_launchWithClosure) {
     rv2 = proc_copyout(proc_map, &new_lwc, dyld_launchWithClosure,
-                       sizeof(new_lwc), true, false);
+                       sizeof(new_lwc));
   }
   if (dyld_buildLaunchClosure) {
     rv3 = proc_copyout(proc_map, &new_lwc, dyld_buildLaunchClosure,
-                       sizeof(new_lwc), true, false);
+                       sizeof(new_lwc));
   }
   vm_map_deallocate(proc_map);
   if (!rv1 || !rv2 || !rv3) {
     free_hook(hookp);
     return false;
   }
-
-#ifdef DEBUG_LOG
-  sm_report_t report;
-  snprintf(report, sizeof(report),
-           "maybe_cast_hook(): dyld::initializeMainExecutable \'0x%llx\', pid \'%d\', unique_pid \'%lld\'",
-           initializeMainExecutable, proc_pid(proc), unique_pid);
-  do_report(report);
-#endif
 
   hookp->state = hook_state_cast;
   add_hook(hookp);
@@ -7850,7 +7525,7 @@ void process_hook_cast(hook_t *hookp, x86_saved_state_t *intr_state)
   }
   if (!dlopen) {
     if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
-                     sizeof(hookp->orig_code), true, false))
+                     sizeof(hookp->orig_code)))
     {
       if (intr_state->flavor == x86_SAVED_STATE64) {
         intr_state->ss_64.isf.rip = hookp->orig_addr;
@@ -7879,12 +7554,12 @@ void process_hook_cast(hook_t *hookp, x86_saved_state_t *intr_state)
     stack_base -= sizeof(uint64_t);
     user_addr_t return_address = stack_base;
     if (!proc_copyout(proc_map, hookp->inserted_dylib_path,
-                      inserted_dylib_path, path_len, false, true) ||
+                      inserted_dylib_path, path_len) ||
         !proc_copyout(proc_map, &hookp->orig_addr,
-                      return_address, sizeof(uint64_t), false, true))
+                      return_address, sizeof(uint64_t)))
     {
       if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
-                       sizeof(hookp->orig_code), true, false))
+                       sizeof(hookp->orig_code)))
       {
         intr_state->ss_64.isf.rip = hookp->orig_addr;
       }
@@ -7921,11 +7596,11 @@ void process_hook_cast(hook_t *hookp, x86_saved_state_t *intr_state)
     stack_base -= sizeof(args);
     user32_addr_t args_base = stack_base;
     if (!proc_copyout(proc_map, hookp->inserted_dylib_path,
-                      inserted_dylib_path, path_len, false, true) ||
-        !proc_copyout(proc_map, args, args_base, sizeof(args), false, true))
+                      inserted_dylib_path, path_len) ||
+        !proc_copyout(proc_map, args, args_base, sizeof(args)))
     {
       if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
-                       sizeof(hookp->orig_code), true, false))
+                       sizeof(hookp->orig_code)))
       {
         intr_state->ss_32.eip = (uint32_t) hookp->orig_addr;
       }
@@ -7949,18 +7624,10 @@ void process_hook_cast(hook_t *hookp, x86_saved_state_t *intr_state)
     new_code = RETURN_NULL_32BIT_INT;
   }
   proc_copyout(proc_map, &new_code, hookp->dyld_runInitializers,
-               sizeof(new_code), true, false);
+               sizeof(new_code));
 
   vm_map_deallocate(proc_map);
   hookp->state = hook_state_flying;
-
-#ifdef DEBUG_LOG
-  sm_report_t report;
-  snprintf(report, sizeof(report),
-           "process_hook_cast(): pid \'%d\', unique_pid \'%lld\'",
-           proc_pid(proc), proc_uniqueid(proc));
-  do_report(report);
-#endif
 }
 
 // Must call IOFree on whatever this function returns.
@@ -8526,10 +8193,10 @@ bool set_call_orig_func(proc_t proc, vm_map_t proc_map,
   bool retval = true;
 
   if (proc_copyout(proc_map, code_buffer, call_orig_func_addr,
-                   code_buffer_len, true, false))
+                   code_buffer_len))
   {
     if (!proc_copyout(proc_map, &orig_addr, orig_func_ptr_addr,
-                      sizeof(orig_addr), false, false))
+                      sizeof(orig_addr)))
     {
       retval = false;
     }
@@ -8657,7 +8324,7 @@ hook_t *create_patch_hook(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
       sizeof_caller_addr = sizeof(uint32_t);
     }
     if (!proc_copyout(proc_map, &caller_addr, func_caller_ptr,
-                      sizeof_caller_addr, false, true))
+                      sizeof_caller_addr))
     {
       free_hook(hookp);
       return NULL;
@@ -8682,7 +8349,7 @@ hook_t *create_patch_hook(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
 
   uint16_t new_code = HC_INT1_OPCODE_SHORT;
   if (!proc_copyout(proc_map, &new_code, orig_func_addr,
-                    sizeof(new_code), true, false))
+                    sizeof(new_code)))
   {
     remove_hook(hookp);
     return NULL;
@@ -8880,7 +8547,7 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
                 (old_lazy_ptr == interpose_hooks[j].orig_function))
             {
               proc_copyout(proc_map, &new_lazy_ptr, old_lazy_ptr_offset,
-                           sizeof(new_lazy_ptr), false, true);
+                           sizeof(new_lazy_ptr));
             }
           } else {
             uint32_t new_lazy_ptr =
@@ -8901,7 +8568,7 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
                 (old_lazy_ptr == (uint32_t) interpose_hooks[j].orig_function))
             {
               proc_copyout(proc_map, &new_lazy_ptr, old_lazy_ptr_offset,
-                           sizeof(new_lazy_ptr), false, true);
+                           sizeof(new_lazy_ptr));
             }
           }
         } else {
@@ -8937,7 +8604,7 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
               (old_function == (uint32_t) interpose_hooks[j].orig_function))
           {
             proc_copyout(proc_map, new_entry, old_entry_offset,
-                         sizeof(new_entry), true, true);
+                         sizeof(new_entry));
           }
         }
       }
@@ -9154,7 +8821,7 @@ void process_hook_flying(hook_t *hookp, x86_saved_state_t *intr_state)
   // from dyld::initializeMainExecutable().
   proc_copyout(proc_map, &hookp->orig_dyld_runInitializers,
                hookp->dyld_runInitializers,
-               sizeof(hookp->orig_dyld_runInitializers), true, false);
+               sizeof(hookp->orig_dyld_runInitializers));
 
   char procname[PATH_MAX];
   proc_name(proc_pid(proc), procname, sizeof(procname));
@@ -9182,7 +8849,7 @@ void process_hook_flying(hook_t *hookp, x86_saved_state_t *intr_state)
 
   if (!user_hooks_pending) {
     if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
-                     sizeof(hookp->orig_code), true, false))
+                     sizeof(hookp->orig_code)))
     {
       if (intr_state->flavor == x86_SAVED_STATE64) {
         intr_state->ss_64.isf.rip = hookp->orig_addr;
@@ -9191,15 +8858,6 @@ void process_hook_flying(hook_t *hookp, x86_saved_state_t *intr_state)
       }
     }
     vm_map_deallocate(proc_map);
-
-#ifdef DEBUG_LOG
-    sm_report_t report;
-    snprintf(report, sizeof(report),
-             "process_hook_flying(): pid \'%d\', unique_pid \'%lld\', dlopen_result \'0x%llx\'",
-              proc_pid(proc), proc_uniqueid(proc), dlopen_result);
-    do_report(report);
-#endif
-
     return;
   }
 
@@ -9242,7 +8900,7 @@ void process_hook_flying(hook_t *hookp, x86_saved_state_t *intr_state)
 
   if (!dyld_register_func_for_add_image || !on_add_image) {
     if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
-                     sizeof(hookp->orig_code), true, false))
+                     sizeof(hookp->orig_code)))
     {
       if (intr_state->flavor == x86_SAVED_STATE64) {
         intr_state->ss_64.isf.rip = hookp->orig_addr;
@@ -9266,10 +8924,10 @@ void process_hook_flying(hook_t *hookp, x86_saved_state_t *intr_state)
     stack_base -= sizeof(uint64_t);
     user_addr_t return_address = stack_base;
     if (!proc_copyout(proc_map, &hookp->orig_addr,
-                      return_address, sizeof(uint64_t), false, true))
+                      return_address, sizeof(uint64_t)))
     {
       if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
-                       sizeof(hookp->orig_code), true, false))
+                       sizeof(hookp->orig_code)))
       {
         intr_state->ss_64.isf.rip = hookp->orig_addr;
       }
@@ -9300,9 +8958,9 @@ void process_hook_flying(hook_t *hookp, x86_saved_state_t *intr_state)
     args[0] = (uint32_t) hookp->orig_addr;
     stack_base -= sizeof(args);
     user32_addr_t args_base = stack_base;
-    if (!proc_copyout(proc_map, args, args_base, sizeof(args), false, true)) {
+    if (!proc_copyout(proc_map, args, args_base, sizeof(args))) {
       if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
-                       sizeof(hookp->orig_code), true, false))
+                       sizeof(hookp->orig_code)))
       {
         intr_state->ss_32.eip = (uint32_t) hookp->orig_addr;
       }
@@ -9316,14 +8974,6 @@ void process_hook_flying(hook_t *hookp, x86_saved_state_t *intr_state)
 
   vm_map_deallocate(proc_map);
   hookp->state = hook_state_landed;
-
-#ifdef DEBUG_LOG
-  sm_report_t report;
-  snprintf(report, sizeof(report),
-           "process_hook_flying(): pid \'%d\', unique_pid \'%lld\', dlopen_result \'0x%llx\'",
-           proc_pid(proc), proc_uniqueid(proc), dlopen_result);
-  do_report(report);
-#endif
 }
 
 // Our breakpoint at dyld::initializeMainExecutable() has been hit for the
@@ -9349,7 +8999,7 @@ void process_hook_landed(hook_t *hookp, x86_saved_state_t *intr_state)
   memcpy(intr_state, &hookp->orig_intr_state, sizeof(x86_saved_state_t));
 
   if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
-                   sizeof(hookp->orig_code), true, false))
+                   sizeof(hookp->orig_code)))
   {
     if (intr_state->flavor == x86_SAVED_STATE64) {
       intr_state->ss_64.isf.rip = hookp->orig_addr;
@@ -9361,21 +9011,6 @@ void process_hook_landed(hook_t *hookp, x86_saved_state_t *intr_state)
   vm_map_deallocate(proc_map);
 
   hookp->state = hook_state_floating;
-
-#ifdef DEBUG_LOG
-  sm_report_t report;
-  snprintf(report, sizeof(report),
-           "process_hook_landed(): pid \'%d\', unique_pid \'%lld\'",
-           proc_pid(proc), proc_uniqueid(proc));
-  do_report(report);
-#endif
-
-  // Resume the parent process if we suspended it in maybe_cast_hook() above.
-  if (hookp->held_parent_task) {
-    task_release(hookp->held_parent_task);
-    task_deallocate(hookp->held_parent_task);
-    hookp->held_parent_task = 0;
-  }
 }
 
 // We've hit a breakpoint in the original method hooked by one of our patch
@@ -9441,7 +9076,7 @@ void process_hook_set(hook_t *hookp, x86_saved_state_t *intr_state)
         task_wait(task, false);
       }
       if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
-                       sizeof(hookp->orig_code), true, false))
+                       sizeof(hookp->orig_code)))
       {
         hookp->state = hook_state_unset;
       }
@@ -9487,14 +9122,6 @@ void process_hook_set(hook_t *hookp, x86_saved_state_t *intr_state)
   }
 
   vm_map_deallocate(proc_map);
-
-#ifdef DEBUG_LOG
-  sm_report_t report;
-  snprintf(report, sizeof(report),
-           "process_hook_set(): pid \'%d\', unique_pid \'%lld\'",
-           proc_pid(proc), proc_uniqueid(proc));
-  do_report(report);
-#endif
 }
 
 void check_hook_state(x86_saved_state_t *intr_state)
@@ -9587,7 +9214,7 @@ void reset_hook(x86_saved_state_t *intr_state)
     }
     uint16_t new_code = HC_INT1_OPCODE_SHORT;
     if (proc_copyout(proc_map, &new_code, hookp->orig_addr,
-                     sizeof(new_code), true, false))
+                     sizeof(new_code)))
     {
       hookp->state = hook_state_set;
     }
@@ -9599,14 +9226,6 @@ void reset_hook(x86_saved_state_t *intr_state)
   }
 
   vm_map_deallocate(proc_map);
-
-#ifdef DEBUG_LOG
-  sm_report_t report;
-  snprintf(report, sizeof(report),
-           "reset_hook(): pid \'%d\', unique_pid \'%lld\'",
-           proc_pid(proc), proc_uniqueid(proc));
-  do_report(report);
-#endif
 }
 
 // If appropriate, this is called every time a new module is added to the user
@@ -9674,14 +9293,6 @@ void on_add_image(x86_saved_state_t *intr_state)
   thread_interrupt_level(old_state);
 
   vm_map_deallocate(proc_map);
-
-#ifdef DEBUG_LOG
-  sm_report_t report;
-  snprintf(report, sizeof(report),
-           "on_add_image(): pid \'%d\', unique_pid \'%lld\', image \"%s\"",
-           proc_pid(proc), proc_uniqueid(proc), module_info.path);
-  do_report(report);
-#endif
 }
 
 // A hook has called add_patch_hook() in the hook library.  We don't need to
@@ -9770,7 +9381,7 @@ void add_patch_hook(x86_saved_state_t *intr_state)
 
   hook_t *new_hook =
     create_patch_hook(proc, proc_map, cast_hookp, orig_func_addr,
-                      hook_addr, NULL, prologue,
+                      hook_addr, 0, prologue,
                       intr_state->flavor == x86_SAVED_STATE64);
   if (new_hook) {
     new_hook->is_dynamic_hook = true;
@@ -9971,7 +9582,9 @@ int hook_execve(proc_t p, struct execve_args *uap, int *retv)
     // above, by which time the current process will be the current user
     // process.
 #ifndef DEBUG_PROCESS_START
-    if (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave()) {
+    if (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave() &&
+        !macOS_Catalina())
+    {
       maybe_cast_hook(current_proc());
     }
 #endif
@@ -10050,7 +9663,9 @@ int hook_posix_spawn(proc_t p, struct posix_spawn_args *uap, int *retv)
       // Sierra and above we should wait to call it in
       // thread_bootstrap_return_hook().
 #ifndef DEBUG_PROCESS_START
-      if (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave()) {
+      if (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave() &&
+          !macOS_Catalina())
+      {
         maybe_cast_hook(proc);
       }
 #endif
@@ -10076,7 +9691,9 @@ int hook_mac_execve(proc_t p, struct mac_execve_args *uap, int *retv)
     report_proc_thread_state("HookCase: hook_mac_execve()", current_thread());
 #endif
 #ifndef DEBUG_PROCESS_START
-    if (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave()) {
+    if (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave() &&
+        !macOS_Catalina())
+    {
       maybe_cast_hook(current_proc());
     }
 #endif
@@ -10238,41 +9855,18 @@ bool hook_thread_bootstrap_return()
   new_begin &= 0xffff0000;
   new_begin |= HC_INT1_OPCODE_SHORT;
 
-  // On macOS 10.14 (Mojave), set_kernel_physmap_protection() is no longer
-  // able to add VM_PROT_WRITE where it wasn't already present, so we need to
-  // use brute force here.  Changing CR0's write protect bit has caused us
-  // trouble in the past -- sometimes a write-protect page fault still
-  // happened when we tried to change kernel memory.  Hopefully we'll be able
-  // to avoid that by temporarily disabling preemption and interrupts.
-  boolean_t org_int_level = false;
-  uintptr_t org_cr0 = 0;
-  if (macOS_Mojave()) {
-    org_int_level = ml_set_interrupts_enabled(false);
-    disable_preemption();
-    org_cr0 = get_cr0();
-    set_cr0(org_cr0 & ~CR0_WP);
-  } else {
-    if (!set_kernel_physmap_protection((vm_map_offset_t) target,
-                                       (vm_map_offset_t) target + sizeof(uint32_t),
-                                       VM_PROT_ALL, true))
-    {
-      return false;
-    }
-  }
+  boolean_t org_int_level = ml_set_interrupts_enabled(false);
+  disable_preemption();
+  uintptr_t org_cr0 = get_cr0();
+  set_cr0(org_cr0 & ~CR0_WP);
 
   if (!OSCompareAndSwap(thread_bootstrap_return_begin, new_begin, target)) {
     retval = false;
   }
 
-  if (macOS_Mojave()) {
-    set_cr0(org_cr0);
-    enable_preemption();
-    ml_set_interrupts_enabled(org_int_level);
-  } else {
-    set_kernel_physmap_protection((vm_map_offset_t) target,
-                                  (vm_map_offset_t) target + sizeof(uint32_t),
-                                  VM_PROT_READ | VM_PROT_EXECUTE, true);
-  }
+  set_cr0(org_cr0);
+  enable_preemption();
+  ml_set_interrupts_enabled(org_int_level);
 
   return retval;
 }
@@ -10288,38 +9882,18 @@ bool unhook_thread_bootstrap_return()
   uint32_t *target = (uint32_t *) thread_bootstrap_return;
   uint32_t current_value = target[0];
 
-  // On macOS 10.14 (Mojave), set_kernel_physmap_protection() is no longer
-  // able to add VM_PROT_WRITE where it wasn't already present, so we need to
-  // use brute force here.  Changing CR0's write protect bit has caused us
-  // trouble in the past -- sometimes a write-protect page fault still
-  // happened when we tried to change kernel memory.  Hopefully we'll be able
-  // to avoid that by temporarily disabling preemption and interrupts.
-  boolean_t org_int_level = false;
-  uintptr_t org_cr0 = 0;
-  if (macOS_Mojave()) {
-    org_int_level = ml_set_interrupts_enabled(false);
-    disable_preemption();
-    org_cr0 = get_cr0();
-    set_cr0(org_cr0 & ~CR0_WP);
-  } else {
-    set_kernel_physmap_protection((vm_map_offset_t) target,
-                                  (vm_map_offset_t) target + sizeof(uint32_t),
-                                  VM_PROT_ALL, true);
-  }
+  boolean_t org_int_level = ml_set_interrupts_enabled(false);
+  disable_preemption();
+  uintptr_t org_cr0 = get_cr0();
+  set_cr0(org_cr0 & ~CR0_WP);
 
   if (!OSCompareAndSwap(current_value, thread_bootstrap_return_begin, target)) {
     retval = false;
   }
 
-  if (macOS_Mojave()) {
-    set_cr0(org_cr0);
-    enable_preemption();
-    ml_set_interrupts_enabled(org_int_level);
-  } else {
-    set_kernel_physmap_protection((vm_map_offset_t) target,
-                                  (vm_map_offset_t) target + sizeof(uint32_t),
-                                  VM_PROT_READ | VM_PROT_EXECUTE, true);
-  }
+  set_cr0(org_cr0);
+  enable_preemption();
+  ml_set_interrupts_enabled(org_int_level);
 
   thread_bootstrap_return_begin = 0;
 
@@ -10411,20 +9985,18 @@ bool hook_vm_page_validate_cs()
   new_begin &= 0xffff0000;
   new_begin |= HC_INT2_OPCODE_SHORT;
 
-  if (!set_kernel_physmap_protection((vm_map_offset_t) target,
-                                     (vm_map_offset_t) target + sizeof(uint32_t),
-                                     VM_PROT_ALL, true))
-  {
-    return false;
-  }
+  boolean_t org_int_level = ml_set_interrupts_enabled(false);
+  disable_preemption();
+  uintptr_t org_cr0 = get_cr0();
+  set_cr0(org_cr0 & ~CR0_WP);
 
   if (!OSCompareAndSwap(vm_page_validate_cs_begin, new_begin, target)) {
     retval = false;
   }
 
-  set_kernel_physmap_protection((vm_map_offset_t) target,
-                                (vm_map_offset_t) target + sizeof(uint32_t),
-                                VM_PROT_READ | VM_PROT_EXECUTE, true);
+  set_cr0(org_cr0);
+  enable_preemption();
+  ml_set_interrupts_enabled(org_int_level);
 
   return retval;
 }
@@ -10440,17 +10012,18 @@ bool unhook_vm_page_validate_cs()
   uint32_t *target = (uint32_t *) vm_page_validate_cs;
   uint32_t current_value = target[0];
 
-  set_kernel_physmap_protection((vm_map_offset_t) target,
-                                (vm_map_offset_t) target + sizeof(uint32_t),
-                                VM_PROT_ALL, true);
+  boolean_t org_int_level = ml_set_interrupts_enabled(false);
+  disable_preemption();
+  uintptr_t org_cr0 = get_cr0();
+  set_cr0(org_cr0 & ~CR0_WP);
 
   if (!OSCompareAndSwap(current_value, vm_page_validate_cs_begin, target)) {
     retval = false;
   }
 
-  set_kernel_physmap_protection((vm_map_offset_t) target,
-                                (vm_map_offset_t) target + sizeof(uint32_t),
-                                VM_PROT_READ | VM_PROT_EXECUTE, true);
+  set_cr0(org_cr0);
+  enable_preemption();
+  ml_set_interrupts_enabled(org_int_level);
 
   vm_page_validate_cs_begin = 0;
 
@@ -10527,27 +10100,10 @@ bool hook_mac_file_check_library_validation()
   new_begin &= 0xffff0000;
   new_begin |= HC_INT3_OPCODE_SHORT;
 
-  // On macOS 10.14 (Mojave), set_kernel_physmap_protection() is no longer
-  // able to add VM_PROT_WRITE where it wasn't already present, so we need to
-  // use brute force here.  Changing CR0's write protect bit has caused us
-  // trouble in the past -- sometimes a write-protect page fault still
-  // happened when we tried to change kernel memory.  Hopefully we'll be able
-  // to avoid that by temporarily disabling preemption and interrupts.
-  boolean_t org_int_level = false;
-  uintptr_t org_cr0 = 0;
-  if (macOS_Mojave()) {
-    org_int_level = ml_set_interrupts_enabled(false);
-    disable_preemption();
-    org_cr0 = get_cr0();
-    set_cr0(org_cr0 & ~CR0_WP);
-  } else {
-    if (!set_kernel_physmap_protection((vm_map_offset_t) target,
-                                       (vm_map_offset_t) target + sizeof(uint32_t),
-                                       VM_PROT_ALL, true))
-    {
-      return false;
-    }
-  }
+  boolean_t org_int_level = ml_set_interrupts_enabled(false);
+  disable_preemption();
+  uintptr_t org_cr0 = get_cr0();
+  set_cr0(org_cr0 & ~CR0_WP);
 
   if (!OSCompareAndSwap(mac_file_check_library_validation_begin,
                         new_begin, target))
@@ -10555,15 +10111,9 @@ bool hook_mac_file_check_library_validation()
     retval = false;
   }
 
-  if (macOS_Mojave()) {
-    set_cr0(org_cr0);
-    enable_preemption();
-    ml_set_interrupts_enabled(org_int_level);
-  } else {
-    set_kernel_physmap_protection((vm_map_offset_t) target,
-                                  (vm_map_offset_t) target + sizeof(uint32_t),
-                                  VM_PROT_READ | VM_PROT_EXECUTE, true);
-  }
+  set_cr0(org_cr0);
+  enable_preemption();
+  ml_set_interrupts_enabled(org_int_level);
 
   return retval;
 }
@@ -10579,24 +10129,10 @@ bool unhook_mac_file_check_library_validation()
   uint32_t *target = (uint32_t *) mac_file_check_library_validation;
   uint32_t current_value = target[0];
 
-  // On macOS 10.14 (Mojave), set_kernel_physmap_protection() is no longer
-  // able to add VM_PROT_WRITE where it wasn't already present, so we need to
-  // use brute force here.  Changing CR0's write protect bit has caused us
-  // trouble in the past -- sometimes a write-protect page fault still
-  // happened when we tried to change kernel memory.  Hopefully we'll be able
-  // to avoid that by temporarily disabling preemption and interrupts.
-  boolean_t org_int_level = false;
-  uintptr_t org_cr0 = 0;
-  if (macOS_Mojave()) {
-    org_int_level = ml_set_interrupts_enabled(false);
-    disable_preemption();
-    org_cr0 = get_cr0();
-    set_cr0(org_cr0 & ~CR0_WP);
-  } else {
-    set_kernel_physmap_protection((vm_map_offset_t) target,
-                                  (vm_map_offset_t) target + sizeof(uint32_t),
-                                  VM_PROT_ALL, true);
-  }
+  boolean_t org_int_level = ml_set_interrupts_enabled(false);
+  disable_preemption();
+  uintptr_t org_cr0 = get_cr0();
+  set_cr0(org_cr0 & ~CR0_WP);
 
   if (!OSCompareAndSwap(current_value,
                         mac_file_check_library_validation_begin,
@@ -10605,15 +10141,9 @@ bool unhook_mac_file_check_library_validation()
     retval = false;
   }
 
-  if (macOS_Mojave()) {
-    set_cr0(org_cr0);
-    enable_preemption();
-    ml_set_interrupts_enabled(org_int_level);
-  } else {
-    set_kernel_physmap_protection((vm_map_offset_t) target,
-                                  (vm_map_offset_t) target + sizeof(uint32_t),
-                                  VM_PROT_READ | VM_PROT_EXECUTE, true);
-  }
+  set_cr0(org_cr0);
+  enable_preemption();
+  ml_set_interrupts_enabled(org_int_level);
 
   mac_file_check_library_validation_begin = 0;
 
@@ -10671,41 +10201,18 @@ bool hook_mac_file_check_mmap()
   new_begin &= 0xffff0000;
   new_begin |= HC_INT4_OPCODE_SHORT;
 
-  // On macOS 10.14 (Mojave), set_kernel_physmap_protection() is no longer
-  // able to add VM_PROT_WRITE where it wasn't already present, so we need to
-  // use brute force here.  Changing CR0's write protect bit has caused us
-  // trouble in the past -- sometimes a write-protect page fault still
-  // happened when we tried to change kernel memory.  Hopefully we'll be able
-  // to avoid that by temporarily disabling preemption and interrupts.
-  boolean_t org_int_level = false;
-  uintptr_t org_cr0 = 0;
-  if (macOS_Mojave()) {
-    org_int_level = ml_set_interrupts_enabled(false);
-    disable_preemption();
-    org_cr0 = get_cr0();
-    set_cr0(org_cr0 & ~CR0_WP);
-  } else {
-    if (!set_kernel_physmap_protection((vm_map_offset_t) target,
-                                       (vm_map_offset_t) target + sizeof(uint32_t),
-                                       VM_PROT_ALL, true))
-    {
-      return false;
-    }
-  }
+  boolean_t org_int_level = ml_set_interrupts_enabled(false);
+  disable_preemption();
+  uintptr_t org_cr0 = get_cr0();
+  set_cr0(org_cr0 & ~CR0_WP);
 
   if (!OSCompareAndSwap(mac_file_check_mmap_begin, new_begin, target)) {
     retval = false;
   }
 
-  if (macOS_Mojave()) {
-    set_cr0(org_cr0);
-    enable_preemption();
-    ml_set_interrupts_enabled(org_int_level);
-  } else {
-    set_kernel_physmap_protection((vm_map_offset_t) target,
-                                  (vm_map_offset_t) target + sizeof(uint32_t),
-                                  VM_PROT_READ | VM_PROT_EXECUTE, true);
-  }
+  set_cr0(org_cr0);
+  enable_preemption();
+  ml_set_interrupts_enabled(org_int_level);
 
   return retval;
 }
@@ -10721,40 +10228,175 @@ bool unhook_mac_file_check_mmap()
   uint32_t *target = (uint32_t *) mac_file_check_mmap;
   uint32_t current_value = target[0];
 
-  // On macOS 10.14 (Mojave), set_kernel_physmap_protection() is no longer
-  // able to add VM_PROT_WRITE where it wasn't already present, so we need to
-  // use brute force here.  Changing CR0's write protect bit has caused us
-  // trouble in the past -- sometimes a write-protect page fault still
-  // happened when we tried to change kernel memory.  Hopefully we'll be able
-  // to avoid that by temporarily disabling preemption and interrupts.
-  boolean_t org_int_level = false;
-  uintptr_t org_cr0 = 0;
-  if (macOS_Mojave()) {
-    org_int_level = ml_set_interrupts_enabled(false);
-    disable_preemption();
-    org_cr0 = get_cr0();
-    set_cr0(org_cr0 & ~CR0_WP);
-  } else {
-    set_kernel_physmap_protection((vm_map_offset_t) target,
-                                  (vm_map_offset_t) target + sizeof(uint32_t),
-                                  VM_PROT_ALL, true);
-  }
+  boolean_t org_int_level = ml_set_interrupts_enabled(false);
+  disable_preemption();
+  uintptr_t org_cr0 = get_cr0();
+  set_cr0(org_cr0 & ~CR0_WP);
 
   if (!OSCompareAndSwap(current_value, mac_file_check_mmap_begin, target)) {
     retval = false;
   }
 
-  if (macOS_Mojave()) {
-    set_cr0(org_cr0);
-    enable_preemption();
-    ml_set_interrupts_enabled(org_int_level);
-  } else {
-    set_kernel_physmap_protection((vm_map_offset_t) target,
-                                  (vm_map_offset_t) target + sizeof(uint32_t),
-                                  VM_PROT_READ | VM_PROT_EXECUTE, true);
-  }
+  set_cr0(org_cr0);
+  enable_preemption();
+  ml_set_interrupts_enabled(org_int_level);
 
   mac_file_check_mmap_begin = 0;
+
+  return retval;
+}
+
+// As of macOS Catalina (10.15), when filesystem protections are enabled (via
+// csrutil), calling dlopen() from a sandboxed process (like xpcproxy) will
+// result in the Sandbox kernel extension checking "vnode open" permissions on
+// the module to be dlopened, with 'acc_mode' set to FREAD.  In
+// process_hook_cast() above, we set up a call to dlopen() on our hook library
+// (if HC_INSERT_LIBRARY has been set in the process).  Without our
+// intervention here, the kernel will always deny "vnode open" permission on
+// our hook library unless that permission has been given in the process's
+// sandbox rules (which it generally won't have been), and the call to
+// dlopen() will fail (with a Sandbox error message about denying
+// "file-read-data").  To get around this we hook mac_vnode_check_open() in
+// the kernel and grant FREAD-only permission on our hook library every time
+// the Sandbox kernel extension asks for it (if we're trying to load a hook
+// library in the process).
+
+extern "C" const char *vnode_getname(vnode_t vp);
+extern "C" void vnode_putname(const char *name);
+
+bool get_vnode_path(struct vnode *vp, char **path, vm_size_t *path_size)
+{
+  if (!path || !path_size) {
+    return false;
+  }
+  *path = NULL;
+  *path_size = 0;
+
+  char vnode_path[MAXPATHLEN];
+  strncpy(vnode_path, "null", sizeof(vnode_path));
+  if (vp) {
+    int length = MAXPATHLEN;
+    if (vn_getpath(vp, vnode_path, &length) != 0) {
+      const char *vnode_name = vnode_getname(vp);
+      if (vnode_name) {
+        strncpy(vnode_path, vnode_name, sizeof(vnode_path));
+        vnode_putname(vnode_name);
+      } else {
+        strncpy(vnode_path, "unknown", sizeof(vnode_path));
+      }
+    }
+  }
+
+  vm_size_t size = strlen(vnode_path) + 1;
+  char *holder = (char *) IOMalloc(size);
+  if (!holder) {
+    return false;
+  }
+  strncpy(holder, vnode_path, size);
+  *path_size = size;
+  *path = holder;
+  return true;
+}
+
+typedef int (*mac_vnode_check_open_t)(vfs_context_t ctx, struct vnode *vp, int acc_mode);
+
+extern "C" mac_vnode_check_open_t mac_vnode_check_open = NULL;
+
+uint32_t mac_vnode_check_open_begin = 0;
+
+void mac_vnode_check_open_hook(x86_saved_state_t *intr_state)
+{
+  vfs_context_t ctx = (vfs_context_t) intr_state->ss_64.rdi;
+  struct vnode *vp = (struct vnode *) intr_state->ss_64.rsi;
+  int acc_mode = (int) intr_state->ss_64.rdx;
+
+  bool vnode_is_hook_library = false;
+  hook_t *cast_hookp = find_cast_hook(proc_uniqueid(current_proc()));
+  if (cast_hookp) {
+    char *vnode_path;
+    vm_size_t vnode_path_size;
+    if (get_vnode_path(vp, &vnode_path, &vnode_path_size)) {
+      vnode_is_hook_library =
+        !strcmp(vnode_path, cast_hookp->inserted_dylib_path);
+      IOFree(vnode_path, vnode_path_size);
+    }
+  }
+
+  int retval = 0;
+  if (!vnode_is_hook_library || (acc_mode & FWRITE)) {
+    retval = mac_vnode_check_open_caller(ctx, vp, acc_mode);
+  }
+  intr_state->ss_64.rax = retval;
+
+  uint64_t return_address = *((uint64_t *)(intr_state->ss_64.isf.rsp));
+  intr_state->ss_64.isf.rsp += 8;
+  intr_state->ss_64.isf.rip = return_address;
+}
+
+bool hook_mac_vnode_check_open()
+{
+  if (mac_vnode_check_open_begin) {
+    return true;
+  }
+
+  if (!mac_vnode_check_open) {
+    mac_vnode_check_open = (mac_vnode_check_open_t)
+      kernel_dlsym("_mac_vnode_check_open");
+    if (!mac_vnode_check_open) {
+      return false;
+    }
+  }
+
+  bool retval = true;
+
+  uint32_t *target = (uint32_t *) mac_vnode_check_open;
+  mac_vnode_check_open_begin = target[0];
+
+  uint32_t new_begin = mac_vnode_check_open_begin;
+  new_begin &= 0xffff0000;
+  new_begin |= HC_INT5_OPCODE_SHORT;
+
+  boolean_t org_int_level = ml_set_interrupts_enabled(false);
+  disable_preemption();
+  uintptr_t org_cr0 = get_cr0();
+  set_cr0(org_cr0 & ~CR0_WP);
+
+  if (!OSCompareAndSwap(mac_vnode_check_open_begin, new_begin, target)) {
+    retval = false;
+  }
+
+  set_cr0(org_cr0);
+  enable_preemption();
+  ml_set_interrupts_enabled(org_int_level);
+
+  return retval;
+}
+
+bool unhook_mac_vnode_check_open()
+{
+  if (!mac_vnode_check_open_begin) {
+    return false;
+  }
+
+  bool retval = true;
+
+  uint32_t *target = (uint32_t *) mac_vnode_check_open;
+  uint32_t current_value = target[0];
+
+  boolean_t org_int_level = ml_set_interrupts_enabled(false);
+  disable_preemption();
+  uintptr_t org_cr0 = get_cr0();
+  set_cr0(org_cr0 & ~CR0_WP);
+
+  if (!OSCompareAndSwap(current_value, mac_vnode_check_open_begin, target)) {
+    retval = false;
+  }
+
+  set_cr0(org_cr0);
+  enable_preemption();
+  ml_set_interrupts_enabled(org_int_level);
+
+  mac_vnode_check_open_begin = 0;
 
   return retval;
 }
@@ -10875,7 +10517,9 @@ void initialize_use_invpcid()
     return;
   }
 
-  if (!macOS_Mojave() || macOS_Mojave_less_than_5()) {
+  if ((macOS_Mojave() && macOS_Mojave_less_than_5()) ||
+      (!macOS_Mojave() && !macOS_Catalina()))
+  {
     g_use_invpcid = false;
   } else {
     if ((cpuid_leaf7_features_ptr() & CPUID_LEAF7_FEATURE_INVPCID)) {
@@ -10927,7 +10571,7 @@ void initialize_cpu_data_offsets()
     return;
   }
 
-  if (macOS_Mojave()) {
+  if (macOS_Mojave() || macOS_Catalina()) {
     g_cpu_task_map_offset =
       offsetof(cpu_data_fake_t, cpu_task_map_mds);
     g_cpu_task_cr3_offset =
@@ -11240,30 +10884,10 @@ bool install_intr_blob(int intr_num, void *new_value,
     new_entry->offset_top32 = entry->offset_top32;
   }
 
-  // On macOS 10.14 (Mojave), set_kernel_physmap_protection() is no longer
-  // able to add VM_PROT_WRITE where it wasn't already present, so we need to
-  // use brute force here.  Changing CR0's write protect bit has caused us
-  // trouble in the past -- sometimes a write-protect page fault still
-  // happened when we tried to change kernel memory.  Hopefully we'll be able
-  // to avoid that by temporarily disabling preemption and interrupts.
-  boolean_t org_int_level = false;
-  uintptr_t org_cr0 = 0;
-  if (macOS_Mojave()) {
-    org_int_level = ml_set_interrupts_enabled(false);
-    disable_preemption();
-    org_cr0 = get_cr0();
-    set_cr0(org_cr0 & ~CR0_WP);
-  } else {
-    vm_prot_t new_prot = VM_PROT_READ | VM_PROT_WRITE;
-    if (is_stub) {
-      new_prot |= VM_PROT_EXECUTE;
-    }
-    if (!set_kernel_physmap_protection(target_offset, target_offset + target_size,
-                                       new_prot, true))
-    {
-      return false;
-    }
-  }
+  boolean_t org_int_level = ml_set_interrupts_enabled(false);
+  disable_preemption();
+  uintptr_t org_cr0 = get_cr0();
+  set_cr0(org_cr0 & ~CR0_WP);
 
   bool retval = true;
 
@@ -11279,18 +10903,9 @@ bool install_intr_blob(int intr_num, void *new_value,
     memcpy((void *) target_offset, new_value, target_size);
   }
 
-  if (macOS_Mojave()) {
-    set_cr0(org_cr0);
-    enable_preemption();
-    ml_set_interrupts_enabled(org_int_level);
-  } else {
-    vm_prot_t old_prot = VM_PROT_READ;
-    if (is_stub) {
-      old_prot |= VM_PROT_EXECUTE;
-    }
-    set_kernel_physmap_protection(target_offset, target_offset + target_size,
-                                  old_prot, true);
-  }
+  set_cr0(org_cr0);
+  enable_preemption();
+  ml_set_interrupts_enabled(org_int_level);
 
   return retval;
 }
@@ -11512,18 +11127,27 @@ bool install_intr_handlers()
     return false;
   }
 
-  if (!macOS_Mojave()) {
+  if (!macOS_Mojave() && !macOS_Catalina()) {
     if (!hook_vm_page_validate_cs()) {
       return false;
     }
   }
-  if (macOS_HighSierra() || macOS_Sierra() || macOS_Mojave()) {
+  if (macOS_Catalina() || macOS_Mojave() || macOS_HighSierra() ||
+      macOS_Sierra())
+  {
     if (!hook_mac_file_check_library_validation()) {
       return false;
     }
   }
-  if (macOS_HighSierra() || macOS_Sierra() || OSX_ElCapitan() || macOS_Mojave()) {
+  if (macOS_Catalina() || macOS_Mojave() || macOS_HighSierra() ||
+      macOS_Sierra() || OSX_ElCapitan())
+  {
     if (!hook_mac_file_check_mmap()) {
+      return false;
+    }
+  }
+  if (macOS_Catalina()) {
+    if (!hook_mac_vnode_check_open()) {
       return false;
     }
   }
@@ -11539,6 +11163,7 @@ void remove_intr_handlers()
   unhook_mac_file_check_mmap();
   unhook_mac_file_check_library_validation();
   unhook_vm_page_validate_cs();
+  unhook_mac_vnode_check_open();
   remove_intr_handler(HC_INT1);
   remove_intr_handler(HC_INT2);
   remove_intr_handler(HC_INT3);
@@ -11594,6 +11219,7 @@ extern "C" void handle_kernel_hc_int4(x86_saved_state_t *intr_state)
 
 extern "C" void handle_kernel_hc_int5(x86_saved_state_t *intr_state)
 {
+  mac_vnode_check_open_hook(intr_state);
 }
 
 extern "C" kern_return_t HookCase_start(kmod_info_t * ki, void *d);
@@ -11624,7 +11250,7 @@ kern_return_t HookCase_start(kmod_info_t * ki, void *d)
     // rebooting.  But this makes the kernel "capture" the serial port -- it's
     // no longer available to user-mode code, and drivers for it no longer show
     // up in the /dev directory.
-    kprintf("HookCase requires OS X Mavericks (10.9), Yosemite (10.10), El Capitan (10.11), macOS Sierra (10.12), macOS High Sierra (10.13) or macOS Mojave (10.14): current version %s\n",
+    kprintf("HookCase requires OS X Mavericks (10.9), Yosemite (10.10), El Capitan (10.11), macOS Sierra (10.12), macOS High Sierra (10.13), macOS Mojave (10.14) or macOS Catalina (10.15): current version %s\n",
             gOSVersionString ? gOSVersionString : "null");
     if (gOSVersionString) {
       IOFree(gOSVersionString, gOSVersionStringLength);

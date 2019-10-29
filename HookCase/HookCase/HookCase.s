@@ -823,3 +823,5 @@ CALLER(mac_file_check_library_validation)
 
 CALLER(mac_file_check_mmap)
 
+CALLER(mac_vnode_check_open)
+

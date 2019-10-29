@@ -409,6 +409,7 @@ extern "C" int mac_file_check_library_validation_caller(proc_t proc,
 extern "C" int mac_file_check_mmap_caller(struct ucred *cred, struct fileglob *fg,
                                           int prot, int flags, uint64_t offset,
                                           int *maxprot);
+extern "C" int mac_vnode_check_open_caller(vfs_context_t ctx, struct vnode *vp, int acc_mode);
 
 #endif /* #ifndef __ASSEMBLER__ */
 

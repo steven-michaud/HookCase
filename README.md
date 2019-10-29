@@ -15,9 +15,9 @@ doesn't have the restrictions Apple has placed on
 applications that have
 [entitlements](https://developer.apple.com/library/content/documentation/Miscellaneous/Reference/EntitlementKeyReference/Chapters/AboutEntitlements.html).
 
-HookCase runs on OS X 10.9 (Mavericks) through macOS 10.14 (Mojave).
+HookCase runs on OS X 10.9 (Mavericks) through macOS 10.15 (Catalina).
 
-Steven Michaud, 7/2019
+Steven Michaud, 10/2019
 
 ## Table of Contents
 

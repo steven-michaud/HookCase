@@ -6,8 +6,8 @@ to turn off Apple's protection against loading unsigned or
 view, the only "appropriately" signed kernel extensions are those
 signed with a special kernel extension signing certificate -- in
 practice almost exclusively Apple's own kernel extensions.)  On OS X
-10.11 (El Capitan) and up, to do this you'll need to turn off
-full-scale "system integrity protection" (SIP, also known as "rootless
+10.11 (El Capitan) and up, to do this you'll need to at least partly
+turn off "system integrity protection" (SIP, also known as "rootless
 mode").
 
 Apple documents turning SIP completely off or completely on.  But it's
@@ -16,10 +16,8 @@ also possible
 For example, it's possible to turn on everything but the protection
 against loading unsigned kernel extensions.  This is the most secure
 configuation that's still compatible with HookCase.  But using it on
-macOS 10.14 (Mojave) will require you to codesign your hook libraries.
-You will also have to turn off file system protection at least
-temporarily, in order to be able to copy the `HookCase.kext` extension
-to its final destination.
+macOS 10.14 (Mojave) and above will require you to codesign your hook
+libraries.
 
 ## On OS X 10.10:
 
@@ -39,9 +37,7 @@ to its final destination.
 2. Choose Utilties : Terminal, then run one of the the following at
    the command line.  The first command disables SIP completely.  The
    second enables everything but protection against loading unsigned
-   kernel extensions.  The third also disables file-system protection
-   (in order to allow changes to system directories like
-   `/usr/local/sbin`).
+   kernel extensions.  The third also disables file-system protection.
 
         csrutil disable
 
@@ -90,6 +86,5 @@ defaults to 4.
 2. Reboot your computer.
 
 Without this change, you sometimes get kernel panics using the debug
-kernel, at least on OS X 10.11 (El Capitan).  These are usually
-double-faults with `CR2` set to an address on the stack (indicating a
-stack underflow).
+kernel.  These are usually double-faults with `CR2` set to an address
+on the stack (indicating a stack underflow).

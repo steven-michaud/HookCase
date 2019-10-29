@@ -57,9 +57,14 @@ LLVM_HOME=/usr/local/clang+llvm-4.0.0-x86_64-apple-darwin
 else
 LLVM_HOME=/usr/local/clang+llvm-3.9.0-x86_64-apple-darwin
 endif
+
+ifeq ($(MOJAVE_OR_ABOVE), 1)
+CLANG=/usr/bin/clang++
+else
 CLANG=$(LLVM_HOME)/bin/clang++
 LLAS=$(LLVM_HOME)/bin/llvm-as
 LLC=$(LLVM_HOME)/bin/llc
+endif
 LIPO=lipo
 SED=sed
 MV=mv
@@ -79,52 +84,50 @@ else
 endif
 
 ifeq ($(MOJAVE_OR_ABOVE), 1)
-hook.o : hook-x86_64.o
-	$(MV) hook-x86_64.o hook.o
-else
+
+hook.o : hook.mm
+	$(CLANG) $(ARCHS) -o hook.o \
+		-DOBJC_OLD_DISPATCH_PROTOTYPES \
+		-Wno-deprecated-declarations -c hook.mm
+
+else #ifeq ($(MOJAVE_OR_ABOVE), 1)
+
 hook.o : hook-i386.o hook-x86_64.o
 	$(LIPO) -create -arch i386 hook-i386.o -arch x86_64 hook-x86_64.o \
 		-output hook.o
-endif
 
 hook-x86_64.o : hook-x86_64.s
 	$(CLANG) -arch x86_64 -o hook-x86_64.o -c hook-x86_64.s
 
-ifneq ($(MOJAVE_OR_ABOVE), 1)
 hook-i386.o : hook-i386.s
 	$(CLANG) -arch i386 -o hook-i386.o -c hook-i386.s
-endif
 
 hook-x86_64.s : hook-x86_64.bc
 	$(LLC) hook-x86_64.bc -o hook-x86_64.s
 
-ifneq ($(MOJAVE_OR_ABOVE), 1)
 hook-i386.s : hook-i386.bc
 	$(LLC) hook-i386.bc -o hook-i386.s
-endif
 
 hook-x86_64.bc : hook-x86_64.ii
 	$(LLAS) -o=hook-x86_64.bc hook-x86_64.ii
 
-ifneq ($(MOJAVE_OR_ABOVE), 1)
 hook-i386.bc : hook-i386.ii
 	$(LLAS) -o=hook-i386.bc hook-i386.ii
-endif
 
 hook-x86_64.ii : hook.mm
 	$(CLANG) -arch x86_64 -S -emit-llvm -o hook-x86_64.ii \
 		-Wno-deprecated-declarations -c hook.mm
 
-ifneq ($(MOJAVE_OR_ABOVE), 1)
 hook-i386.ii : hook.mm
 	$(CLANG) -arch i386 -S -emit-llvm -o hook-i386.iii \
 		-Wno-deprecated-declarations -c hook.mm
 	$(SED) -e 's/ x86_fastcallcc / fastcc /' hook-i386.iii > hook-i386.ii
-endif
+
+endif #ifeq ($(MOJAVE_OR_ABOVE), 1)
 
 clean :
 ifeq ($(MOJAVE_OR_ABOVE), 1)
-	rm hook.o hook.dylib hook-x86_64*
+	rm hook.o hook.dylib
 else
 	rm hook.o hook.dylib hook-i386* hook-x86_64*
 endif

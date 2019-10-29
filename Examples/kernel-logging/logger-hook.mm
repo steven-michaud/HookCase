@@ -112,6 +112,7 @@ bool CanUseCF()
 #define MAC_OS_X_VERSION_10_12_HEX 0x00000AC0
 #define MAC_OS_X_VERSION_10_13_HEX 0x00000AD0
 #define MAC_OS_X_VERSION_10_14_HEX 0x00000AE0
+#define MAC_OS_X_VERSION_10_15_HEX 0x00000AF0
 
 char gOSVersionString[PATH_MAX] = {0};
 
@@ -190,6 +191,11 @@ bool macOS_HighSierra()
 bool macOS_Mojave()
 {
   return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_14_HEX);
+}
+
+bool macOS_Catalina()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_15_HEX);
 }
 
 class nsAutoreleasePool {

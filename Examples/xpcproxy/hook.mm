@@ -110,6 +110,7 @@ bool CanUseCF()
 #define MAC_OS_X_VERSION_10_12_HEX 0x00000AC0
 #define MAC_OS_X_VERSION_10_13_HEX 0x00000AD0
 #define MAC_OS_X_VERSION_10_14_HEX 0x00000AE0
+#define MAC_OS_X_VERSION_10_15_HEX 0x00000AF0
 
 char gOSVersionString[PATH_MAX] = {0};
 
@@ -188,6 +189,11 @@ bool macOS_HighSierra()
 bool macOS_Mojave()
 {
   return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_14_HEX);
+}
+
+bool macOS_Catalina()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_15_HEX);
 }
 
 class nsAutoreleasePool {
@@ -1097,6 +1103,18 @@ static int Hooked_setenv(const char *name, const char *value, int overwrite)
 
 typedef struct _xpc_pipe *xpc_pipe_t;
 
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101500
+extern "C" int
+xpc_pipe_routine_with_flags(xpc_pipe_t pipe, xpc_object_t request,
+                            xpc_object_t *reply, uint32_t flags);
+
+int (*xpc_pipe_routine_with_flags_caller)(xpc_pipe_t, xpc_object_t,
+                                          xpc_object_t *, uint32_t) = NULL;
+
+static int
+Hooked_xpc_pipe_routine_with_flags(xpc_pipe_t pipe, xpc_object_t request,
+                                   xpc_object_t *reply, uint32_t flags)
+#else
 extern "C" int xpc_pipe_routine(xpc_pipe_t pipe, xpc_object_t request,
                                 xpc_object_t *reply);
 
@@ -1104,6 +1122,7 @@ int (*xpc_pipe_routine_caller)(xpc_pipe_t, xpc_object_t, xpc_object_t *) = NULL;
 
 static int Hooked_xpc_pipe_routine(xpc_pipe_t pipe, xpc_object_t request,
                                    xpc_object_t *reply)
+#endif
 {
   bool is_xpcproxy = false;
   const char *owner_name = GetCallerOwnerName();
@@ -1111,7 +1130,11 @@ static int Hooked_xpc_pipe_routine(xpc_pipe_t pipe, xpc_object_t request,
     is_xpcproxy = true;
   }
 
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101500
+  int retval = xpc_pipe_routine_with_flags_caller(pipe, request, reply, flags);
+#else
   int retval = xpc_pipe_routine_caller(pipe, request, reply);
+#endif
   if (is_xpcproxy) {
     char *request_desc = NULL;
     if (request) {
@@ -1121,9 +1144,15 @@ static int Hooked_xpc_pipe_routine(xpc_pipe_t pipe, xpc_object_t request,
     if (reply && *reply) {
       reply_desc = xpc_copy_description(*reply);
     }
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101500
+    LogWithFormat(true, "xpcproxy: xpc_pipe_routine_with_flags(): request %s, reply %s, flags 0x%x, returning %i",
+                  request_desc ? request_desc : "null",
+                  reply_desc ? reply_desc : "null", flags, retval);
+#else
     LogWithFormat(true, "xpcproxy: xpc_pipe_routine(): request %s, reply %s, returning %i",
                   request_desc ? request_desc : "null",
                   reply_desc ? reply_desc : "null", retval);
+#endif
     if (request_desc) {
       free(request_desc);
     }
@@ -1292,7 +1321,11 @@ __attribute__((used)) static const hook_desc user_hooks[]
   PATCH_FUNCTION(__CFInitialize, /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation),
 
   PATCH_FUNCTION(setenv, /usr/lib/system/libsystem_c.dylib),
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101500
+  PATCH_FUNCTION(xpc_pipe_routine_with_flags, /usr/lib/system/libxpc.dylib),
+#else
   PATCH_FUNCTION(xpc_pipe_routine, /usr/lib/system/libxpc.dylib),
+#endif
   PATCH_FUNCTION(xpc_dictionary_get_data, /usr/lib/system/libxpc.dylib),
   PATCH_FUNCTION(posix_spawn, /usr/lib/system/libsystem_kernel.dylib),
 };

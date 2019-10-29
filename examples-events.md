@@ -40,6 +40,10 @@ on OS X 10.11 and macOS 10.12, and the
 [LLVM 4.0.0 Clang download](http://releases.llvm.org/4.0.0/clang+llvm-4.0.0-x86_64-apple-darwin.tar.xz)
 on macOS 10.13.
 
+32-bit binaries only build on macOS 10.13 (HighSierra) and below. So
+you won't need any of these special tools on macOS 10.14 (Mojave) and
+above.
+
 Do the following (with various applications) to see the events hook
 library in action.  As always, on OS X 10.12 (Sierra) and above you'll
 want to run the Console app before starting.  Filter on "events".

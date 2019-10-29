@@ -46,8 +46,8 @@ performance penalty (that of a single software interrupt).
 
 HookCase is compatible with `DYLD_INSERT_LIBRARIES`, and doesn't stomp
 on any of the changes it may have been used to make.  So a
-`DYLD_INTERPOSE_LIBRARIES` hook will always override the "same"
-HookCase interpose hook.  This is because Apple often uses
+`DYLD_INSERT_LIBRARIES` hook will always override the "same" HookCase
+interpose hook.  This is because Apple often uses
 `DYLD_INSERT_LIBRARIES` internally, in ways it doesn't document.
 HookCase would likely break Apple functionality if it could override
 Apple's hooks.  But this doesn't apply to patch hooks.  Since Apple
@@ -64,12 +64,12 @@ on the same method, or try to step through code that contains a patch
 hook.
 
 Apple's support for `DYLD_INSERT_LIBRARIES` is implemented in
-[`/usr/lib/dyld`](https://opensource.apple.com/source/dyld/dyld-519.2.2/).
+[`/usr/lib/dyld`](https://opensource.apple.com/source/dyld/dyld-655.1.1/).
 A (shared) copy of this module gets loaded into the image of every new
 process before it starts running.  `dyld`'s `man` page calls it the
 "dynamic link editor", and it's what runs first (starting from
 `_dyld_start` in `dyld`'s
-[`src/dyldStartup.s`](https://opensource.apple.com/source/dyld/dyld-519.2.2/src/dyldStartup.s.auto.html))
+[`src/dyldStartup.s`](https://opensource.apple.com/source/dyld/dyld-655.1.1/src/dyldStartup.s.auto.html))
 as a new process starts up.  Once `dyld` has finished its work, it
 jumps to the new process's `main()` method.
 
@@ -88,5 +88,5 @@ allow the original `dyld::InitializeMainExecutable()` method to run
 (which, among other things, runs the process's C++ initializers).
 
 For more information, the best place to start is the
-[long series of comments](HookCase/HookCase/HookCase.cpp#L6713)
+[long series of comments](HookCase/HookCase/HookCase.cpp#L6419)
 in `HookCase.cpp` before the definition of `C_64_REDZONE_LEN`.

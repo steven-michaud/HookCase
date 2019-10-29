@@ -9,12 +9,14 @@ code for these hook libaries is available under
 
 The
 [secinit](examples-secinit.md) and [Kernel logging](examples-kernel-logging.md)
-won't work if you enable system integrity protection (SIP) without
-"kernel extension protection" (`csrutil enable --without kext`).  This
-is because these examples involve changing system files and writing to
-system directories.  However, they will work fine if you turn off both
-"kernel extension protection" and "filesystem protection" (`csrutil
-enable --without kext --without fs`).
+examples don't currently work on macOS 10.15 (Catalina). The reason is
+that Catalina's system files live on a special partition that is
+mounted read-only, and I don't yet know of a reasonable
+workaround. Even on macOS 10.14 (Mojave) and below, you will need
+either to disable system integrity protection (SIP) altogether
+(`csrutil disable`) or turn off both "kernel extension protection" and
+"filesystem protection" (`csrutil enable --without kext --without
+fs`).
 
 * [Dynamic patch hooks](examples-dynamic-hooking.md)
 * [xpcproxy trampoline](examples-xpcproxy.md)
