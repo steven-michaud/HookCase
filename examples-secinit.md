@@ -1,5 +1,10 @@
 # secinit subsystem
 
+This example currently doesn't work on macOS Catalina (10.15). The
+reason is that Catalina's system files live on a special partition
+that is mounted read-only, and I don't yet know of a reasonable
+workaround.
+
 The "secinit subsystem" (if we may call it that) has two parts:
 
   * `/usr/libexec/secinitd` -- a system daemon that (according to its
