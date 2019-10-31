@@ -1,9 +1,11 @@
 # secinit subsystem
 
-This example currently doesn't work on macOS Catalina (10.15). The
-reason is that Catalina's system files live on a special partition
-that is mounted read-only, and I don't yet know of a reasonable
-workaround.
+As mentioned earlier, this example won't work unless you disable
+system integrity protection (SIP) altogether (`csrutil disable`), or
+at least disable "filesystem protection" (`csrutil enable --without
+kext --without fs`).  On macOS 10.15 (Catalina) you also need to
+remount the partition that contains system files with read-write
+permissions (`sudo mount -uw /`).
 
 The "secinit subsystem" (if we may call it that) has two parts:
 
@@ -135,3 +137,7 @@ When you're done experimenting, do the following in
         launchctl unload -S Background /System/Library/LaunchAgents/com.apple.secinitd.plist
         launchctl load -S Background /System/Library/LaunchAgents/com.apple.secinitd.plist
 
+You should probably also restore system integrity protection (`csrutil
+enable --without kext`).  On Catalina, the partition that contains
+system files will automatically be remounted read-only after your
+computer is rebooted.

@@ -2,16 +2,6 @@
 
 HookCase now supports macOS Catalina (10.15).
 
-All of HookCase's functionality is available on Catalina, but at least
-for the time being it's not possible to use it on system daemons that
-are launched via plist files in /System/Library/LaunchDaemons and
-/System/Library/LaunchAgents. The reason is that all system files,
-including ones in these directories, now live on a special partition
-that is mounted read-only. Even disabling system integrity protection
-(by running `csrutil disable` from the recovery partition) doesn't
-change this. I don't currently know of a reasonable way around this,
-though I may at some point in the future.
-
 # What's New in Version 3.3.1
 
 This version of HookCase tightens up the code that supports

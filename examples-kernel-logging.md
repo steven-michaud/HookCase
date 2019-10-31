@@ -2,10 +2,12 @@
 
 ## The Bug
 
-This example currently doesn't work on macOS Catalina (10.15). The
-reason is that Catalina's system files live on a special partition
-that is mounted read-only, and I don't yet know of a reasonable
-workaround.
+As mentioned earlier, this example won't work unless you disable
+system integrity protection (SIP) altogether (`csrutil disable`), or
+at least disable "filesystem protection" (`csrutil enable --without
+kext --without fs`).  On macOS 10.15 (Catalina) you also need to
+remount the partition that contains system files with read-write
+permissions (`sudo mount -uw /`).
 
 Apple implemented a new logging subsystem on macOS Sierra (10.12) and
 up.  It's controlled by the `/usr/libexec/diagnosticd daemon`, which
@@ -103,7 +105,7 @@ load a hook library.  Furthermore, logging doesn't work at all from
 `diagnosticd` (possibly because it controls the logging subsystem).
 So `diagnosticd-hook.dylib` writes all its output to a serial port.
 This is easiest to set up in a virtual machine.  For more information
-see [diagnosticd-hook.mm](Examples/kernel-logging/diagnosticd-hook.mm#L309).
+see [diagnosticd-hook.mm](Examples/kernel-logging/diagnosticd-hook.mm#L315).
 Note that user-mode code and the kernel can't both access the serial
 port at the same time.
 
@@ -160,3 +162,7 @@ following in `/System/Library/LaunchDaemons` to unload
         sudo launchctl unload /System/Library/LaunchDaemons/com.apple.diagnosticd.plist
         sudo launchctl load /System/Library/LaunchDaemons/com.apple.diagnosticd.plist
 
+You should probably also restore system integrity protection (`csrutil
+enable --without kext`).  On Catalina, the partition that contains
+system files will automatically be remounted read-only after your
+computer is rebooted.
