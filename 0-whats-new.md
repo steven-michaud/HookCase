@@ -1,3 +1,10 @@
+# What's New in Version 4.0.1
+
+This version of HookCase documents how to use `sudo mount -uw /` to
+temporarily make system files and directories writable on macOS
+Catalina (10.15). It also updates
+[one of the examples](Examples/secinit/) for Catalina.
+
 # What's New in Version 4.0
 
 HookCase now supports macOS Catalina (10.15).
