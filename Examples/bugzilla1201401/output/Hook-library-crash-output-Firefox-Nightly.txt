@@ -1,0 +1,179 @@
+# Output of hook library for https://bugzilla.mozilla.org/show_bug.cgi?id=1201401
+# in the 2019-09-04 Firefox Nightly, recording the steps leading up to a crash.
+# get_current_display_system_state() returns null, CGDisplayIDToOpenGLDisplayMask()
+# returns 0, CVCGDisplayLink::setCurrentDisplay() returns -6670, and the crash
+# happens shortly afterwards. The 2019-09-04 Firefox Nightly didn't yet have the
+# workaround for bug 1201401.
+
+(Wed Feb  5 14:16:45 2020) /Users/smichaud/Desktop/Firefox Nightly 2019-09-04.app/Contents/MacOS/firefox[1885] [0x110f7ddc0] get_current_display_system_state(): returning '0x0', counter '5', remainder '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZL32get_current_display_system_statev() + 0xea
+    (SkyLight) SLSGetDisplayOpenGLDisplayMask + 0x1e
+    (hook.dylib) Hooked_SLDisplayIDToOpenGLDisplayMask(unsigned int) + 0x41
+    (CoreVideo) CVCGDisplayLink::setCurrentDisplay(unsigned int) + 0x25
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink17setCurrentDisplayEj(void*, unsigned int) + 0x29
+    (CoreVideo) CVCGDisplayLink::initWithCGDisplays(unsigned int*, long, int*) + 0x1c3
+    (CoreVideo) CVDisplayLinkCreateWithCGDisplays + 0x86
+    (hook.dylib) Hooked_CVDisplayLinkCreateWithCGDisplays(unsigned int*, long, __CVDisplayLink**) + 0x34
+    (CoreVideo) CVDisplayLinkCreateWithActiveCGDisplays + 0x55
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x22
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x16d
+    (XUL) mozilla::detail::RunnableMethodImpl<mozilla::RefreshTimerVsyncDispatcher*, void (mozilla::RefreshTimerVsyncDispatcher::*)(), true, (mozilla::RunnableKind)0>::Run() + 0x27
+    (XUL) nsThread::ProcessNextEvent(bool, bool*) + 0xd91
+    (XUL) NS_ProcessPendingEvents(nsIThread*, unsigned int) + 0x62
+    (XUL) nsBaseAppShell::NativeEventCallback() + 0xb7
+    (XUL) nsAppShell::ProcessGeckoEvents(void*) + 0xfc
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x258
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (XUL) -[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] + 0x117
+    (AppKit) -[NSApplication run] + 0x292
+    (XUL) nsAppShell::Run() + 0x80
+    (XUL) nsAppStartup::Run() + 0x3e
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x14f5
+    (XUL) mozilla::BootstrapImpl::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x10d
+    (firefox) main + 0x56e
+    (libdyld.dylib) start + 0x1
+    (firefox) unknown 0x1
+(Wed Feb  5 14:16:45 2020) /Users/smichaud/Desktop/Firefox Nightly 2019-09-04.app/Contents/MacOS/firefox[1885] [0x110f7ddc0] CGDisplayIDToOpenGLDisplayMask(): display '0x4280bc6', returning '0x0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_SLDisplayIDToOpenGLDisplayMask(unsigned int) + 0x85
+    (CoreVideo) CVCGDisplayLink::setCurrentDisplay(unsigned int) + 0x25
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink17setCurrentDisplayEj(void*, unsigned int) + 0x29
+    (CoreVideo) CVCGDisplayLink::initWithCGDisplays(unsigned int*, long, int*) + 0x1c3
+    (CoreVideo) CVDisplayLinkCreateWithCGDisplays + 0x86
+    (hook.dylib) Hooked_CVDisplayLinkCreateWithCGDisplays(unsigned int*, long, __CVDisplayLink**) + 0x34
+    (CoreVideo) CVDisplayLinkCreateWithActiveCGDisplays + 0x55
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x22
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x16d
+    (XUL) mozilla::detail::RunnableMethodImpl<mozilla::RefreshTimerVsyncDispatcher*, void (mozilla::RefreshTimerVsyncDispatcher::*)(), true, (mozilla::RunnableKind)0>::Run() + 0x27
+    (XUL) nsThread::ProcessNextEvent(bool, bool*) + 0xd91
+    (XUL) NS_ProcessPendingEvents(nsIThread*, unsigned int) + 0x62
+    (XUL) nsBaseAppShell::NativeEventCallback() + 0xb7
+    (XUL) nsAppShell::ProcessGeckoEvents(void*) + 0xfc
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x258
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (XUL) -[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] + 0x117
+    (AppKit) -[NSApplication run] + 0x292
+    (XUL) nsAppShell::Run() + 0x80
+    (XUL) nsAppStartup::Run() + 0x3e
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x14f5
+    (XUL) mozilla::BootstrapImpl::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x10d
+    (firefox) main + 0x56e
+    (libdyld.dylib) start + 0x1
+    (firefox) unknown 0x1
+(Wed Feb  5 14:16:45 2020) /Users/smichaud/Desktop/Firefox Nightly 2019-09-04.app/Contents/MacOS/firefox[1885] [0x110f7ddc0] Hook.mm: CVCGDisplayLink::setCurrentDisplay(): self '0x11d786020', displayID '0x4280bc6', returning '-6670'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink17setCurrentDisplayEj(void*, unsigned int) + 0x56
+    (CoreVideo) CVCGDisplayLink::initWithCGDisplays(unsigned int*, long, int*) + 0x1c3
+    (CoreVideo) CVDisplayLinkCreateWithCGDisplays + 0x86
+    (hook.dylib) Hooked_CVDisplayLinkCreateWithCGDisplays(unsigned int*, long, __CVDisplayLink**) + 0x34
+    (CoreVideo) CVDisplayLinkCreateWithActiveCGDisplays + 0x55
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x22
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x16d
+    (XUL) mozilla::detail::RunnableMethodImpl<mozilla::RefreshTimerVsyncDispatcher*, void (mozilla::RefreshTimerVsyncDispatcher::*)(), true, (mozilla::RunnableKind)0>::Run() + 0x27
+    (XUL) nsThread::ProcessNextEvent(bool, bool*) + 0xd91
+    (XUL) NS_ProcessPendingEvents(nsIThread*, unsigned int) + 0x62
+    (XUL) nsBaseAppShell::NativeEventCallback() + 0xb7
+    (XUL) nsAppShell::ProcessGeckoEvents(void*) + 0xfc
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x258
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (XUL) -[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] + 0x117
+    (AppKit) -[NSApplication run] + 0x292
+    (XUL) nsAppShell::Run() + 0x80
+    (XUL) nsAppStartup::Run() + 0x3e
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x14f5
+    (XUL) mozilla::BootstrapImpl::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x10d
+    (firefox) main + 0x56e
+    (libdyld.dylib) start + 0x1
+    (firefox) unknown 0x1
+(Wed Feb  5 14:16:45 2020) /Users/smichaud/Desktop/Firefox Nightly 2019-09-04.app/Contents/MacOS/firefox[1885] [0x110f7ddc0] Hook.mm: CVDisplayLinkCreateWithCGDisplays(): count '1', displayLinkOut '0x11d786000', returning '0'
+    Current display now '0x0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkCreateWithCGDisplays(unsigned int*, long, __CVDisplayLink**) + 0xc9
+    (CoreVideo) CVDisplayLinkCreateWithActiveCGDisplays + 0x55
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x22
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x16d
+    (XUL) mozilla::detail::RunnableMethodImpl<mozilla::RefreshTimerVsyncDispatcher*, void (mozilla::RefreshTimerVsyncDispatcher::*)(), true, (mozilla::RunnableKind)0>::Run() + 0x27
+    (XUL) nsThread::ProcessNextEvent(bool, bool*) + 0xd91
+    (XUL) NS_ProcessPendingEvents(nsIThread*, unsigned int) + 0x62
+    (XUL) nsBaseAppShell::NativeEventCallback() + 0xb7
+    (XUL) nsAppShell::ProcessGeckoEvents(void*) + 0xfc
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x258
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (XUL) -[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] + 0x117
+    (AppKit) -[NSApplication run] + 0x292
+    (XUL) nsAppShell::Run() + 0x80
+    (XUL) nsAppStartup::Run() + 0x3e
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x14f5
+    (XUL) mozilla::BootstrapImpl::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x10d
+    (firefox) main + 0x56e
+    (libdyld.dylib) start + 0x1
+    (firefox) unknown 0x1
+(Wed Feb  5 14:16:45 2020) /Users/smichaud/Desktop/Firefox Nightly 2019-09-04.app/Contents/MacOS/firefox[1885] [0x110f7ddc0] Hook.mm: CVDisplayLinkSetOutputCallback(): displayLink '0x11d786000', callback '0x102f95a00', userInfo '0x115673390', returning 0
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkSetOutputCallback(__CVDisplayLink*, int (*)(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*), void*) + 0x75
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x72
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x16d
+    (XUL) mozilla::detail::RunnableMethodImpl<mozilla::RefreshTimerVsyncDispatcher*, void (mozilla::RefreshTimerVsyncDispatcher::*)(), true, (mozilla::RunnableKind)0>::Run() + 0x27
+    (XUL) nsThread::ProcessNextEvent(bool, bool*) + 0xd91
+    (XUL) NS_ProcessPendingEvents(nsIThread*, unsigned int) + 0x62
+    (XUL) nsBaseAppShell::NativeEventCallback() + 0xb7
+    (XUL) nsAppShell::ProcessGeckoEvents(void*) + 0xfc
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x258
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (XUL) -[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] + 0x117
+    (AppKit) -[NSApplication run] + 0x292
+    (XUL) nsAppShell::Run() + 0x80
+    (XUL) nsAppStartup::Run() + 0x3e
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x14f5
+    (XUL) mozilla::BootstrapImpl::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x10d
+    (firefox) main + 0x56e
+    (libdyld.dylib) start + 0x1
+    (firefox) unknown 0x1
+(Wed Feb  5 14:16:45 2020) /Users/smichaud/Desktop/Firefox Nightly 2019-09-04.app/Contents/MacOS/firefox[1885] [0x110f7ddc0] Hook.mm: CVDisplayLinkStart(): displayLink '0x11d786000', returning '0'
+
+# Crash happens here, before the hook for CVDisplayLinkStart() can log its stack trace.
+
+Exiting due to channel error.
+Exiting due to channel error.
+Exiting due to channel error.

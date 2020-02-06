@@ -1,0 +1,322 @@
+--- /Users/smichaud/Documents/ReverseEngineering/HookCase-master/HookLibraryTemplate/hook.mm	2019-10-31 15:11:37.000000000 -0500
++++ hook.mm	2020-02-05 15:48:12.000000000 -0600
+@@ -62,6 +62,8 @@
+ #include <libgen.h>
+ #include <execinfo.h>
+ 
++#import <CoreVideo/CoreVideo.h>
++
+ pthread_t gMainThreadID = 0;
+ 
+ bool IsMainThread()
+@@ -77,7 +79,7 @@
+ {
+   if (!sGlobalInitDone) {
+     gMainThreadID = pthread_self();
+-    CreateGlobalSymbolicator();
++    //CreateGlobalSymbolicator();
+     sGlobalInitDone = true;
+   }
+ }
+@@ -924,6 +926,272 @@
+ 
+ // Put other hooked methods and swizzled classes here
+ 
++// Define this if you want to emulate the conditions that trigger the crashes
++// in CVCGDisplayLink::getDisplayTimes() of Mozilla bug 1201401.
++//#define BUG_1201401_CRASHTEST 1
++
++CVReturn (*CVDisplayLinkStart_caller)(CVDisplayLinkRef displayLink) = NULL;
++
++static CVReturn Hooked_CVDisplayLinkStart(CVDisplayLinkRef displayLink)
++{
++  CVReturn retval = CVDisplayLinkStart_caller(displayLink);
++  LogWithFormat(true, "Hook.mm: CVDisplayLinkStart(): displayLink \'%p\', returning \'%i\'",
++                displayLink, retval);
++  PrintStackTrace();
++  return retval;
++}
++
++CVReturn (*CVDisplayLinkStop_caller)(CVDisplayLinkRef displayLink) = NULL;
++
++static CVReturn Hooked_CVDisplayLinkStop(CVDisplayLinkRef displayLink)
++{
++  CVReturn retval = CVDisplayLinkStop_caller(displayLink);
++  LogWithFormat(true, "Hook.mm: CVDisplayLinkStop(): displayLink \'%p\', returning \'%i\'",
++                displayLink, retval);
++  PrintStackTrace();
++  return retval;
++}
++
++CVReturn (*_ZN13CVDisplayLink4stopEv_caller)(void *self) = NULL;
++
++CVReturn Hooked__ZN13CVDisplayLink4stopEv(void *self)
++{
++  CVReturn retval = _ZN13CVDisplayLink4stopEv_caller(self);
++  LogWithFormat(true, "Hook.mm: CVDisplayLink::stop(): self \'%p\', returning \'%i\'",
++                self, retval);
++  PrintStackTrace();
++  return retval;
++}
++
++void (*CVDisplayLinkRelease_caller)(CVDisplayLinkRef displayLink) = NULL;
++
++void Hooked_CVDisplayLinkRelease(CVDisplayLinkRef displayLink)
++{
++  CVDisplayLinkRelease_caller(displayLink);
++  LogWithFormat(true, "Hook.mm: CVDisplayLinkRelease(): displayLink \'%p\'", displayLink);
++  PrintStackTrace();
++}
++
++CVReturn (*CVDisplayLinkCreateWithCGDisplays_caller)(CGDirectDisplayID *displayArray, CFIndex count,
++                                                     CVDisplayLinkRef *displayLinkOut) = NULL;
++
++CVReturn Hooked_CVDisplayLinkCreateWithCGDisplays(CGDirectDisplayID *displayArray, CFIndex count,
++                                                  CVDisplayLinkRef *displayLinkOut)
++{
++  CVReturn retval = CVDisplayLinkCreateWithCGDisplays_caller(displayArray, count, displayLinkOut);
++  LogWithFormat(true, "Hook.mm: CVDisplayLinkCreateWithCGDisplays(): count \'%u\', displayLinkOut \'%p\', returning \'%i\'",
++                count, displayLinkOut ? *displayLinkOut : NULL, retval);
++  if (displayLinkOut && *displayLinkOut) {
++    CGDirectDisplayID current = CVDisplayLinkGetCurrentCGDisplay(*displayLinkOut);
++    LogWithFormat(false, "    Current display now \'0x%x\'", current);
++  }
++  PrintStackTrace();
++  return retval;
++}
++
++pthread_key_t s_in_setCurrentDisplay;
++int32_t s_in_setCurrentDisplay_initialized = 0;
++
++bool get_in_setCurrentDisplay()
++{
++  if (!s_in_setCurrentDisplay_initialized) {
++    OSAtomicIncrement32(&s_in_setCurrentDisplay_initialized);
++    pthread_key_create(&s_in_setCurrentDisplay, NULL);
++  }
++  return (pthread_getspecific(s_in_setCurrentDisplay) != NULL);
++}
++
++void set_in_setCurrentDisplay(bool flag)
++{
++  if (!s_in_setCurrentDisplay_initialized) {
++    OSAtomicIncrement32(&s_in_setCurrentDisplay_initialized);
++    pthread_key_create(&s_in_setCurrentDisplay, NULL);
++  }
++  pthread_setspecific(s_in_setCurrentDisplay, (void *) flag);
++}
++
++CVReturn (*_ZN15CVCGDisplayLink17setCurrentDisplayEj_caller)(void *self, CGDirectDisplayID displayID) = NULL;
++
++CVReturn Hooked__ZN15CVCGDisplayLink17setCurrentDisplayEj(void *self, CGDirectDisplayID displayID)
++{
++  set_in_setCurrentDisplay(true);
++  CVReturn retval = _ZN15CVCGDisplayLink17setCurrentDisplayEj_caller(self, displayID);
++  set_in_setCurrentDisplay(false);
++  LogWithFormat(true, "Hook.mm: CVCGDisplayLink::setCurrentDisplay(): self \'%p\', displayID \'0x%x\', returning \'%i\'",
++                self, displayID, retval);
++  PrintStackTrace();
++  return retval;
++}
++
++CGDirectDisplayID (*_ZN15CVCGDisplayLink17getCurrentDisplayEv_caller)(void *self) = NULL;
++
++CGDirectDisplayID Hooked__ZN15CVCGDisplayLink17getCurrentDisplayEv(void *self)
++{
++  CGDirectDisplayID retval = _ZN15CVCGDisplayLink17getCurrentDisplayEv_caller(self);
++  LogWithFormat(true, "Hook.mm: CVCGDisplayLink::getCurrentDisplay(): self \'%p\', returning \'0x%x\'",
++                self, retval);
++  PrintStackTrace();
++  return retval;
++}
++
++pthread_key_t s_in_DisplayIDToOpenGLDisplayMask;
++int32_t s_in_DisplayIDToOpenGLDisplayMask_initialized = 0;
++
++bool get_in_DisplayIDToOpenGLDisplayMask()
++{
++  if (!s_in_DisplayIDToOpenGLDisplayMask_initialized) {
++    OSAtomicIncrement32(&s_in_DisplayIDToOpenGLDisplayMask_initialized);
++    pthread_key_create(&s_in_DisplayIDToOpenGLDisplayMask, NULL);
++  }
++  return (pthread_getspecific(s_in_DisplayIDToOpenGLDisplayMask) != NULL);
++}
++
++void set_in_DisplayIDToOpenGLDisplayMask(bool flag)
++{
++  if (!s_in_DisplayIDToOpenGLDisplayMask_initialized) {
++    OSAtomicIncrement32(&s_in_DisplayIDToOpenGLDisplayMask_initialized);
++    pthread_key_create(&s_in_DisplayIDToOpenGLDisplayMask, NULL);
++  }
++  pthread_setspecific(s_in_DisplayIDToOpenGLDisplayMask, (void *) flag);
++}
++
++#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101200
++#define DisplayIDToOpenGLDisplayMask_hook Hooked_SLDisplayIDToOpenGLDisplayMask
++#define DisplayIDToOpenGLDisplayMask_caller SLDisplayIDToOpenGLDisplayMask_caller
++#else
++#define DisplayIDToOpenGLDisplayMask_hook Hooked_CGDisplayIDToOpenGLDisplayMask
++#define DisplayIDToOpenGLDisplayMask_caller CGDisplayIDToOpenGLDisplayMask_caller
++#endif
++
++CGOpenGLDisplayMask (*DisplayIDToOpenGLDisplayMask_caller)(CGDirectDisplayID display) = NULL;
++
++CGOpenGLDisplayMask DisplayIDToOpenGLDisplayMask_hook(CGDirectDisplayID display)
++{
++  set_in_DisplayIDToOpenGLDisplayMask(true);
++  CGOpenGLDisplayMask retval = DisplayIDToOpenGLDisplayMask_caller(display);
++  set_in_DisplayIDToOpenGLDisplayMask(false);
++  if (get_in_setCurrentDisplay()) {
++    LogWithFormat(true, "Hook.mm: CGDisplayIDToOpenGLDisplayMask(): display \'0x%x\', returning \'0x%x\'",
++                  display, retval);
++    PrintStackTrace();
++  }
++  return retval;
++}
++
++void (*_ZN15CVCGDisplayLink15getDisplayTimesEPyS0_S0__caller)(void *self, unsigned long long *arg2,
++                                                              unsigned long long *arg3,
++                                                              unsigned long long *arg4) = NULL;
++
++void Hooked__ZN15CVCGDisplayLink15getDisplayTimesEPyS0_S0_(void *self, unsigned long long *arg2,
++                                                           unsigned long long *arg3,
++                                                           unsigned long long *arg4)
++{
++  _ZN15CVCGDisplayLink15getDisplayTimesEPyS0_S0__caller(self, arg2, arg3, arg4);
++  // This method is called often, so its output is very noisy.
++  //LogWithFormat(true, "Hook.mm: CVCGDisplayLink::getDisplayTimes(): self \'%p\'", self);
++  //PrintStackTrace();
++}
++
++CVReturn Hooked_CVDisplayLinkOutputCallback(CVDisplayLinkRef displayLink, const CVTimeStamp *inNow,
++                                            const CVTimeStamp *inOutputTime, CVOptionFlags flagsIn,
++                                            CVOptionFlags *flagsOut, void *displayLinkContext)
++{
++  CVDisplayLinkOutputCallback caller = (CVDisplayLinkOutputCallback)
++    get_dynamic_caller(reinterpret_cast<void*>(Hooked_CVDisplayLinkOutputCallback));
++  CVReturn retval = caller(displayLink, inNow, inOutputTime, flagsIn, flagsOut, displayLinkContext);
++  // This method is called often, so its output is very noisy.
++  //LogWithFormat(true, "Hook.mm: CVDisplayLinkOutputCallback(): displayLink \'%p\', displayLinkContext \'%p\', returning \'%i\'",
++  //              displayLink, displayLinkContext, retval);
++  //PrintStackTrace();
++  return retval;
++}
++
++CVReturn (*CVDisplayLinkSetOutputCallback_caller)(CVDisplayLinkRef displayLink,
++                                                  CVDisplayLinkOutputCallback callback,
++                                                  void *userInfo) = NULL;
++
++CVReturn Hooked_CVDisplayLinkSetOutputCallback(CVDisplayLinkRef displayLink,
++                                               CVDisplayLinkOutputCallback callback,
++                                               void *userInfo)
++{
++  if (callback) {
++    add_patch_hook(reinterpret_cast<void*>(callback),
++                   reinterpret_cast<void*>(Hooked_CVDisplayLinkOutputCallback));
++  }
++  CVReturn retval = CVDisplayLinkSetOutputCallback_caller(displayLink, callback, userInfo);
++  LogWithFormat(true, "Hook.mm: CVDisplayLinkSetOutputCallback(): displayLink \'%p\', callback \'%p\', userInfo \'%p\', returning %i",
++                displayLink, callback, userInfo, retval);
++  PrintStackTrace();
++  return retval;
++}
++
++#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101400
++#define get_current_display_system_state_hook Hooked__ZL32get_current_display_system_statev
++#define get_current_display_system_state_caller _ZL32get_current_display_system_statev_caller
++#else
++#define get_current_display_system_state_hook Hooked_get_current_display_system_state
++//#define get_current_display_system_state_caller get_current_display_system_state_caller
++#endif
++
++void *(*get_current_display_system_state_caller)() = NULL;
++
++void *get_current_display_system_state_hook()
++{
++#ifdef __LP64__
++  const struct mach_header_64 *mh = NULL;
++#else
++  const struct mach_header *mh = NULL;
++#endif
++  intptr_t vmaddr_slide = 0;
++  GetModuleHeaderAndSlide("crashreporter", &mh, &vmaddr_slide);
++  bool is_crashreporter = (mh != NULL);
++
++  void *retval = get_current_display_system_state_caller();
++
++#ifdef BUG_1201401_CRASHTEST
++  if (!is_crashreporter) {
++    static unsigned int counter = 0;
++    unsigned int remainder = 0;
++    bool docrash = false;
++#if (0)
++    // Original test, which shows that these crashes happen much more often in
++    // unpatched Firefox than in Safari or Google Chrome.
++    OSAtomicIncrement32((int32_t *) &counter);
++    remainder = (counter % 10);
++    if (remainder == 0) {
++      docrash = true;
++      retval = NULL;
++    }
++#else
++    // Revised test, which shows that these crashes happen only when
++    // get_current_display_system_state() returns NULL during a call to
++    // SLDisplayIDToOpenGLDisplayMask() (via CGDisplayIDToOpenGLDisplayMask()),
++    // during a call to CVCGDisplayLink::setCurrentDisplay(unsigned int), which
++    // itself happens during a call to CVDisplayLinkCreateWithCGDisplays()
++    // (which is called by CVDisplayLinkCreateWithActiveCGDisplays()).
++    // This test crashes Firefox (unpatched), Safari and Google Chrome (and
++    // presumably all other apps that use the CVDisplayLink methods). It can 
++    // also be used to test the patch for bug 1201401.
++    if (get_in_setCurrentDisplay() && get_in_DisplayIDToOpenGLDisplayMask()) {
++      OSAtomicIncrement32((int32_t *) &counter);
++      remainder = (counter % 5);
++      if (remainder == 0) {
++        docrash = true;
++        retval = NULL;
++      }
++    }
++#endif
++    if (docrash) {
++      LogWithFormat(true, "Hook.mm: get_current_display_system_state(): returning \'%p\', counter \'%u\', remainder \'%u\'",
++                    retval, counter, remainder);
++      PrintStackTrace();
++    }
++  }
++#endif
++
++  return retval;
++}
++
+ #pragma mark -
+ 
+ typedef struct _hook_desc {
+@@ -955,6 +1223,28 @@
+ {
+   INTERPOSE_FUNCTION(NSPushAutoreleasePool),
+   PATCH_FUNCTION(__CFInitialize, /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation),
++
++  PATCH_FUNCTION(CVDisplayLinkStart, /System/Library/Frameworks/CoreVideo.framework/CoreVideo),
++  //PATCH_FUNCTION(CVDisplayLinkStop, /System/Library/Frameworks/CoreVideo.framework/CoreVideo),
++  PATCH_FUNCTION(_ZN13CVDisplayLink4stopEv, /System/Library/Frameworks/CoreVideo.framework/CoreVideo),
++  PATCH_FUNCTION(CVDisplayLinkRelease, /System/Library/Frameworks/CoreVideo.framework/CoreVideo),
++  PATCH_FUNCTION(CVDisplayLinkCreateWithCGDisplays, /System/Library/Frameworks/CoreVideo.framework/CoreVideo),
++  PATCH_FUNCTION(_ZN15CVCGDisplayLink17setCurrentDisplayEj, /System/Library/Frameworks/CoreVideo.framework/CoreVideo),
++  PATCH_FUNCTION(_ZN15CVCGDisplayLink17getCurrentDisplayEv, /System/Library/Frameworks/CoreVideo.framework/CoreVideo),
++  PATCH_FUNCTION(_ZN15CVCGDisplayLink15getDisplayTimesEPyS0_S0_, /System/Library/Frameworks/CoreVideo.framework/CoreVideo),
++  PATCH_FUNCTION(CVDisplayLinkSetOutputCallback, /System/Library/Frameworks/CoreVideo.framework/CoreVideo),
++#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101200
++  PATCH_FUNCTION(SLDisplayIDToOpenGLDisplayMask, /System/Library/PrivateFrameworks/SkyLight.framework/SkyLight),
++#else
++  PATCH_FUNCTION(CGDisplayIDToOpenGLDisplayMask, /System/Library/Frameworks/CoreGraphics.framework/CoreGraphics),
++#endif
++#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101400
++  PATCH_FUNCTION(_ZL32get_current_display_system_statev, /System/Library/PrivateFrameworks/SkyLight.framework/SkyLight),
++#elif __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101200
++  PATCH_FUNCTION(get_current_display_system_state, /System/Library/PrivateFrameworks/SkyLight.framework/SkyLight),
++#else
++  PATCH_FUNCTION(get_current_display_system_state, /System/Library/Frameworks/CoreGraphics.framework/CoreGraphics),
++#endif
+ };
+ 
+ // What follows are declarations of the CoreSymbolication APIs that we use to

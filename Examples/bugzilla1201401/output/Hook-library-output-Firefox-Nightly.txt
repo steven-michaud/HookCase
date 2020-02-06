@@ -1,0 +1,1507 @@
+# Output of hook library for https://bugzilla.mozilla.org/show_bug.cgi?id=1201401
+# in Firefox Nightly, edited for clarity and length. Firefox releases have their
+# symbols stripped, but Firefox Nightlies don't. Stack traces aren't fully
+# symbolicated if they're from binaries with their symbols stripped.
+#
+# Logging from different threads can sometimes get interleaved. I've removed all
+# such cases from the following output. This is what I've called "editing for
+# clarity."
+
+(Tue Feb  4 15:16:41 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVCGDisplayLink::setCurrentDisplay(): self '0x1032b0020', displayID '0x4280bc6', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink17setCurrentDisplayEj(void*, unsigned int) + 0x56
+    (CoreVideo) CVCGDisplayLink::initWithCGDisplays(unsigned int*, long, int*) + 0x1c3
+    (CoreVideo) CVDisplayLinkCreateWithCGDisplays + 0x86
+    (hook.dylib) Hooked_CVDisplayLinkCreateWithCGDisplays(unsigned int*, long, __CVDisplayLink**) + 0x34
+    (CoreVideo) CVDisplayLinkCreateWithActiveCGDisplays + 0x55
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x22
+    (XUL) gfxPlatformMac::CreateHardwareVsyncSource() + 0x53
+    (XUL) gfxPlatform::ReInitFrameRate() + 0x49
+    (XUL) gfxPlatform::Init() + 0x35d
+    (XUL) gfxPlatform::GetPlatform() + 0x20
+    (XUL) mozilla::widget::GfxInfoBase::GetContentBackend(nsTSubstring<char16_t>&) + 0x23
+    (XUL) NS_InvokeByIndex + 0x8e
+    (XUL) XPCWrappedNative::CallMethod(XPCCallContext&, XPCWrappedNative::CallMode) + 0xdaa
+    (XUL) XPC_WN_GetterSetter(JSContext*, unsigned int, JS::Value*) + 0x1f2
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x21d
+    (XUL) js::CallGetter(JSContext*, JS::Handle<JS::Value>, JS::Handle<JS::Value>, JS::MutableHandle<JS::Value>) + 0x126
+    (XUL) js::NativeGetProperty(JSContext*, JS::Handle<js::NativeObject*>, JS::Handle<JS::Value>, JS::Handle<JS::PropertyKey>, JS::MutableHandle<JS::Value>) + 0x754
+    (XUL) Interpret(JSContext*, js::RunState&) + 0x10ffb
+    (XUL) js::RunScript(JSContext*, js::RunState&) + 0x20f
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x42a
+    (XUL) js::CallGetter(JSContext*, JS::Handle<JS::Value>, JS::Handle<JS::Value>, JS::MutableHandle<JS::Value>) + 0x126
+    (XUL) js::NativeGetProperty(JSContext*, JS::Handle<js::NativeObject*>, JS::Handle<JS::Value>, JS::Handle<JS::PropertyKey>, JS::MutableHandle<JS::Value>) + 0x754
+    (XUL) js::GetProperty(JSContext*, JS::Handle<JS::Value>, JS::Handle<js::PropertyName*>, JS::MutableHandle<JS::Value>) + 0xf9
+    (XUL) Interpret(JSContext*, js::RunState&) + 0xd45d
+    (XUL) js::RunScript(JSContext*, js::RunState&) + 0x20f
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x42a
+    (XUL) JS_CallFunctionValue(JSContext*, JS::Handle<JSObject*>, JS::Handle<JS::Value>, JS::HandleValueArray const&, JS::MutableHandle<JS::Value>) + 0x2f5
+    (XUL) nsXPCWrappedJS::CallMethod(unsigned short, nsXPTMethodInfo const*, nsXPTCMiniVariant*) + 0x981
+    (XUL) PrepareAndDispatch + 0x2d0
+    (XUL) SharedStub + 0x5b
+    (XUL) NS_CreateServicesFromCategory(char const*, nsISupports*, char const*, char16_t const*) + 0x232
+    (XUL) nsXREDirProvider::DoStartup() + 0x16f
+    (XUL) XREMain::XRE_mainRun() + 0x304
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLinkCreateWithCGDisplays(): count '1', displayLinkOut '0x1032b0000', returning '0'
+    Current display now '0x4280bc6'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkCreateWithCGDisplays(unsigned int*, long, __CVDisplayLink**) + 0xc9
+    (CoreVideo) CVDisplayLinkCreateWithActiveCGDisplays + 0x55
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x22
+    (XUL) gfxPlatformMac::CreateHardwareVsyncSource() + 0x53
+    (XUL) gfxPlatform::ReInitFrameRate() + 0x49
+    (XUL) gfxPlatform::Init() + 0x35d
+    (XUL) gfxPlatform::GetPlatform() + 0x20
+    (XUL) mozilla::widget::GfxInfoBase::GetContentBackend(nsTSubstring<char16_t>&) + 0x23
+    (XUL) NS_InvokeByIndex + 0x8e
+    (XUL) XPCWrappedNative::CallMethod(XPCCallContext&, XPCWrappedNative::CallMode) + 0xdaa
+    (XUL) XPC_WN_GetterSetter(JSContext*, unsigned int, JS::Value*) + 0x1f2
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x21d
+    (XUL) js::CallGetter(JSContext*, JS::Handle<JS::Value>, JS::Handle<JS::Value>, JS::MutableHandle<JS::Value>) + 0x126
+    (XUL) js::NativeGetProperty(JSContext*, JS::Handle<js::NativeObject*>, JS::Handle<JS::Value>, JS::Handle<JS::PropertyKey>, JS::MutableHandle<JS::Value>) + 0x754
+    (XUL) Interpret(JSContext*, js::RunState&) + 0x10ffb
+    (XUL) js::RunScript(JSContext*, js::RunState&) + 0x20f
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x42a
+    (XUL) js::CallGetter(JSContext*, JS::Handle<JS::Value>, JS::Handle<JS::Value>, JS::MutableHandle<JS::Value>) + 0x126
+    (XUL) js::NativeGetProperty(JSContext*, JS::Handle<js::NativeObject*>, JS::Handle<JS::Value>, JS::Handle<JS::PropertyKey>, JS::MutableHandle<JS::Value>) + 0x754
+    (XUL) js::GetProperty(JSContext*, JS::Handle<JS::Value>, JS::Handle<js::PropertyName*>, JS::MutableHandle<JS::Value>) + 0xf9
+    (XUL) Interpret(JSContext*, js::RunState&) + 0xd45d
+    (XUL) js::RunScript(JSContext*, js::RunState&) + 0x20f
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x42a
+    (XUL) JS_CallFunctionValue(JSContext*, JS::Handle<JSObject*>, JS::Handle<JS::Value>, JS::HandleValueArray const&, JS::MutableHandle<JS::Value>) + 0x2f5
+    (XUL) nsXPCWrappedJS::CallMethod(unsigned short, nsXPTMethodInfo const*, nsXPTCMiniVariant*) + 0x981
+    (XUL) PrepareAndDispatch + 0x2d0
+    (XUL) SharedStub + 0x5b
+    (XUL) NS_CreateServicesFromCategory(char const*, nsISupports*, char const*, char16_t const*) + 0x232
+    (XUL) nsXREDirProvider::DoStartup() + 0x16f
+    (XUL) XREMain::XRE_mainRun() + 0x304
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVCGDisplayLink::getCurrentDisplay(): self '0x1032b0020', returning '0x4280bc6'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink17getCurrentDisplayEv(void*) + 0x46
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x32
+    (XUL) gfxPlatformMac::CreateHardwareVsyncSource() + 0x53
+    (XUL) gfxPlatform::ReInitFrameRate() + 0x49
+    (XUL) gfxPlatform::Init() + 0x35d
+    (XUL) gfxPlatform::GetPlatform() + 0x20
+    (XUL) mozilla::widget::GfxInfoBase::GetContentBackend(nsTSubstring<char16_t>&) + 0x23
+    (XUL) NS_InvokeByIndex + 0x8e
+    (XUL) XPCWrappedNative::CallMethod(XPCCallContext&, XPCWrappedNative::CallMode) + 0xdaa
+    (XUL) XPC_WN_GetterSetter(JSContext*, unsigned int, JS::Value*) + 0x1f2
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x21d
+    (XUL) js::CallGetter(JSContext*, JS::Handle<JS::Value>, JS::Handle<JS::Value>, JS::MutableHandle<JS::Value>) + 0x126
+    (XUL) js::NativeGetProperty(JSContext*, JS::Handle<js::NativeObject*>, JS::Handle<JS::Value>, JS::Handle<JS::PropertyKey>, JS::MutableHandle<JS::Value>) + 0x754
+    (XUL) Interpret(JSContext*, js::RunState&) + 0x10ffb
+    (XUL) js::RunScript(JSContext*, js::RunState&) + 0x20f
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x42a
+    (XUL) js::CallGetter(JSContext*, JS::Handle<JS::Value>, JS::Handle<JS::Value>, JS::MutableHandle<JS::Value>) + 0x126
+    (XUL) js::NativeGetProperty(JSContext*, JS::Handle<js::NativeObject*>, JS::Handle<JS::Value>, JS::Handle<JS::PropertyKey>, JS::MutableHandle<JS::Value>) + 0x754
+    (XUL) js::GetProperty(JSContext*, JS::Handle<JS::Value>, JS::Handle<js::PropertyName*>, JS::MutableHandle<JS::Value>) + 0xf9
+    (XUL) Interpret(JSContext*, js::RunState&) + 0xd45d
+    (XUL) js::RunScript(JSContext*, js::RunState&) + 0x20f
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x42a
+    (XUL) JS_CallFunctionValue(JSContext*, JS::Handle<JSObject*>, JS::Handle<JS::Value>, JS::HandleValueArray const&, JS::MutableHandle<JS::Value>) + 0x2f5
+    (XUL) nsXPCWrappedJS::CallMethod(unsigned short, nsXPTMethodInfo const*, nsXPTCMiniVariant*) + 0x981
+    (XUL) PrepareAndDispatch + 0x2d0
+    (XUL) SharedStub + 0x5b
+    (XUL) NS_CreateServicesFromCategory(char const*, nsISupports*, char const*, char16_t const*) + 0x232
+    (XUL) nsXREDirProvider::DoStartup() + 0x16f
+    (XUL) XREMain::XRE_mainRun() + 0x304
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLinkSetOutputCallback(): displayLink '0x1032b0000', callback '0x10fb676c0', userInfo '0x10bdcd610', returning 0
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkSetOutputCallback(__CVDisplayLink*, int (*)(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*), void*) + 0x75
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x4d
+    (XUL) gfxPlatformMac::CreateHardwareVsyncSource() + 0x53
+    (XUL) gfxPlatform::ReInitFrameRate() + 0x49
+    (XUL) gfxPlatform::Init() + 0x35d
+    (XUL) gfxPlatform::GetPlatform() + 0x20
+    (XUL) mozilla::widget::GfxInfoBase::GetContentBackend(nsTSubstring<char16_t>&) + 0x23
+    (XUL) NS_InvokeByIndex + 0x8e
+    (XUL) XPCWrappedNative::CallMethod(XPCCallContext&, XPCWrappedNative::CallMode) + 0xdaa
+    (XUL) XPC_WN_GetterSetter(JSContext*, unsigned int, JS::Value*) + 0x1f2
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x21d
+    (XUL) js::CallGetter(JSContext*, JS::Handle<JS::Value>, JS::Handle<JS::Value>, JS::MutableHandle<JS::Value>) + 0x126
+    (XUL) js::NativeGetProperty(JSContext*, JS::Handle<js::NativeObject*>, JS::Handle<JS::Value>, JS::Handle<JS::PropertyKey>, JS::MutableHandle<JS::Value>) + 0x754
+    (XUL) Interpret(JSContext*, js::RunState&) + 0x10ffb
+    (XUL) js::RunScript(JSContext*, js::RunState&) + 0x20f
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x42a
+    (XUL) js::CallGetter(JSContext*, JS::Handle<JS::Value>, JS::Handle<JS::Value>, JS::MutableHandle<JS::Value>) + 0x126
+    (XUL) js::NativeGetProperty(JSContext*, JS::Handle<js::NativeObject*>, JS::Handle<JS::Value>, JS::Handle<JS::PropertyKey>, JS::MutableHandle<JS::Value>) + 0x754
+    (XUL) js::GetProperty(JSContext*, JS::Handle<JS::Value>, JS::Handle<js::PropertyName*>, JS::MutableHandle<JS::Value>) + 0xf9
+    (XUL) Interpret(JSContext*, js::RunState&) + 0xd45d
+    (XUL) js::RunScript(JSContext*, js::RunState&) + 0x20f
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x42a
+    (XUL) JS_CallFunctionValue(JSContext*, JS::Handle<JSObject*>, JS::Handle<JS::Value>, JS::HandleValueArray const&, JS::MutableHandle<JS::Value>) + 0x2f5
+    (XUL) nsXPCWrappedJS::CallMethod(unsigned short, nsXPTMethodInfo const*, nsXPTCMiniVariant*) + 0x981
+    (XUL) PrepareAndDispatch + 0x2d0
+    (XUL) SharedStub + 0x5b
+    (XUL) NS_CreateServicesFromCategory(char const*, nsISupports*, char const*, char16_t const*) + 0x232
+    (XUL) nsXREDirProvider::DoStartup() + 0x16f
+    (XUL) XREMain::XRE_mainRun() + 0x304
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLinkStart(): displayLink '0x1032b0000', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkStart(__CVDisplayLink*) + 0x46
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x6c
+    (XUL) gfxPlatformMac::CreateHardwareVsyncSource() + 0x53
+    (XUL) gfxPlatform::ReInitFrameRate() + 0x49
+    (XUL) gfxPlatform::Init() + 0x35d
+    (XUL) gfxPlatform::GetPlatform() + 0x20
+    (XUL) mozilla::widget::GfxInfoBase::GetContentBackend(nsTSubstring<char16_t>&) + 0x23
+    (XUL) NS_InvokeByIndex + 0x8e
+    (XUL) XPCWrappedNative::CallMethod(XPCCallContext&, XPCWrappedNative::CallMode) + 0xdaa
+    (XUL) XPC_WN_GetterSetter(JSContext*, unsigned int, JS::Value*) + 0x1f2
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x21d
+    (XUL) js::CallGetter(JSContext*, JS::Handle<JS::Value>, JS::Handle<JS::Value>, JS::MutableHandle<JS::Value>) + 0x126
+    (XUL) js::NativeGetProperty(JSContext*, JS::Handle<js::NativeObject*>, JS::Handle<JS::Value>, JS::Handle<JS::PropertyKey>, JS::MutableHandle<JS::Value>) + 0x754
+    (XUL) Interpret(JSContext*, js::RunState&) + 0x10ffb
+    (XUL) js::RunScript(JSContext*, js::RunState&) + 0x20f
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x42a
+    (XUL) js::CallGetter(JSContext*, JS::Handle<JS::Value>, JS::Handle<JS::Value>, JS::MutableHandle<JS::Value>) + 0x126
+    (XUL) js::NativeGetProperty(JSContext*, JS::Handle<js::NativeObject*>, JS::Handle<JS::Value>, JS::Handle<JS::PropertyKey>, JS::MutableHandle<JS::Value>) + 0x754
+    (XUL) js::GetProperty(JSContext*, JS::Handle<JS::Value>, JS::Handle<js::PropertyName*>, JS::MutableHandle<JS::Value>) + 0xf9
+    (XUL) Interpret(JSContext*, js::RunState&) + 0xd45d
+    (XUL) js::RunScript(JSContext*, js::RunState&) + 0x20f
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x42a
+    (XUL) JS_CallFunctionValue(JSContext*, JS::Handle<JSObject*>, JS::Handle<JS::Value>, JS::HandleValueArray const&, JS::MutableHandle<JS::Value>) + 0x2f5
+    (XUL) nsXPCWrappedJS::CallMethod(unsigned short, nsXPTMethodInfo const*, nsXPTCMiniVariant*) + 0x981
+    (XUL) PrepareAndDispatch + 0x2d0
+    (XUL) SharedStub + 0x5b
+    (XUL) NS_CreateServicesFromCategory(char const*, nsISupports*, char const*, char16_t const*) + 0x232
+    (XUL) nsXREDirProvider::DoStartup() + 0x16f
+    (XUL) XREMain::XRE_mainRun() + 0x304
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLink::stop(): self '0x1032b0020', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN13CVDisplayLink4stopEv(void*) + 0x46
+    (CoreVideo) CVCGDisplayLink::finalize() + 0x1f
+    (CoreFoundation) _CFRelease + 0x109
+    (hook.dylib) Hooked_CVDisplayLinkRelease(__CVDisplayLink*) + 0x24
+    (XUL) OSXVsyncSource::OSXDisplay::DisableVsync() + 0x17
+    (XUL) gfxPlatformMac::CreateHardwareVsyncSource() + 0x69
+    (XUL) gfxPlatform::ReInitFrameRate() + 0x49
+    (XUL) gfxPlatform::Init() + 0x35d
+    (XUL) gfxPlatform::GetPlatform() + 0x20
+    (XUL) mozilla::widget::GfxInfoBase::GetContentBackend(nsTSubstring<char16_t>&) + 0x23
+    (XUL) NS_InvokeByIndex + 0x8e
+    (XUL) XPCWrappedNative::CallMethod(XPCCallContext&, XPCWrappedNative::CallMode) + 0xdaa
+    (XUL) XPC_WN_GetterSetter(JSContext*, unsigned int, JS::Value*) + 0x1f2
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x21d
+    (XUL) js::CallGetter(JSContext*, JS::Handle<JS::Value>, JS::Handle<JS::Value>, JS::MutableHandle<JS::Value>) + 0x126
+    (XUL) js::NativeGetProperty(JSContext*, JS::Handle<js::NativeObject*>, JS::Handle<JS::Value>, JS::Handle<JS::PropertyKey>, JS::MutableHandle<JS::Value>) + 0x754
+    (XUL) Interpret(JSContext*, js::RunState&) + 0x10ffb
+    (XUL) js::RunScript(JSContext*, js::RunState&) + 0x20f
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x42a
+    (XUL) js::CallGetter(JSContext*, JS::Handle<JS::Value>, JS::Handle<JS::Value>, JS::MutableHandle<JS::Value>) + 0x126
+    (XUL) js::NativeGetProperty(JSContext*, JS::Handle<js::NativeObject*>, JS::Handle<JS::Value>, JS::Handle<JS::PropertyKey>, JS::MutableHandle<JS::Value>) + 0x754
+    (XUL) js::GetProperty(JSContext*, JS::Handle<JS::Value>, JS::Handle<js::PropertyName*>, JS::MutableHandle<JS::Value>) + 0xf9
+    (XUL) Interpret(JSContext*, js::RunState&) + 0xd45d
+    (XUL) js::RunScript(JSContext*, js::RunState&) + 0x20f
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x42a
+    (XUL) JS_CallFunctionValue(JSContext*, JS::Handle<JSObject*>, JS::Handle<JS::Value>, JS::HandleValueArray const&, JS::MutableHandle<JS::Value>) + 0x2f5
+    (XUL) nsXPCWrappedJS::CallMethod(unsigned short, nsXPTMethodInfo const*, nsXPTCMiniVariant*) + 0x981
+    (XUL) PrepareAndDispatch + 0x2d0
+    (XUL) SharedStub + 0x5b
+    (XUL) NS_CreateServicesFromCategory(char const*, nsISupports*, char const*, char16_t const*) + 0x232
+    (XUL) nsXREDirProvider::DoStartup() + 0x16f
+    (XUL) XREMain::XRE_mainRun() + 0x304
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLinkRelease(): displayLink '0x1032b0000'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkRelease(__CVDisplayLink*) + 0x40
+    (XUL) OSXVsyncSource::OSXDisplay::DisableVsync() + 0x17
+    (XUL) gfxPlatformMac::CreateHardwareVsyncSource() + 0x69
+    (XUL) gfxPlatform::ReInitFrameRate() + 0x49
+    (XUL) gfxPlatform::Init() + 0x35d
+    (XUL) gfxPlatform::GetPlatform() + 0x20
+    (XUL) mozilla::widget::GfxInfoBase::GetContentBackend(nsTSubstring<char16_t>&) + 0x23
+    (XUL) NS_InvokeByIndex + 0x8e
+    (XUL) XPCWrappedNative::CallMethod(XPCCallContext&, XPCWrappedNative::CallMode) + 0xdaa
+    (XUL) XPC_WN_GetterSetter(JSContext*, unsigned int, JS::Value*) + 0x1f2
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x21d
+    (XUL) js::CallGetter(JSContext*, JS::Handle<JS::Value>, JS::Handle<JS::Value>, JS::MutableHandle<JS::Value>) + 0x126
+    (XUL) js::NativeGetProperty(JSContext*, JS::Handle<js::NativeObject*>, JS::Handle<JS::Value>, JS::Handle<JS::PropertyKey>, JS::MutableHandle<JS::Value>) + 0x754
+    (XUL) Interpret(JSContext*, js::RunState&) + 0x10ffb
+    (XUL) js::RunScript(JSContext*, js::RunState&) + 0x20f
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x42a
+    (XUL) js::CallGetter(JSContext*, JS::Handle<JS::Value>, JS::Handle<JS::Value>, JS::MutableHandle<JS::Value>) + 0x126
+    (XUL) js::NativeGetProperty(JSContext*, JS::Handle<js::NativeObject*>, JS::Handle<JS::Value>, JS::Handle<JS::PropertyKey>, JS::MutableHandle<JS::Value>) + 0x754
+    (XUL) js::GetProperty(JSContext*, JS::Handle<JS::Value>, JS::Handle<js::PropertyName*>, JS::MutableHandle<JS::Value>) + 0xf9
+    (XUL) Interpret(JSContext*, js::RunState&) + 0xd45d
+    (XUL) js::RunScript(JSContext*, js::RunState&) + 0x20f
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x42a
+    (XUL) JS_CallFunctionValue(JSContext*, JS::Handle<JSObject*>, JS::Handle<JS::Value>, JS::HandleValueArray const&, JS::MutableHandle<JS::Value>) + 0x2f5
+    (XUL) nsXPCWrappedJS::CallMethod(unsigned short, nsXPTMethodInfo const*, nsXPTCMiniVariant*) + 0x981
+    (XUL) PrepareAndDispatch + 0x2d0
+    (XUL) SharedStub + 0x5b
+    (XUL) NS_CreateServicesFromCategory(char const*, nsISupports*, char const*, char16_t const*) + 0x232
+    (XUL) nsXREDirProvider::DoStartup() + 0x16f
+    (XUL) XREMain::XRE_mainRun() + 0x304
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVCGDisplayLink::setCurrentDisplay(): self '0x10e57f020', displayID '0x4280bc6', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink17setCurrentDisplayEj(void*, unsigned int) + 0x56
+    (CoreVideo) CVCGDisplayLink::initWithCGDisplays(unsigned int*, long, int*) + 0x1c3
+    (CoreVideo) CVDisplayLinkCreateWithCGDisplays + 0x86
+    (hook.dylib) Hooked_CVDisplayLinkCreateWithCGDisplays(unsigned int*, long, __CVDisplayLink**) + 0x34
+    (CoreVideo) CVDisplayLinkCreateWithActiveCGDisplays + 0x55
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x22
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x33
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::VsyncRefreshDriverTimer() + 0xfe
+    (XUL) nsRefreshDriver::CreateVsyncRefreshTimer() + 0xef
+    (XUL) nsRefreshDriver::ChooseTimer() + 0x112
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0x8b
+    (XUL) mozilla::PresShell::EnsureStyleFlush() + 0xbb
+    (XUL) mozilla::PresShell::Init(nsPresContext*, nsViewManager*) + 0x19b
+    (XUL) mozilla::dom::Document::CreatePresShell(nsPresContext*, nsViewManager*) + 0x92
+    (XUL) nsDocumentViewer::InitPresentationStuff(bool) + 0x46
+    (XUL) nsDocumentViewer::InitInternal(nsIWidget*, nsISupports*, mozilla::dom::WindowGlobalChild*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, bool, bool, bool) + 0x28d
+    (XUL) nsDocumentViewer::Init(nsIWidget*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, mozilla::dom::WindowGlobalChild*) + 0x1b
+    (XUL) nsDocShell::SetupNewViewer(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x33f
+    (XUL) nsDocShell::Embed(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x26
+    (XUL) nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal*, nsIPrincipal*, nsIContentSecurityPolicy*, nsIURI*, bool, bool, mozilla::dom::WindowGlobalChild*) + 0x258
+    (XUL) non-virtual thunk to nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal*, nsIPrincipal*, nsIContentSecurityPolicy*) + 0x1d
+    (XUL) mozilla::AppWindow::Initialize(nsIAppWindow*, nsIAppWindow*, nsIURI*, int, int, bool, nsIRemoteTab*, mozIDOMWindowProxy*, nsWidgetInitData&) + 0x3ea
+    (XUL) nsAppShellService::JustCreateTopWindow(nsIAppWindow*, nsIURI*, unsigned int, int, int, bool, nsIRemoteTab*, mozIDOMWindowProxy*, mozilla::AppWindow**) + 0x27d
+    (XUL) nsAppShellService::CreateHiddenWindow() + 0x168
+    (XUL) nsAppStartup::CreateHiddenWindow() + 0x45
+    (XUL) XREMain::XRE_mainRun() + 0x518
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLinkCreateWithCGDisplays(): count '1', displayLinkOut '0x10e57f000', returning '0'
+    Current display now '0x4280bc6'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkCreateWithCGDisplays(unsigned int*, long, __CVDisplayLink**) + 0xc9
+    (CoreVideo) CVDisplayLinkCreateWithActiveCGDisplays + 0x55
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x22
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x33
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::VsyncRefreshDriverTimer() + 0xfe
+    (XUL) nsRefreshDriver::CreateVsyncRefreshTimer() + 0xef
+    (XUL) nsRefreshDriver::ChooseTimer() + 0x112
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0x8b
+    (XUL) mozilla::PresShell::EnsureStyleFlush() + 0xbb
+    (XUL) mozilla::PresShell::Init(nsPresContext*, nsViewManager*) + 0x19b
+    (XUL) mozilla::dom::Document::CreatePresShell(nsPresContext*, nsViewManager*) + 0x92
+    (XUL) nsDocumentViewer::InitPresentationStuff(bool) + 0x46
+    (XUL) nsDocumentViewer::InitInternal(nsIWidget*, nsISupports*, mozilla::dom::WindowGlobalChild*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, bool, bool, bool) + 0x28d
+    (XUL) nsDocumentViewer::Init(nsIWidget*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, mozilla::dom::WindowGlobalChild*) + 0x1b
+    (XUL) nsDocShell::SetupNewViewer(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x33f
+    (XUL) nsDocShell::Embed(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x26
+    (XUL) nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal*, nsIPrincipal*, nsIContentSecurityPolicy*, nsIURI*, bool, bool, mozilla::dom::WindowGlobalChild*) + 0x258
+    (XUL) non-virtual thunk to nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal*, nsIPrincipal*, nsIContentSecurityPolicy*) + 0x1d
+    (XUL) mozilla::AppWindow::Initialize(nsIAppWindow*, nsIAppWindow*, nsIURI*, int, int, bool, nsIRemoteTab*, mozIDOMWindowProxy*, nsWidgetInitData&) + 0x3ea
+    (XUL) nsAppShellService::JustCreateTopWindow(nsIAppWindow*, nsIURI*, unsigned int, int, int, bool, nsIRemoteTab*, mozIDOMWindowProxy*, mozilla::AppWindow**) + 0x27d
+    (XUL) nsAppShellService::CreateHiddenWindow() + 0x168
+    (XUL) nsAppStartup::CreateHiddenWindow() + 0x45
+    (XUL) XREMain::XRE_mainRun() + 0x518
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVCGDisplayLink::getCurrentDisplay(): self '0x10e57f020', returning '0x4280bc6'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink17getCurrentDisplayEv(void*) + 0x46
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x32
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x33
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::VsyncRefreshDriverTimer() + 0xfe
+    (XUL) nsRefreshDriver::CreateVsyncRefreshTimer() + 0xef
+    (XUL) nsRefreshDriver::ChooseTimer() + 0x112
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0x8b
+    (XUL) mozilla::PresShell::EnsureStyleFlush() + 0xbb
+    (XUL) mozilla::PresShell::Init(nsPresContext*, nsViewManager*) + 0x19b
+    (XUL) mozilla::dom::Document::CreatePresShell(nsPresContext*, nsViewManager*) + 0x92
+    (XUL) nsDocumentViewer::InitPresentationStuff(bool) + 0x46
+    (XUL) nsDocumentViewer::InitInternal(nsIWidget*, nsISupports*, mozilla::dom::WindowGlobalChild*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, bool, bool, bool) + 0x28d
+    (XUL) nsDocumentViewer::Init(nsIWidget*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, mozilla::dom::WindowGlobalChild*) + 0x1b
+    (XUL) nsDocShell::SetupNewViewer(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x33f
+    (XUL) nsDocShell::Embed(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x26
+    (XUL) nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal*, nsIPrincipal*, nsIContentSecurityPolicy*, nsIURI*, bool, bool, mozilla::dom::WindowGlobalChild*) + 0x258
+    (XUL) non-virtual thunk to nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal*, nsIPrincipal*, nsIContentSecurityPolicy*) + 0x1d
+    (XUL) mozilla::AppWindow::Initialize(nsIAppWindow*, nsIAppWindow*, nsIURI*, int, int, bool, nsIRemoteTab*, mozIDOMWindowProxy*, nsWidgetInitData&) + 0x3ea
+    (XUL) nsAppShellService::JustCreateTopWindow(nsIAppWindow*, nsIURI*, unsigned int, int, int, bool, nsIRemoteTab*, mozIDOMWindowProxy*, mozilla::AppWindow**) + 0x27d
+    (XUL) nsAppShellService::CreateHiddenWindow() + 0x168
+    (XUL) nsAppStartup::CreateHiddenWindow() + 0x45
+    (XUL) XREMain::XRE_mainRun() + 0x518
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLinkSetOutputCallback(): displayLink '0x10e57f000', callback '0x10fb676c0', userInfo '0x10bdcd610', returning 0
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkSetOutputCallback(__CVDisplayLink*, int (*)(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*), void*) + 0x75
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x4d
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x33
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::VsyncRefreshDriverTimer() + 0xfe
+    (XUL) nsRefreshDriver::CreateVsyncRefreshTimer() + 0xef
+    (XUL) nsRefreshDriver::ChooseTimer() + 0x112
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0x8b
+    (XUL) mozilla::PresShell::EnsureStyleFlush() + 0xbb
+    (XUL) mozilla::PresShell::Init(nsPresContext*, nsViewManager*) + 0x19b
+    (XUL) mozilla::dom::Document::CreatePresShell(nsPresContext*, nsViewManager*) + 0x92
+    (XUL) nsDocumentViewer::InitPresentationStuff(bool) + 0x46
+    (XUL) nsDocumentViewer::InitInternal(nsIWidget*, nsISupports*, mozilla::dom::WindowGlobalChild*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, bool, bool, bool) + 0x28d
+    (XUL) nsDocumentViewer::Init(nsIWidget*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, mozilla::dom::WindowGlobalChild*) + 0x1b
+    (XUL) nsDocShell::SetupNewViewer(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x33f
+    (XUL) nsDocShell::Embed(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x26
+    (XUL) nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal*, nsIPrincipal*, nsIContentSecurityPolicy*, nsIURI*, bool, bool, mozilla::dom::WindowGlobalChild*) + 0x258
+    (XUL) non-virtual thunk to nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal*, nsIPrincipal*, nsIContentSecurityPolicy*) + 0x1d
+    (XUL) mozilla::AppWindow::Initialize(nsIAppWindow*, nsIAppWindow*, nsIURI*, int, int, bool, nsIRemoteTab*, mozIDOMWindowProxy*, nsWidgetInitData&) + 0x3ea
+    (XUL) nsAppShellService::JustCreateTopWindow(nsIAppWindow*, nsIURI*, unsigned int, int, int, bool, nsIRemoteTab*, mozIDOMWindowProxy*, mozilla::AppWindow**) + 0x27d
+    (XUL) nsAppShellService::CreateHiddenWindow() + 0x168
+    (XUL) nsAppStartup::CreateHiddenWindow() + 0x45
+    (XUL) XREMain::XRE_mainRun() + 0x518
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLinkStart(): displayLink '0x10e57f000', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkStart(__CVDisplayLink*) + 0x46
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x6c
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x33
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::VsyncRefreshDriverTimer() + 0xfe
+    (XUL) nsRefreshDriver::CreateVsyncRefreshTimer() + 0xef
+    (XUL) nsRefreshDriver::ChooseTimer() + 0x112
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0x8b
+    (XUL) mozilla::PresShell::EnsureStyleFlush() + 0xbb
+    (XUL) mozilla::PresShell::Init(nsPresContext*, nsViewManager*) + 0x19b
+    (XUL) mozilla::dom::Document::CreatePresShell(nsPresContext*, nsViewManager*) + 0x92
+    (XUL) nsDocumentViewer::InitPresentationStuff(bool) + 0x46
+    (XUL) nsDocumentViewer::InitInternal(nsIWidget*, nsISupports*, mozilla::dom::WindowGlobalChild*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, bool, bool, bool) + 0x28d
+    (XUL) nsDocumentViewer::Init(nsIWidget*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, mozilla::dom::WindowGlobalChild*) + 0x1b
+    (XUL) nsDocShell::SetupNewViewer(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x33f
+    (XUL) nsDocShell::Embed(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x26
+    (XUL) nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal*, nsIPrincipal*, nsIContentSecurityPolicy*, nsIURI*, bool, bool, mozilla::dom::WindowGlobalChild*) + 0x258
+    (XUL) non-virtual thunk to nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal*, nsIPrincipal*, nsIContentSecurityPolicy*) + 0x1d
+    (XUL) mozilla::AppWindow::Initialize(nsIAppWindow*, nsIAppWindow*, nsIURI*, int, int, bool, nsIRemoteTab*, mozIDOMWindowProxy*, nsWidgetInitData&) + 0x3ea
+    (XUL) nsAppShellService::JustCreateTopWindow(nsIAppWindow*, nsIURI*, unsigned int, int, int, bool, nsIRemoteTab*, mozIDOMWindowProxy*, mozilla::AppWindow**) + 0x27d
+    (XUL) nsAppShellService::CreateHiddenWindow() + 0x168
+    (XUL) nsAppStartup::CreateHiddenWindow() + 0x45
+    (XUL) XREMain::XRE_mainRun() + 0x518
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLink::stop(): self '0x10e57f020', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN13CVDisplayLink4stopEv(void*) + 0x46
+    (CoreVideo) CVCGDisplayLink::finalize() + 0x1f
+    (CoreFoundation) _CFRelease + 0x109
+    (hook.dylib) Hooked_CVDisplayLinkRelease(__CVDisplayLink*) + 0x24
+    (XUL) OSXVsyncSource::OSXDisplay::DisableVsync() + 0x17
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x60
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::StopTimer() + 0x2c
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0x1c6
+    (XUL) mozilla::PresShell::SetIsActive(bool) + 0x76
+    (XUL) nsDocShell::SetIsActive(bool) + 0x64
+    (XUL) non-virtual thunk to nsDocShell::SetIsActive(bool) + 0x10
+    (XUL) nsAppShellService::CreateHiddenWindow() + 0x1c4
+    (XUL) nsAppStartup::CreateHiddenWindow() + 0x45
+    (XUL) XREMain::XRE_mainRun() + 0x518
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLinkRelease(): displayLink '0x10e57f000'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkRelease(__CVDisplayLink*) + 0x40
+    (XUL) OSXVsyncSource::OSXDisplay::DisableVsync() + 0x17
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x60
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::StopTimer() + 0x2c
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0x1c6
+    (XUL) mozilla::PresShell::SetIsActive(bool) + 0x76
+    (XUL) nsDocShell::SetIsActive(bool) + 0x64
+    (XUL) non-virtual thunk to nsDocShell::SetIsActive(bool) + 0x10
+    (XUL) nsAppShellService::CreateHiddenWindow() + 0x1c4
+    (XUL) nsAppStartup::CreateHiddenWindow() + 0x45
+    (XUL) XREMain::XRE_mainRun() + 0x518
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVCGDisplayLink::setCurrentDisplay(): self '0x10c6cf820', displayID '0x4280bc6', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink17setCurrentDisplayEj(void*, unsigned int) + 0x56
+    (CoreVideo) CVCGDisplayLink::initWithCGDisplays(unsigned int*, long, int*) + 0x1c3
+    (CoreVideo) CVDisplayLinkCreateWithCGDisplays + 0x86
+    (hook.dylib) Hooked_CVDisplayLinkCreateWithCGDisplays(unsigned int*, long, __CVDisplayLink**) + 0x34
+    (CoreVideo) CVDisplayLinkCreateWithActiveCGDisplays + 0x55
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x22
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x33
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::StartTimer() + 0x56
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0xaf
+    (XUL) mozilla::PresShell::EnsureStyleFlush() + 0xbb
+    (XUL) mozilla::PresShell::Init(nsPresContext*, nsViewManager*) + 0x19b
+    (XUL) mozilla::dom::Document::CreatePresShell(nsPresContext*, nsViewManager*) + 0x92
+    (XUL) nsDocumentViewer::InitPresentationStuff(bool) + 0x46
+    (XUL) nsDocumentViewer::InitInternal(nsIWidget*, nsISupports*, mozilla::dom::WindowGlobalChild*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, bool, bool, bool) + 0x28d
+    (XUL) nsDocumentViewer::Init(nsIWidget*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, mozilla::dom::WindowGlobalChild*) + 0x1b
+    (XUL) nsDocShell::SetupNewViewer(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x33f
+    (XUL) nsDocShell::Embed(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x26
+    (XUL) nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal*, nsIPrincipal*, nsIContentSecurityPolicy*, nsIURI*, bool, bool, mozilla::dom::WindowGlobalChild*) + 0x258
+    (XUL) non-virtual thunk to nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal*, nsIPrincipal*, nsIContentSecurityPolicy*) + 0x1d
+    (XUL) mozilla::AppWindow::Initialize(nsIAppWindow*, nsIAppWindow*, nsIURI*, int, int, bool, nsIRemoteTab*, mozIDOMWindowProxy*, nsWidgetInitData&) + 0x3ea
+    (XUL) nsAppShellService::JustCreateTopWindow(nsIAppWindow*, nsIURI*, unsigned int, int, int, bool, nsIRemoteTab*, mozIDOMWindowProxy*, mozilla::AppWindow**) + 0x27d
+    (XUL) nsAppShellService::CreateTopLevelWindow(nsIAppWindow*, nsIURI*, unsigned int, int, int, nsIRemoteTab*, mozIDOMWindowProxy*, nsIAppWindow**) + 0x6a
+    (XUL) nsAppStartup::CreateChromeWindow(nsIWebBrowserChrome*, unsigned int, nsIRemoteTab*, mozIDOMWindowProxy*, unsigned long long, bool*, nsIWebBrowserChrome**) + 0xef
+    (XUL) nsWindowWatcher::CreateChromeWindow(nsTSubstring<char> const&, nsIWebBrowserChrome*, unsigned int, nsIRemoteTab*, mozIDOMWindowProxy*, unsigned long long, nsIWebBrowserChrome**) + 0x72
+    (XUL) nsWindowWatcher::OpenWindowInternal(mozIDOMWindowProxy*, char const*, char const*, char const*, bool, bool, bool, nsIArray*, bool, bool, bool, nsDocShellLoadState*, mozilla::dom::BrowsingContext**) + 0x1386
+    (XUL) nsWindowWatcher::OpenWindow(mozIDOMWindowProxy*, char const*, char const*, char const*, nsISupports*, mozIDOMWindowProxy**) + 0x96
+    (XUL) NS_InvokeByIndex + 0x8e
+    (XUL) XPCWrappedNative::CallMethod(XPCCallContext&, XPCWrappedNative::CallMode) + 0xdaa
+    (XUL) XPC_WN_CallMethod(JSContext*, unsigned int, JS::Value*) + 0x1d8
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x21d
+    (XUL) Interpret(JSContext*, js::RunState&) + 0xde17
+    (XUL) js::RunScript(JSContext*, js::RunState&) + 0x20f
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x42a
+    (XUL) JS_CallFunctionValue(JSContext*, JS::Handle<JSObject*>, JS::Handle<JS::Value>, JS::HandleValueArray const&, JS::MutableHandle<JS::Value>) + 0x2f5
+    (XUL) nsXPCWrappedJS::CallMethod(unsigned short, nsXPTMethodInfo const*, nsXPTCMiniVariant*) + 0x981
+    (XUL) PrepareAndDispatch + 0x2d0
+    (XUL) SharedStub + 0x5b
+    (XUL) nsCommandLine::EnumerateHandlers(nsresult (*)(nsICommandLineHandler*, nsICommandLine*, void*), void*) + 0x18e
+    (XUL) nsCommandLine::Run() + 0x2a
+    (XUL) XREMain::XRE_mainRun() + 0x68d
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLinkCreateWithCGDisplays(): count '1', displayLinkOut '0x10c6cf800', returning '0'
+    Current display now '0x4280bc6'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkCreateWithCGDisplays(unsigned int*, long, __CVDisplayLink**) + 0xc9
+    (CoreVideo) CVDisplayLinkCreateWithActiveCGDisplays + 0x55
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x22
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x33
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::StartTimer() + 0x56
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0xaf
+    (XUL) mozilla::PresShell::EnsureStyleFlush() + 0xbb
+    (XUL) mozilla::PresShell::Init(nsPresContext*, nsViewManager*) + 0x19b
+    (XUL) mozilla::dom::Document::CreatePresShell(nsPresContext*, nsViewManager*) + 0x92
+    (XUL) nsDocumentViewer::InitPresentationStuff(bool) + 0x46
+    (XUL) nsDocumentViewer::InitInternal(nsIWidget*, nsISupports*, mozilla::dom::WindowGlobalChild*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, bool, bool, bool) + 0x28d
+    (XUL) nsDocumentViewer::Init(nsIWidget*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, mozilla::dom::WindowGlobalChild*) + 0x1b
+    (XUL) nsDocShell::SetupNewViewer(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x33f
+    (XUL) nsDocShell::Embed(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x26
+    (XUL) nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal*, nsIPrincipal*, nsIContentSecurityPolicy*, nsIURI*, bool, bool, mozilla::dom::WindowGlobalChild*) + 0x258
+    (XUL) non-virtual thunk to nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal*, nsIPrincipal*, nsIContentSecurityPolicy*) + 0x1d
+    (XUL) mozilla::AppWindow::Initialize(nsIAppWindow*, nsIAppWindow*, nsIURI*, int, int, bool, nsIRemoteTab*, mozIDOMWindowProxy*, nsWidgetInitData&) + 0x3ea
+    (XUL) nsAppShellService::JustCreateTopWindow(nsIAppWindow*, nsIURI*, unsigned int, int, int, bool, nsIRemoteTab*, mozIDOMWindowProxy*, mozilla::AppWindow**) + 0x27d
+    (XUL) nsAppShellService::CreateTopLevelWindow(nsIAppWindow*, nsIURI*, unsigned int, int, int, nsIRemoteTab*, mozIDOMWindowProxy*, nsIAppWindow**) + 0x6a
+    (XUL) nsAppStartup::CreateChromeWindow(nsIWebBrowserChrome*, unsigned int, nsIRemoteTab*, mozIDOMWindowProxy*, unsigned long long, bool*, nsIWebBrowserChrome**) + 0xef
+    (XUL) nsWindowWatcher::CreateChromeWindow(nsTSubstring<char> const&, nsIWebBrowserChrome*, unsigned int, nsIRemoteTab*, mozIDOMWindowProxy*, unsigned long long, nsIWebBrowserChrome**) + 0x72
+    (XUL) nsWindowWatcher::OpenWindowInternal(mozIDOMWindowProxy*, char const*, char const*, char const*, bool, bool, bool, nsIArray*, bool, bool, bool, nsDocShellLoadState*, mozilla::dom::BrowsingContext**) + 0x1386
+    (XUL) nsWindowWatcher::OpenWindow(mozIDOMWindowProxy*, char const*, char const*, char const*, nsISupports*, mozIDOMWindowProxy**) + 0x96
+    (XUL) NS_InvokeByIndex + 0x8e
+    (XUL) XPCWrappedNative::CallMethod(XPCCallContext&, XPCWrappedNative::CallMode) + 0xdaa
+    (XUL) XPC_WN_CallMethod(JSContext*, unsigned int, JS::Value*) + 0x1d8
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x21d
+    (XUL) Interpret(JSContext*, js::RunState&) + 0xde17
+    (XUL) js::RunScript(JSContext*, js::RunState&) + 0x20f
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x42a
+    (XUL) JS_CallFunctionValue(JSContext*, JS::Handle<JSObject*>, JS::Handle<JS::Value>, JS::HandleValueArray const&, JS::MutableHandle<JS::Value>) + 0x2f5
+    (XUL) nsXPCWrappedJS::CallMethod(unsigned short, nsXPTMethodInfo const*, nsXPTCMiniVariant*) + 0x981
+    (XUL) PrepareAndDispatch + 0x2d0
+    (XUL) SharedStub + 0x5b
+    (XUL) nsCommandLine::EnumerateHandlers(nsresult (*)(nsICommandLineHandler*, nsICommandLine*, void*), void*) + 0x18e
+    (XUL) nsCommandLine::Run() + 0x2a
+    (XUL) XREMain::XRE_mainRun() + 0x68d
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVCGDisplayLink::getCurrentDisplay(): self '0x10c6cf820', returning '0x4280bc6'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink17getCurrentDisplayEv(void*) + 0x46
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x32
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x33
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::StartTimer() + 0x56
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0xaf
+    (XUL) mozilla::PresShell::EnsureStyleFlush() + 0xbb
+    (XUL) mozilla::PresShell::Init(nsPresContext*, nsViewManager*) + 0x19b
+    (XUL) mozilla::dom::Document::CreatePresShell(nsPresContext*, nsViewManager*) + 0x92
+    (XUL) nsDocumentViewer::InitPresentationStuff(bool) + 0x46
+    (XUL) nsDocumentViewer::InitInternal(nsIWidget*, nsISupports*, mozilla::dom::WindowGlobalChild*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, bool, bool, bool) + 0x28d
+    (XUL) nsDocumentViewer::Init(nsIWidget*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, mozilla::dom::WindowGlobalChild*) + 0x1b
+    (XUL) nsDocShell::SetupNewViewer(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x33f
+    (XUL) nsDocShell::Embed(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x26
+    (XUL) nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal*, nsIPrincipal*, nsIContentSecurityPolicy*, nsIURI*, bool, bool, mozilla::dom::WindowGlobalChild*) + 0x258
+    (XUL) non-virtual thunk to nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal*, nsIPrincipal*, nsIContentSecurityPolicy*) + 0x1d
+    (XUL) mozilla::AppWindow::Initialize(nsIAppWindow*, nsIAppWindow*, nsIURI*, int, int, bool, nsIRemoteTab*, mozIDOMWindowProxy*, nsWidgetInitData&) + 0x3ea
+    (XUL) nsAppShellService::JustCreateTopWindow(nsIAppWindow*, nsIURI*, unsigned int, int, int, bool, nsIRemoteTab*, mozIDOMWindowProxy*, mozilla::AppWindow**) + 0x27d
+    (XUL) nsAppShellService::CreateTopLevelWindow(nsIAppWindow*, nsIURI*, unsigned int, int, int, nsIRemoteTab*, mozIDOMWindowProxy*, nsIAppWindow**) + 0x6a
+    (XUL) nsAppStartup::CreateChromeWindow(nsIWebBrowserChrome*, unsigned int, nsIRemoteTab*, mozIDOMWindowProxy*, unsigned long long, bool*, nsIWebBrowserChrome**) + 0xef
+    (XUL) nsWindowWatcher::CreateChromeWindow(nsTSubstring<char> const&, nsIWebBrowserChrome*, unsigned int, nsIRemoteTab*, mozIDOMWindowProxy*, unsigned long long, nsIWebBrowserChrome**) + 0x72
+    (XUL) nsWindowWatcher::OpenWindowInternal(mozIDOMWindowProxy*, char const*, char const*, char const*, bool, bool, bool, nsIArray*, bool, bool, bool, nsDocShellLoadState*, mozilla::dom::BrowsingContext**) + 0x1386
+    (XUL) nsWindowWatcher::OpenWindow(mozIDOMWindowProxy*, char const*, char const*, char const*, nsISupports*, mozIDOMWindowProxy**) + 0x96
+    (XUL) NS_InvokeByIndex + 0x8e
+    (XUL) XPCWrappedNative::CallMethod(XPCCallContext&, XPCWrappedNative::CallMode) + 0xdaa
+    (XUL) XPC_WN_CallMethod(JSContext*, unsigned int, JS::Value*) + 0x1d8
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x21d
+    (XUL) Interpret(JSContext*, js::RunState&) + 0xde17
+    (XUL) js::RunScript(JSContext*, js::RunState&) + 0x20f
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x42a
+    (XUL) JS_CallFunctionValue(JSContext*, JS::Handle<JSObject*>, JS::Handle<JS::Value>, JS::HandleValueArray const&, JS::MutableHandle<JS::Value>) + 0x2f5
+    (XUL) nsXPCWrappedJS::CallMethod(unsigned short, nsXPTMethodInfo const*, nsXPTCMiniVariant*) + 0x981
+    (XUL) PrepareAndDispatch + 0x2d0
+    (XUL) SharedStub + 0x5b
+    (XUL) nsCommandLine::EnumerateHandlers(nsresult (*)(nsICommandLineHandler*, nsICommandLine*, void*), void*) + 0x18e
+    (XUL) nsCommandLine::Run() + 0x2a
+    (XUL) XREMain::XRE_mainRun() + 0x68d
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLinkSetOutputCallback(): displayLink '0x10c6cf800', callback '0x10fb676c0', userInfo '0x10bdcd610', returning 0
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkSetOutputCallback(__CVDisplayLink*, int (*)(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*), void*) + 0x75
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x4d
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x33
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::StartTimer() + 0x56
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0xaf
+    (XUL) mozilla::PresShell::EnsureStyleFlush() + 0xbb
+    (XUL) mozilla::PresShell::Init(nsPresContext*, nsViewManager*) + 0x19b
+    (XUL) mozilla::dom::Document::CreatePresShell(nsPresContext*, nsViewManager*) + 0x92
+    (XUL) nsDocumentViewer::InitPresentationStuff(bool) + 0x46
+    (XUL) nsDocumentViewer::InitInternal(nsIWidget*, nsISupports*, mozilla::dom::WindowGlobalChild*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, bool, bool, bool) + 0x28d
+    (XUL) nsDocumentViewer::Init(nsIWidget*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, mozilla::dom::WindowGlobalChild*) + 0x1b
+    (XUL) nsDocShell::SetupNewViewer(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x33f
+    (XUL) nsDocShell::Embed(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x26
+    (XUL) nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal*, nsIPrincipal*, nsIContentSecurityPolicy*, nsIURI*, bool, bool, mozilla::dom::WindowGlobalChild*) + 0x258
+    (XUL) non-virtual thunk to nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal*, nsIPrincipal*, nsIContentSecurityPolicy*) + 0x1d
+    (XUL) mozilla::AppWindow::Initialize(nsIAppWindow*, nsIAppWindow*, nsIURI*, int, int, bool, nsIRemoteTab*, mozIDOMWindowProxy*, nsWidgetInitData&) + 0x3ea
+    (XUL) nsAppShellService::JustCreateTopWindow(nsIAppWindow*, nsIURI*, unsigned int, int, int, bool, nsIRemoteTab*, mozIDOMWindowProxy*, mozilla::AppWindow**) + 0x27d
+    (XUL) nsAppShellService::CreateTopLevelWindow(nsIAppWindow*, nsIURI*, unsigned int, int, int, nsIRemoteTab*, mozIDOMWindowProxy*, nsIAppWindow**) + 0x6a
+    (XUL) nsAppStartup::CreateChromeWindow(nsIWebBrowserChrome*, unsigned int, nsIRemoteTab*, mozIDOMWindowProxy*, unsigned long long, bool*, nsIWebBrowserChrome**) + 0xef
+    (XUL) nsWindowWatcher::CreateChromeWindow(nsTSubstring<char> const&, nsIWebBrowserChrome*, unsigned int, nsIRemoteTab*, mozIDOMWindowProxy*, unsigned long long, nsIWebBrowserChrome**) + 0x72
+    (XUL) nsWindowWatcher::OpenWindowInternal(mozIDOMWindowProxy*, char const*, char const*, char const*, bool, bool, bool, nsIArray*, bool, bool, bool, nsDocShellLoadState*, mozilla::dom::BrowsingContext**) + 0x1386
+    (XUL) nsWindowWatcher::OpenWindow(mozIDOMWindowProxy*, char const*, char const*, char const*, nsISupports*, mozIDOMWindowProxy**) + 0x96
+    (XUL) NS_InvokeByIndex + 0x8e
+    (XUL) XPCWrappedNative::CallMethod(XPCCallContext&, XPCWrappedNative::CallMode) + 0xdaa
+    (XUL) XPC_WN_CallMethod(JSContext*, unsigned int, JS::Value*) + 0x1d8
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x21d
+    (XUL) Interpret(JSContext*, js::RunState&) + 0xde17
+    (XUL) js::RunScript(JSContext*, js::RunState&) + 0x20f
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x42a
+    (XUL) JS_CallFunctionValue(JSContext*, JS::Handle<JSObject*>, JS::Handle<JS::Value>, JS::HandleValueArray const&, JS::MutableHandle<JS::Value>) + 0x2f5
+    (XUL) nsXPCWrappedJS::CallMethod(unsigned short, nsXPTMethodInfo const*, nsXPTCMiniVariant*) + 0x981
+    (XUL) PrepareAndDispatch + 0x2d0
+    (XUL) SharedStub + 0x5b
+    (XUL) nsCommandLine::EnumerateHandlers(nsresult (*)(nsICommandLineHandler*, nsICommandLine*, void*), void*) + 0x18e
+    (XUL) nsCommandLine::Run() + 0x2a
+    (XUL) XREMain::XRE_mainRun() + 0x68d
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLinkStart(): displayLink '0x10c6cf800', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkStart(__CVDisplayLink*) + 0x46
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x6c
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x33
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::StartTimer() + 0x56
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0xaf
+    (XUL) mozilla::PresShell::EnsureStyleFlush() + 0xbb
+    (XUL) mozilla::PresShell::Init(nsPresContext*, nsViewManager*) + 0x19b
+    (XUL) mozilla::dom::Document::CreatePresShell(nsPresContext*, nsViewManager*) + 0x92
+    (XUL) nsDocumentViewer::InitPresentationStuff(bool) + 0x46
+    (XUL) nsDocumentViewer::InitInternal(nsIWidget*, nsISupports*, mozilla::dom::WindowGlobalChild*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, bool, bool, bool) + 0x28d
+    (XUL) nsDocumentViewer::Init(nsIWidget*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, mozilla::dom::WindowGlobalChild*) + 0x1b
+    (XUL) nsDocShell::SetupNewViewer(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x33f
+    (XUL) nsDocShell::Embed(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x26
+    (XUL) nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal*, nsIPrincipal*, nsIContentSecurityPolicy*, nsIURI*, bool, bool, mozilla::dom::WindowGlobalChild*) + 0x258
+    (XUL) non-virtual thunk to nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal*, nsIPrincipal*, nsIContentSecurityPolicy*) + 0x1d
+    (XUL) mozilla::AppWindow::Initialize(nsIAppWindow*, nsIAppWindow*, nsIURI*, int, int, bool, nsIRemoteTab*, mozIDOMWindowProxy*, nsWidgetInitData&) + 0x3ea
+    (XUL) nsAppShellService::JustCreateTopWindow(nsIAppWindow*, nsIURI*, unsigned int, int, int, bool, nsIRemoteTab*, mozIDOMWindowProxy*, mozilla::AppWindow**) + 0x27d
+    (XUL) nsAppShellService::CreateTopLevelWindow(nsIAppWindow*, nsIURI*, unsigned int, int, int, nsIRemoteTab*, mozIDOMWindowProxy*, nsIAppWindow**) + 0x6a
+    (XUL) nsAppStartup::CreateChromeWindow(nsIWebBrowserChrome*, unsigned int, nsIRemoteTab*, mozIDOMWindowProxy*, unsigned long long, bool*, nsIWebBrowserChrome**) + 0xef
+    (XUL) nsWindowWatcher::CreateChromeWindow(nsTSubstring<char> const&, nsIWebBrowserChrome*, unsigned int, nsIRemoteTab*, mozIDOMWindowProxy*, unsigned long long, nsIWebBrowserChrome**) + 0x72
+    (XUL) nsWindowWatcher::OpenWindowInternal(mozIDOMWindowProxy*, char const*, char const*, char const*, bool, bool, bool, nsIArray*, bool, bool, bool, nsDocShellLoadState*, mozilla::dom::BrowsingContext**) + 0x1386
+    (XUL) nsWindowWatcher::OpenWindow(mozIDOMWindowProxy*, char const*, char const*, char const*, nsISupports*, mozIDOMWindowProxy**) + 0x96
+    (XUL) NS_InvokeByIndex + 0x8e
+    (XUL) XPCWrappedNative::CallMethod(XPCCallContext&, XPCWrappedNative::CallMode) + 0xdaa
+    (XUL) XPC_WN_CallMethod(JSContext*, unsigned int, JS::Value*) + 0x1d8
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x21d
+    (XUL) Interpret(JSContext*, js::RunState&) + 0xde17
+    (XUL) js::RunScript(JSContext*, js::RunState&) + 0x20f
+    (XUL) js::InternalCallOrConstruct(JSContext*, JS::CallArgs const&, js::MaybeConstruct, js::CallReason) + 0x42a
+    (XUL) JS_CallFunctionValue(JSContext*, JS::Handle<JSObject*>, JS::Handle<JS::Value>, JS::HandleValueArray const&, JS::MutableHandle<JS::Value>) + 0x2f5
+    (XUL) nsXPCWrappedJS::CallMethod(unsigned short, nsXPTMethodInfo const*, nsXPTCMiniVariant*) + 0x981
+    (XUL) PrepareAndDispatch + 0x2d0
+    (XUL) SharedStub + 0x5b
+    (XUL) nsCommandLine::EnumerateHandlers(nsresult (*)(nsICommandLineHandler*, nsICommandLine*, void*), void*) + 0x18e
+    (XUL) nsCommandLine::Run() + 0x2a
+    (XUL) XREMain::XRE_mainRun() + 0x68d
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x7000089cf000] Hook.mm: CVCGDisplayLink::getDisplayTimes(): self '0x10c6cf820'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink15getDisplayTimesEPyS0_S0_(void*, unsigned long long*, unsigned long long*, unsigned long long*) + 0x58
+    (CoreVideo) CVHWTime::update(double, bool*, bool*) + 0x39
+    (CoreVideo) CVXTime::update() + 0x2c
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x247
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x7000089cf000] Hook.mm: CVDisplayLinkOutputCallback(): displayLink '0x10c6cf800', displayLinkContext '0x10bdcd610', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkOutputCallback(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*) + 0x78
+    (CoreVideo) CVDisplayLink::performIO(CVTimeStamp*) + 0xe6
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x272
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x7000089cf000] Hook.mm: CVCGDisplayLink::getDisplayTimes(): self '0x10c6cf820'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink15getDisplayTimesEPyS0_S0_(void*, unsigned long long*, unsigned long long*, unsigned long long*) + 0x58
+    (CoreVideo) CVHWTime::update(double, bool*, bool*) + 0x39
+    (CoreVideo) CVXTime::update() + 0x2c
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x247
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x7000089cf000] Hook.mm: CVDisplayLinkOutputCallback(): displayLink '0x10c6cf800', displayLinkContext '0x10bdcd610', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkOutputCallback(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*) + 0x78
+    (CoreVideo) CVDisplayLink::performIO(CVTimeStamp*) + 0xe6
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x272
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x7000089cf000] Hook.mm: CVCGDisplayLink::getDisplayTimes(): self '0x10c6cf820'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink15getDisplayTimesEPyS0_S0_(void*, unsigned long long*, unsigned long long*, unsigned long long*) + 0x58
+    (CoreVideo) CVHWTime::update(double, bool*, bool*) + 0x39
+    (CoreVideo) CVXTime::update() + 0x2c
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x247
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x7000089cf000] Hook.mm: CVDisplayLinkOutputCallback(): displayLink '0x10c6cf800', displayLinkContext '0x10bdcd610', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkOutputCallback(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*) + 0x78
+    (CoreVideo) CVDisplayLink::performIO(CVTimeStamp*) + 0xe6
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x272
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLink::stop(): self '0x10c6cf820', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN13CVDisplayLink4stopEv(void*) + 0x46
+    (CoreVideo) CVCGDisplayLink::finalize() + 0x1f
+    (CoreFoundation) _CFRelease + 0x109
+    (hook.dylib) Hooked_CVDisplayLinkRelease(__CVDisplayLink*) + 0x24
+    (XUL) OSXVsyncSource::OSXDisplay::DisableVsync() + 0x17
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x60
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::StopTimer() + 0x2c
+    (XUL) nsRefreshDriver::Tick(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp) + 0xbd7
+    (XUL) mozilla::RefreshDriverTimer::TickRefreshDrivers(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp, nsTArray<RefPtr<nsRefreshDriver> >&) + 0x6f
+    (XUL) mozilla::RefreshDriverTimer::Tick(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp) + 0xb4
+    (XUL) mozilla::VsyncRefreshDriverTimer::RefreshDriverVsyncObserver::TickRefreshDriver(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp) + 0x71
+    (XUL) mozilla::VsyncRefreshDriverTimer::RefreshDriverVsyncObserver::ParentProcessVsyncNotifier::Run() + 0x39
+    (XUL) nsThread::ProcessNextEvent(bool, bool*) + 0x128a
+    (XUL) NS_ProcessPendingEvents(nsIThread*, unsigned int) + 0x7f
+    (XUL) nsBaseAppShell::NativeEventCallback() + 0x82
+    (XUL) nsAppShell::ProcessGeckoEvents(void*) + 0x99
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x164
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (XUL) -[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] + 0xef
+    (AppKit) -[NSApplication run] + 0x292
+    (XUL) nsAppShell::Run() + 0x12f
+    (XUL) nsAppStartup::Run() + 0x29
+    (XUL) XREMain::XRE_mainRun() + 0x702
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLinkRelease(): displayLink '0x10c6cf800'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkRelease(__CVDisplayLink*) + 0x40
+    (XUL) OSXVsyncSource::OSXDisplay::DisableVsync() + 0x17
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x60
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::StopTimer() + 0x2c
+    (XUL) nsRefreshDriver::Tick(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp) + 0xbd7
+    (XUL) mozilla::RefreshDriverTimer::TickRefreshDrivers(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp, nsTArray<RefPtr<nsRefreshDriver> >&) + 0x6f
+    (XUL) mozilla::RefreshDriverTimer::Tick(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp) + 0xb4
+    (XUL) mozilla::VsyncRefreshDriverTimer::RefreshDriverVsyncObserver::TickRefreshDriver(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp) + 0x71
+    (XUL) mozilla::VsyncRefreshDriverTimer::RefreshDriverVsyncObserver::ParentProcessVsyncNotifier::Run() + 0x39
+    (XUL) nsThread::ProcessNextEvent(bool, bool*) + 0x128a
+    (XUL) NS_ProcessPendingEvents(nsIThread*, unsigned int) + 0x7f
+    (XUL) nsBaseAppShell::NativeEventCallback() + 0x82
+    (XUL) nsAppShell::ProcessGeckoEvents(void*) + 0x99
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x164
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (XUL) -[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] + 0xef
+    (AppKit) -[NSApplication run] + 0x292
+    (XUL) nsAppShell::Run() + 0x12f
+    (XUL) nsAppStartup::Run() + 0x29
+    (XUL) XREMain::XRE_mainRun() + 0x702
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVCGDisplayLink::setCurrentDisplay(): self '0x10e57f820', displayID '0x4280bc6', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink17setCurrentDisplayEj(void*, unsigned int) + 0x56
+    (CoreVideo) CVCGDisplayLink::initWithCGDisplays(unsigned int*, long, int*) + 0x1c3
+    (CoreVideo) CVDisplayLinkCreateWithCGDisplays + 0x86
+    (hook.dylib) Hooked_CVDisplayLinkCreateWithCGDisplays(unsigned int*, long, __CVDisplayLink**) + 0x34
+    (CoreVideo) CVDisplayLinkCreateWithActiveCGDisplays + 0x55
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x22
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x33
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::StartTimer() + 0x56
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0xaf
+    (XUL) mozilla::PresShell::EnsureStyleFlush() + 0xbb
+    (XUL) mozilla::PresShell::Init(nsPresContext*, nsViewManager*) + 0x19b
+    (XUL) mozilla::dom::Document::CreatePresShell(nsPresContext*, nsViewManager*) + 0x92
+    (XUL) nsDocumentViewer::InitPresentationStuff(bool) + 0x46
+    (XUL) nsDocumentViewer::InitInternal(nsIWidget*, nsISupports*, mozilla::dom::WindowGlobalChild*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, bool, bool, bool) + 0x28d
+    (XUL) nsDocumentViewer::Init(nsIWidget*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, mozilla::dom::WindowGlobalChild*) + 0x1b
+    (XUL) nsDocShell::SetupNewViewer(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x33f
+    (XUL) nsDocShell::Embed(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x26
+    (XUL) nsDocShell::CreateContentViewer(nsTSubstring<char> const&, nsIRequest*, nsIStreamListener**) + 0x291
+    (XUL) nsDSURIContentListener::DoContent(nsTSubstring<char> const&, bool, nsIRequest*, nsIStreamListener**, bool*) + 0x119
+    (XUL) nsDocumentOpenInfo::TryContentListener(nsIURIContentListener*, nsIChannel*) + 0x160
+    (XUL) nsDocumentOpenInfo::DispatchContent(nsIRequest*, nsISupports*) + 0x16e
+    (XUL) nsDocumentOpenInfo::OnStartRequest(nsIRequest*) + 0x1de
+    (XUL) nsJARChannel::OnStartRequest(nsIRequest*) + 0x66
+    (XUL) nsInputStreamPump::OnStateStart() + 0xd9
+    (XUL) nsInputStreamPump::OnInputStreamReady(nsIAsyncInputStream*) + 0xed
+    (XUL) nsInputStreamReadyEvent::Run() + 0x21
+    (XUL) nsThread::ProcessNextEvent(bool, bool*) + 0x128a
+    (XUL) NS_ProcessPendingEvents(nsIThread*, unsigned int) + 0x7f
+    (XUL) nsBaseAppShell::NativeEventCallback() + 0x82
+    (XUL) nsAppShell::ProcessGeckoEvents(void*) + 0x99
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x258
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (XUL) -[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] + 0xef
+    (AppKit) -[NSApplication run] + 0x292
+    (XUL) nsAppShell::Run() + 0x12f
+    (XUL) nsAppStartup::Run() + 0x29
+    (XUL) XREMain::XRE_mainRun() + 0x702
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLinkCreateWithCGDisplays(): count '1', displayLinkOut '0x10e57f800', returning '0'
+    Current display now '0x4280bc6'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkCreateWithCGDisplays(unsigned int*, long, __CVDisplayLink**) + 0xc9
+    (CoreVideo) CVDisplayLinkCreateWithActiveCGDisplays + 0x55
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x22
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x33
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::StartTimer() + 0x56
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0xaf
+    (XUL) mozilla::PresShell::EnsureStyleFlush() + 0xbb
+    (XUL) mozilla::PresShell::Init(nsPresContext*, nsViewManager*) + 0x19b
+    (XUL) mozilla::dom::Document::CreatePresShell(nsPresContext*, nsViewManager*) + 0x92
+    (XUL) nsDocumentViewer::InitPresentationStuff(bool) + 0x46
+    (XUL) nsDocumentViewer::InitInternal(nsIWidget*, nsISupports*, mozilla::dom::WindowGlobalChild*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, bool, bool, bool) + 0x28d
+    (XUL) nsDocumentViewer::Init(nsIWidget*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, mozilla::dom::WindowGlobalChild*) + 0x1b
+    (XUL) nsDocShell::SetupNewViewer(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x33f
+    (XUL) nsDocShell::Embed(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x26
+    (XUL) nsDocShell::CreateContentViewer(nsTSubstring<char> const&, nsIRequest*, nsIStreamListener**) + 0x291
+    (XUL) nsDSURIContentListener::DoContent(nsTSubstring<char> const&, bool, nsIRequest*, nsIStreamListener**, bool*) + 0x119
+    (XUL) nsDocumentOpenInfo::TryContentListener(nsIURIContentListener*, nsIChannel*) + 0x160
+    (XUL) nsDocumentOpenInfo::DispatchContent(nsIRequest*, nsISupports*) + 0x16e
+    (XUL) nsDocumentOpenInfo::OnStartRequest(nsIRequest*) + 0x1de
+    (XUL) nsJARChannel::OnStartRequest(nsIRequest*) + 0x66
+    (XUL) nsInputStreamPump::OnStateStart() + 0xd9
+    (XUL) nsInputStreamPump::OnInputStreamReady(nsIAsyncInputStream*) + 0xed
+    (XUL) nsInputStreamReadyEvent::Run() + 0x21
+    (XUL) nsThread::ProcessNextEvent(bool, bool*) + 0x128a
+    (XUL) NS_ProcessPendingEvents(nsIThread*, unsigned int) + 0x7f
+    (XUL) nsBaseAppShell::NativeEventCallback() + 0x82
+    (XUL) nsAppShell::ProcessGeckoEvents(void*) + 0x99
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x258
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (XUL) -[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] + 0xef
+    (AppKit) -[NSApplication run] + 0x292
+    (XUL) nsAppShell::Run() + 0x12f
+    (XUL) nsAppStartup::Run() + 0x29
+    (XUL) XREMain::XRE_mainRun() + 0x702
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVCGDisplayLink::getCurrentDisplay(): self '0x10e57f820', returning '0x4280bc6'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink17getCurrentDisplayEv(void*) + 0x46
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x32
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x33
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::StartTimer() + 0x56
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0xaf
+    (XUL) mozilla::PresShell::EnsureStyleFlush() + 0xbb
+    (XUL) mozilla::PresShell::Init(nsPresContext*, nsViewManager*) + 0x19b
+    (XUL) mozilla::dom::Document::CreatePresShell(nsPresContext*, nsViewManager*) + 0x92
+    (XUL) nsDocumentViewer::InitPresentationStuff(bool) + 0x46
+    (XUL) nsDocumentViewer::InitInternal(nsIWidget*, nsISupports*, mozilla::dom::WindowGlobalChild*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, bool, bool, bool) + 0x28d
+    (XUL) nsDocumentViewer::Init(nsIWidget*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, mozilla::dom::WindowGlobalChild*) + 0x1b
+    (XUL) nsDocShell::SetupNewViewer(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x33f
+    (XUL) nsDocShell::Embed(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x26
+    (XUL) nsDocShell::CreateContentViewer(nsTSubstring<char> const&, nsIRequest*, nsIStreamListener**) + 0x291
+    (XUL) nsDSURIContentListener::DoContent(nsTSubstring<char> const&, bool, nsIRequest*, nsIStreamListener**, bool*) + 0x119
+    (XUL) nsDocumentOpenInfo::TryContentListener(nsIURIContentListener*, nsIChannel*) + 0x160
+    (XUL) nsDocumentOpenInfo::DispatchContent(nsIRequest*, nsISupports*) + 0x16e
+    (XUL) nsDocumentOpenInfo::OnStartRequest(nsIRequest*) + 0x1de
+    (XUL) nsJARChannel::OnStartRequest(nsIRequest*) + 0x66
+    (XUL) nsInputStreamPump::OnStateStart() + 0xd9
+    (XUL) nsInputStreamPump::OnInputStreamReady(nsIAsyncInputStream*) + 0xed
+    (XUL) nsInputStreamReadyEvent::Run() + 0x21
+    (XUL) nsThread::ProcessNextEvent(bool, bool*) + 0x128a
+    (XUL) NS_ProcessPendingEvents(nsIThread*, unsigned int) + 0x7f
+    (XUL) nsBaseAppShell::NativeEventCallback() + 0x82
+    (XUL) nsAppShell::ProcessGeckoEvents(void*) + 0x99
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x258
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (XUL) -[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] + 0xef
+    (AppKit) -[NSApplication run] + 0x292
+    (XUL) nsAppShell::Run() + 0x12f
+    (XUL) nsAppStartup::Run() + 0x29
+    (XUL) XREMain::XRE_mainRun() + 0x702
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLinkSetOutputCallback(): displayLink '0x10e57f800', callback '0x10fb676c0', userInfo '0x10bdcd610', returning 0
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkSetOutputCallback(__CVDisplayLink*, int (*)(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*), void*) + 0x75
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x4d
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x33
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::StartTimer() + 0x56
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0xaf
+    (XUL) mozilla::PresShell::EnsureStyleFlush() + 0xbb
+    (XUL) mozilla::PresShell::Init(nsPresContext*, nsViewManager*) + 0x19b
+    (XUL) mozilla::dom::Document::CreatePresShell(nsPresContext*, nsViewManager*) + 0x92
+    (XUL) nsDocumentViewer::InitPresentationStuff(bool) + 0x46
+    (XUL) nsDocumentViewer::InitInternal(nsIWidget*, nsISupports*, mozilla::dom::WindowGlobalChild*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, bool, bool, bool) + 0x28d
+    (XUL) nsDocumentViewer::Init(nsIWidget*, mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits> const&, mozilla::dom::WindowGlobalChild*) + 0x1b
+    (XUL) nsDocShell::SetupNewViewer(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x33f
+    (XUL) nsDocShell::Embed(nsIContentViewer*, mozilla::dom::WindowGlobalChild*) + 0x26
+    (XUL) nsDocShell::CreateContentViewer(nsTSubstring<char> const&, nsIRequest*, nsIStreamListener**) + 0x291
+    (XUL) nsDSURIContentListener::DoContent(nsTSubstring<char> const&, bool, nsIRequest*, nsIStreamListener**, bool*) + 0x119
+    (XUL) nsDocumentOpenInfo::TryContentListener(nsIURIContentListener*, nsIChannel*) + 0x160
+    (XUL) nsDocumentOpenInfo::DispatchContent(nsIRequest*, nsISupports*) + 0x16e
+    (XUL) nsDocumentOpenInfo::OnStartRequest(nsIRequest*) + 0x1de
+    (XUL) nsJARChannel::OnStartRequest(nsIRequest*) + 0x66
+    (XUL) nsInputStreamPump::OnStateStart() + 0xd9
+    (XUL) nsInputStreamPump::OnInputStreamReady(nsIAsyncInputStream*) + 0xed
+    (XUL) nsInputStreamReadyEvent::Run() + 0x21
+    (XUL) nsThread::ProcessNextEvent(bool, bool*) + 0x128a
+    (XUL) NS_ProcessPendingEvents(nsIThread*, unsigned int) + 0x7f
+    (XUL) nsBaseAppShell::NativeEventCallback() + 0x82
+    (XUL) nsAppShell::ProcessGeckoEvents(void*) + 0x99
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x258
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (XUL) -[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] + 0xef
+    (AppKit) -[NSApplication run] + 0x292
+    (XUL) nsAppShell::Run() + 0x12f
+    (XUL) nsAppStartup::Run() + 0x29
+    (XUL) XREMain::XRE_mainRun() + 0x702
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLinkStart(): displayLink '0x10e57f800', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkStart(__CVDisplayLink*) + 0x46
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x6c
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x33
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::StartTimer() + 0x56
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0xaf
+    (XUL) mozilla::dom::Document::ApplicableStylesChanged() + 0x200
+    (XUL) mozilla::dom::Document::StyleSheetApplicableStateChanged(mozilla::StyleSheet&) + 0x89
+    (XUL) mozilla::css::Loader::DoSheetComplete(mozilla::css::SheetLoadData&, nsTArray<RefPtr<mozilla::css::SheetLoadData> >&) + 0x10f
+    (XUL) mozilla::css::Loader::SheetComplete(mozilla::css::SheetLoadData&, nsresult) + 0x8f
+    (XUL) mozilla::MozPromise<bool, bool, true>::ThenValue<mozilla::css::Loader::ParseSheet(nsTSubstring<char> const&, mozilla::css::SheetLoadData&, mozilla::css::Loader::AllowAsyncParse)::$_18, mozilla::css::Loader::ParseSheet(nsTSubstring<char> const&, mozilla::css::SheetLoadData&, mozilla::css::Loader::AllowAsyncParse)::$_19>::DoResolveOrRejectInternal(mozilla::MozPromise<bool, bool, true>::ResolveOrRejectValue&) + 0x5f
+    (XUL) mozilla::MozPromise<bool, bool, true>::ThenValueBase::ResolveOrRejectRunnable::Run() + 0x3d
+    (XUL) nsThread::ProcessNextEvent(bool, bool*) + 0x128a
+    (XUL) NS_ProcessPendingEvents(nsIThread*, unsigned int) + 0x7f
+    (XUL) nsBaseAppShell::NativeEventCallback() + 0x82
+    (XUL) nsAppShell::ProcessGeckoEvents(void*) + 0x99
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x258
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (XUL) -[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] + 0xef
+    (AppKit) -[NSApplication run] + 0x292
+    (XUL) nsAppShell::Run() + 0x12f
+    (XUL) nsAppStartup::Run() + 0x29
+    (XUL) XREMain::XRE_mainRun() + 0x702
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x7000089cf000] Hook.mm: CVCGDisplayLink::getDisplayTimes(): self '0x10e57f820'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink15getDisplayTimesEPyS0_S0_(void*, unsigned long long*, unsigned long long*, unsigned long long*) + 0x58
+    (CoreVideo) CVHWTime::update(double, bool*, bool*) + 0x39
+    (CoreVideo) CVXTime::update() + 0x2c
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x247
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x7000089cf000] Hook.mm: CVDisplayLinkOutputCallback(): displayLink '0x10e57f800', displayLinkContext '0x10bdcd610', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkOutputCallback(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*) + 0x78
+    (CoreVideo) CVDisplayLink::performIO(CVTimeStamp*) + 0xe6
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x272
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x7000089cf000] Hook.mm: CVCGDisplayLink::getDisplayTimes(): self '0x10e57f820'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink15getDisplayTimesEPyS0_S0_(void*, unsigned long long*, unsigned long long*, unsigned long long*) + 0x58
+    (CoreVideo) CVHWTime::update(double, bool*, bool*) + 0x39
+    (CoreVideo) CVXTime::update() + 0x2c
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x247
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x7000089cf000] Hook.mm: CVDisplayLinkOutputCallback(): displayLink '0x10e57f800', displayLinkContext '0x10bdcd610', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkOutputCallback(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*) + 0x78
+    (CoreVideo) CVDisplayLink::performIO(CVTimeStamp*) + 0xe6
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x272
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x7000089cf000] Hook.mm: CVCGDisplayLink::getDisplayTimes(): self '0x10e57f820'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink15getDisplayTimesEPyS0_S0_(void*, unsigned long long*, unsigned long long*, unsigned long long*) + 0x58
+    (CoreVideo) CVHWTime::update(double, bool*, bool*) + 0x39
+    (CoreVideo) CVXTime::update() + 0x2c
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x247
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x7000089cf000] Hook.mm: CVDisplayLinkOutputCallback(): displayLink '0x10e57f800', displayLinkContext '0x10bdcd610', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkOutputCallback(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*) + 0x78
+    (CoreVideo) CVDisplayLink::performIO(CVTimeStamp*) + 0xe6
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x272
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLink::stop(): self '0x10e57f820', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN13CVDisplayLink4stopEv(void*) + 0x46
+    (CoreVideo) CVCGDisplayLink::finalize() + 0x1f
+    (CoreFoundation) _CFRelease + 0x109
+    (hook.dylib) Hooked_CVDisplayLinkRelease(__CVDisplayLink*) + 0x24
+    (XUL) OSXVsyncSource::OSXDisplay::DisableVsync() + 0x17
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x60
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::StopTimer() + 0x2c
+    (XUL) nsRefreshDriver::Tick(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp) + 0xbd7
+    (XUL) mozilla::RefreshDriverTimer::TickRefreshDrivers(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp, nsTArray<RefPtr<nsRefreshDriver> >&) + 0x6f
+    (XUL) mozilla::RefreshDriverTimer::Tick(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp) + 0xb4
+    (XUL) mozilla::VsyncRefreshDriverTimer::RefreshDriverVsyncObserver::TickRefreshDriver(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp) + 0x71
+    (XUL) mozilla::VsyncRefreshDriverTimer::RefreshDriverVsyncObserver::ParentProcessVsyncNotifier::Run() + 0x39
+    (XUL) nsThread::ProcessNextEvent(bool, bool*) + 0x128a
+    (XUL) NS_ProcessPendingEvents(nsIThread*, unsigned int) + 0x7f
+    (XUL) nsBaseAppShell::NativeEventCallback() + 0x82
+    (XUL) nsAppShell::ProcessGeckoEvents(void*) + 0x99
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x258
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (XUL) -[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] + 0xef
+    (AppKit) -[NSApplication run] + 0x292
+    (XUL) nsAppShell::Run() + 0x12f
+    (XUL) nsAppStartup::Run() + 0x29
+    (XUL) XREMain::XRE_mainRun() + 0x702
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLinkRelease(): displayLink '0x10e57f800'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkRelease(__CVDisplayLink*) + 0x40
+    (XUL) OSXVsyncSource::OSXDisplay::DisableVsync() + 0x17
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x60
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::StopTimer() + 0x2c
+    (XUL) nsRefreshDriver::Tick(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp) + 0xbd7
+    (XUL) mozilla::RefreshDriverTimer::TickRefreshDrivers(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp, nsTArray<RefPtr<nsRefreshDriver> >&) + 0x6f
+    (XUL) mozilla::RefreshDriverTimer::Tick(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp) + 0xb4
+    (XUL) mozilla::VsyncRefreshDriverTimer::RefreshDriverVsyncObserver::TickRefreshDriver(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp) + 0x71
+    (XUL) mozilla::VsyncRefreshDriverTimer::RefreshDriverVsyncObserver::ParentProcessVsyncNotifier::Run() + 0x39
+    (XUL) nsThread::ProcessNextEvent(bool, bool*) + 0x128a
+    (XUL) NS_ProcessPendingEvents(nsIThread*, unsigned int) + 0x7f
+    (XUL) nsBaseAppShell::NativeEventCallback() + 0x82
+    (XUL) nsAppShell::ProcessGeckoEvents(void*) + 0x99
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x258
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (XUL) -[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] + 0xef
+    (AppKit) -[NSApplication run] + 0x292
+    (XUL) nsAppShell::Run() + 0x12f
+    (XUL) nsAppStartup::Run() + 0x29
+    (XUL) XREMain::XRE_mainRun() + 0x702
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVCGDisplayLink::setCurrentDisplay(): self '0x13ff55020', displayID '0x4280bc6', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink17setCurrentDisplayEj(void*, unsigned int) + 0x56
+    (CoreVideo) CVCGDisplayLink::initWithCGDisplays(unsigned int*, long, int*) + 0x1c3
+    (CoreVideo) CVDisplayLinkCreateWithCGDisplays + 0x86
+    (hook.dylib) Hooked_CVDisplayLinkCreateWithCGDisplays(unsigned int*, long, __CVDisplayLink**) + 0x34
+    (CoreVideo) CVDisplayLinkCreateWithActiveCGDisplays + 0x55
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x22
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x33
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::StartTimer() + 0x56
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0xaf
+    (XUL) mozilla::dom::Document::ApplicableStylesChanged() + 0x200
+    (XUL) mozilla::dom::Document::StyleSheetApplicableStateChanged(mozilla::StyleSheet&) + 0x89
+    (XUL) mozilla::css::Loader::DoSheetComplete(mozilla::css::SheetLoadData&, nsTArray<RefPtr<mozilla::css::SheetLoadData> >&) + 0x10f
+    (XUL) mozilla::css::Loader::SheetComplete(mozilla::css::SheetLoadData&, nsresult) + 0x8f
+    (XUL) mozilla::MozPromise<bool, bool, true>::ThenValue<mozilla::css::Loader::ParseSheet(nsTSubstring<char> const&, mozilla::css::SheetLoadData&, mozilla::css::Loader::AllowAsyncParse)::$_18, mozilla::css::Loader::ParseSheet(nsTSubstring<char> const&, mozilla::css::SheetLoadData&, mozilla::css::Loader::AllowAsyncParse)::$_19>::DoResolveOrRejectInternal(mozilla::MozPromise<bool, bool, true>::ResolveOrRejectValue&) + 0x5f
+    (XUL) mozilla::MozPromise<bool, bool, true>::ThenValueBase::ResolveOrRejectRunnable::Run() + 0x3d
+    (XUL) nsThread::ProcessNextEvent(bool, bool*) + 0x128a
+    (XUL) NS_ProcessPendingEvents(nsIThread*, unsigned int) + 0x7f
+    (XUL) nsBaseAppShell::NativeEventCallback() + 0x82
+    (XUL) nsAppShell::ProcessGeckoEvents(void*) + 0x99
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x258
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (XUL) -[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] + 0xef
+    (AppKit) -[NSApplication run] + 0x292
+    (XUL) nsAppShell::Run() + 0x12f
+    (XUL) nsAppStartup::Run() + 0x29
+    (XUL) XREMain::XRE_mainRun() + 0x702
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLinkCreateWithCGDisplays(): count '1', displayLinkOut '0x13ff55000', returning '0'
+    Current display now '0x4280bc6'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkCreateWithCGDisplays(unsigned int*, long, __CVDisplayLink**) + 0xc9
+    (CoreVideo) CVDisplayLinkCreateWithActiveCGDisplays + 0x55
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x22
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x33
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::StartTimer() + 0x56
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0xaf
+    (XUL) mozilla::dom::Document::ApplicableStylesChanged() + 0x200
+    (XUL) mozilla::dom::Document::StyleSheetApplicableStateChanged(mozilla::StyleSheet&) + 0x89
+    (XUL) mozilla::css::Loader::DoSheetComplete(mozilla::css::SheetLoadData&, nsTArray<RefPtr<mozilla::css::SheetLoadData> >&) + 0x10f
+    (XUL) mozilla::css::Loader::SheetComplete(mozilla::css::SheetLoadData&, nsresult) + 0x8f
+    (XUL) mozilla::MozPromise<bool, bool, true>::ThenValue<mozilla::css::Loader::ParseSheet(nsTSubstring<char> const&, mozilla::css::SheetLoadData&, mozilla::css::Loader::AllowAsyncParse)::$_18, mozilla::css::Loader::ParseSheet(nsTSubstring<char> const&, mozilla::css::SheetLoadData&, mozilla::css::Loader::AllowAsyncParse)::$_19>::DoResolveOrRejectInternal(mozilla::MozPromise<bool, bool, true>::ResolveOrRejectValue&) + 0x5f
+    (XUL) mozilla::MozPromise<bool, bool, true>::ThenValueBase::ResolveOrRejectRunnable::Run() + 0x3d
+    (XUL) nsThread::ProcessNextEvent(bool, bool*) + 0x128a
+    (XUL) NS_ProcessPendingEvents(nsIThread*, unsigned int) + 0x7f
+    (XUL) nsBaseAppShell::NativeEventCallback() + 0x82
+    (XUL) nsAppShell::ProcessGeckoEvents(void*) + 0x99
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x258
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (XUL) -[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] + 0xef
+    (AppKit) -[NSApplication run] + 0x292
+    (XUL) nsAppShell::Run() + 0x12f
+    (XUL) nsAppStartup::Run() + 0x29
+    (XUL) XREMain::XRE_mainRun() + 0x702
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVCGDisplayLink::getCurrentDisplay(): self '0x13ff55020', returning '0x4280bc6'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink17getCurrentDisplayEv(void*) + 0x46
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x32
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x33
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::StartTimer() + 0x56
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0xaf
+    (XUL) mozilla::dom::Document::ApplicableStylesChanged() + 0x200
+    (XUL) mozilla::dom::Document::StyleSheetApplicableStateChanged(mozilla::StyleSheet&) + 0x89
+    (XUL) mozilla::css::Loader::DoSheetComplete(mozilla::css::SheetLoadData&, nsTArray<RefPtr<mozilla::css::SheetLoadData> >&) + 0x10f
+    (XUL) mozilla::css::Loader::SheetComplete(mozilla::css::SheetLoadData&, nsresult) + 0x8f
+    (XUL) mozilla::MozPromise<bool, bool, true>::ThenValue<mozilla::css::Loader::ParseSheet(nsTSubstring<char> const&, mozilla::css::SheetLoadData&, mozilla::css::Loader::AllowAsyncParse)::$_18, mozilla::css::Loader::ParseSheet(nsTSubstring<char> const&, mozilla::css::SheetLoadData&, mozilla::css::Loader::AllowAsyncParse)::$_19>::DoResolveOrRejectInternal(mozilla::MozPromise<bool, bool, true>::ResolveOrRejectValue&) + 0x5f
+    (XUL) mozilla::MozPromise<bool, bool, true>::ThenValueBase::ResolveOrRejectRunnable::Run() + 0x3d
+    (XUL) nsThread::ProcessNextEvent(bool, bool*) + 0x128a
+    (XUL) NS_ProcessPendingEvents(nsIThread*, unsigned int) + 0x7f
+    (XUL) nsBaseAppShell::NativeEventCallback() + 0x82
+    (XUL) nsAppShell::ProcessGeckoEvents(void*) + 0x99
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x258
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (XUL) -[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] + 0xef
+    (AppKit) -[NSApplication run] + 0x292
+    (XUL) nsAppShell::Run() + 0x12f
+    (XUL) nsAppStartup::Run() + 0x29
+    (XUL) XREMain::XRE_mainRun() + 0x702
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLinkSetOutputCallback(): displayLink '0x13ff55000', callback '0x10fb676c0', userInfo '0x10bdcd610', returning 0
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkSetOutputCallback(__CVDisplayLink*, int (*)(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*), void*) + 0x75
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x4d
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x33
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::StartTimer() + 0x56
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0xaf
+    (XUL) mozilla::dom::Document::ApplicableStylesChanged() + 0x200
+    (XUL) mozilla::dom::Document::StyleSheetApplicableStateChanged(mozilla::StyleSheet&) + 0x89
+    (XUL) mozilla::css::Loader::DoSheetComplete(mozilla::css::SheetLoadData&, nsTArray<RefPtr<mozilla::css::SheetLoadData> >&) + 0x10f
+    (XUL) mozilla::css::Loader::SheetComplete(mozilla::css::SheetLoadData&, nsresult) + 0x8f
+    (XUL) mozilla::MozPromise<bool, bool, true>::ThenValue<mozilla::css::Loader::ParseSheet(nsTSubstring<char> const&, mozilla::css::SheetLoadData&, mozilla::css::Loader::AllowAsyncParse)::$_18, mozilla::css::Loader::ParseSheet(nsTSubstring<char> const&, mozilla::css::SheetLoadData&, mozilla::css::Loader::AllowAsyncParse)::$_19>::DoResolveOrRejectInternal(mozilla::MozPromise<bool, bool, true>::ResolveOrRejectValue&) + 0x5f
+    (XUL) mozilla::MozPromise<bool, bool, true>::ThenValueBase::ResolveOrRejectRunnable::Run() + 0x3d
+    (XUL) nsThread::ProcessNextEvent(bool, bool*) + 0x128a
+    (XUL) NS_ProcessPendingEvents(nsIThread*, unsigned int) + 0x7f
+    (XUL) nsBaseAppShell::NativeEventCallback() + 0x82
+    (XUL) nsAppShell::ProcessGeckoEvents(void*) + 0x99
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x258
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (XUL) -[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] + 0xef
+    (AppKit) -[NSApplication run] + 0x292
+    (XUL) nsAppShell::Run() + 0x12f
+    (XUL) nsAppStartup::Run() + 0x29
+    (XUL) XREMain::XRE_mainRun() + 0x702
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLinkStart(): displayLink '0x13ff55000', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkStart(__CVDisplayLink*) + 0x46
+    (XUL) OSXVsyncSource::OSXDisplay::EnableVsync() + 0x6c
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x33
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::VsyncRefreshDriverTimer::StartTimer() + 0x56
+    (XUL) nsRefreshDriver::EnsureTimerStarted(nsRefreshDriver::EnsureTimerStartedFlags) + 0xaf
+    (XUL) mozilla::dom::Document::ApplicableStylesChanged() + 0x200
+    (XUL) mozilla::dom::Document::StyleSheetApplicableStateChanged(mozilla::StyleSheet&) + 0x89
+    (XUL) mozilla::css::Loader::DoSheetComplete(mozilla::css::SheetLoadData&, nsTArray<RefPtr<mozilla::css::SheetLoadData> >&) + 0x10f
+    (XUL) mozilla::css::Loader::SheetComplete(mozilla::css::SheetLoadData&, nsresult) + 0x8f
+    (XUL) mozilla::MozPromise<bool, bool, true>::ThenValue<mozilla::css::Loader::ParseSheet(nsTSubstring<char> const&, mozilla::css::SheetLoadData&, mozilla::css::Loader::AllowAsyncParse)::$_18, mozilla::css::Loader::ParseSheet(nsTSubstring<char> const&, mozilla::css::SheetLoadData&, mozilla::css::Loader::AllowAsyncParse)::$_19>::DoResolveOrRejectInternal(mozilla::MozPromise<bool, bool, true>::ResolveOrRejectValue&) + 0x5f
+    (XUL) mozilla::MozPromise<bool, bool, true>::ThenValueBase::ResolveOrRejectRunnable::Run() + 0x3d
+    (XUL) nsThread::ProcessNextEvent(bool, bool*) + 0x128a
+    (XUL) NS_ProcessPendingEvents(nsIThread*, unsigned int) + 0x7f
+    (XUL) nsBaseAppShell::NativeEventCallback() + 0x82
+    (XUL) nsAppShell::ProcessGeckoEvents(void*) + 0x99
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x258
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (XUL) -[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] + 0xef
+    (AppKit) -[NSApplication run] + 0x292
+    (XUL) nsAppShell::Run() + 0x12f
+    (XUL) nsAppStartup::Run() + 0x29
+    (XUL) XREMain::XRE_mainRun() + 0x702
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x700008fb4000] Hook.mm: CVCGDisplayLink::getDisplayTimes(): self '0x13ff55020'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink15getDisplayTimesEPyS0_S0_(void*, unsigned long long*, unsigned long long*, unsigned long long*) + 0x58
+    (CoreVideo) CVHWTime::update(double, bool*, bool*) + 0x39
+    (CoreVideo) CVXTime::update() + 0x2c
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x247
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x700008fb4000] Hook.mm: CVDisplayLinkOutputCallback(): displayLink '0x13ff55000', displayLinkContext '0x10bdcd610', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkOutputCallback(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*) + 0x78
+    (CoreVideo) CVDisplayLink::performIO(CVTimeStamp*) + 0xe6
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x272
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x700008fb4000] Hook.mm: CVCGDisplayLink::getDisplayTimes(): self '0x13ff55020'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink15getDisplayTimesEPyS0_S0_(void*, unsigned long long*, unsigned long long*, unsigned long long*) + 0x58
+    (CoreVideo) CVHWTime::update(double, bool*, bool*) + 0x39
+    (CoreVideo) CVXTime::update() + 0x2c
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x247
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x700008fb4000] Hook.mm: CVDisplayLinkOutputCallback(): displayLink '0x13ff55000', displayLinkContext '0x10bdcd610', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkOutputCallback(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*) + 0x78
+    (CoreVideo) CVDisplayLink::performIO(CVTimeStamp*) + 0xe6
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x272
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x700008fb4000] Hook.mm: CVCGDisplayLink::getDisplayTimes(): self '0x13ff55020'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink15getDisplayTimesEPyS0_S0_(void*, unsigned long long*, unsigned long long*, unsigned long long*) + 0x58
+    (CoreVideo) CVHWTime::update(double, bool*, bool*) + 0x39
+    (CoreVideo) CVXTime::update() + 0x2c
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x247
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x700008fb4000] Hook.mm: CVDisplayLinkOutputCallback(): displayLink '0x13ff55000', displayLinkContext '0x10bdcd610', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkOutputCallback(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*) + 0x78
+    (CoreVideo) CVDisplayLink::performIO(CVTimeStamp*) + 0xe6
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x272
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x700008fb4000] Hook.mm: CVCGDisplayLink::getDisplayTimes(): self '0x13ff55020'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink15getDisplayTimesEPyS0_S0_(void*, unsigned long long*, unsigned long long*, unsigned long long*) + 0x58
+    (CoreVideo) CVHWTime::update(double, bool*, bool*) + 0x39
+    (CoreVideo) CVXTime::update() + 0x2c
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x247
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x700008fb4000] Hook.mm: CVDisplayLinkOutputCallback(): displayLink '0x13ff55000', displayLinkContext '0x10bdcd610', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkOutputCallback(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*) + 0x78
+    (CoreVideo) CVDisplayLink::performIO(CVTimeStamp*) + 0xe6
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x272
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x700008fb4000] Hook.mm: CVCGDisplayLink::getDisplayTimes(): self '0x13ff55020'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink15getDisplayTimesEPyS0_S0_(void*, unsigned long long*, unsigned long long*, unsigned long long*) + 0x58
+    (CoreVideo) CVHWTime::update(double, bool*, bool*) + 0x39
+    (CoreVideo) CVXTime::update() + 0x2c
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x247
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:43 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x700008fb4000] Hook.mm: CVDisplayLinkOutputCallback(): displayLink '0x13ff55000', displayLinkContext '0x10bdcd610', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkOutputCallback(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*) + 0x78
+    (CoreVideo) CVDisplayLink::performIO(CVTimeStamp*) + 0xe6
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x272
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+
+...
+
+(Tue Feb  4 15:16:49 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x700008fb4000] Hook.mm: CVCGDisplayLink::getDisplayTimes(): self '0x13ff55020'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink15getDisplayTimesEPyS0_S0_(void*, unsigned long long*, unsigned long long*, unsigned long long*) + 0x58
+    (CoreVideo) CVHWTime::update(double, bool*, bool*) + 0x39
+    (CoreVideo) CVXTime::update() + 0x2c
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x247
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:49 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x700008fb4000] Hook.mm: CVDisplayLinkOutputCallback(): displayLink '0x13ff55000', displayLinkContext '0x10bdcd610', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkOutputCallback(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*) + 0x78
+    (CoreVideo) CVDisplayLink::performIO(CVTimeStamp*) + 0xe6
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x272
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:49 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x700008fb4000] Hook.mm: CVCGDisplayLink::getDisplayTimes(): self '0x13ff55020'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink15getDisplayTimesEPyS0_S0_(void*, unsigned long long*, unsigned long long*, unsigned long long*) + 0x58
+    (CoreVideo) CVHWTime::update(double, bool*, bool*) + 0x39
+    (CoreVideo) CVXTime::update() + 0x2c
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x247
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:49 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] CVDisplayLink[0x700008fb4000] Hook.mm: CVDisplayLinkOutputCallback(): displayLink '0x13ff55000', displayLinkContext '0x10bdcd610', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkOutputCallback(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*) + 0x78
+    (CoreVideo) CVDisplayLink::performIO(CVTimeStamp*) + 0xe6
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x272
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 15:16:49 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLink::stop(): self '0x13ff55020', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN13CVDisplayLink4stopEv(void*) + 0x46
+    (CoreVideo) CVCGDisplayLink::finalize() + 0x1f
+    (CoreFoundation) _CFRelease + 0x109
+    (hook.dylib) Hooked_CVDisplayLinkRelease(__CVDisplayLink*) + 0x24
+    (XUL) OSXVsyncSource::OSXDisplay::DisableVsync() + 0x17
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x60
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::detail::RunnableMethodImpl<mozilla::RefreshTimerVsyncDispatcher*, void (mozilla::RefreshTimerVsyncDispatcher::*)(), true, (mozilla::RunnableKind)0>::Run() + 0x1f
+    (XUL) nsThread::ProcessNextEvent(bool, bool*) + 0x128a
+    (XUL) NS_ProcessPendingEvents(nsIThread*, unsigned int) + 0x7f
+    (XUL) nsBaseAppShell::NativeEventCallback() + 0x82
+    (XUL) nsAppShell::ProcessGeckoEvents(void*) + 0x99
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x164
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (XUL) -[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] + 0xef
+    (AppKit) -[NSApplication run] + 0x292
+    (XUL) nsAppShell::Run() + 0x12f
+    (XUL) nsAppStartup::Run() + 0x29
+    (XUL) XREMain::XRE_mainRun() + 0x702
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1
+(Tue Feb  4 15:16:49 2020) /Applications/Firefox Nightly.app/Contents/MacOS/firefox[1745] [0x10e933dc0] Hook.mm: CVDisplayLinkRelease(): displayLink '0x13ff55000'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkRelease(__CVDisplayLink*) + 0x40
+    (XUL) OSXVsyncSource::OSXDisplay::DisableVsync() + 0x17
+    (XUL) mozilla::gfx::VsyncSource::Display::UpdateVsyncStatus() + 0x60
+    (XUL) mozilla::RefreshTimerVsyncDispatcher::UpdateVsyncStatus() + 0x79
+    (XUL) mozilla::detail::RunnableMethodImpl<mozilla::RefreshTimerVsyncDispatcher*, void (mozilla::RefreshTimerVsyncDispatcher::*)(), true, (mozilla::RunnableKind)0>::Run() + 0x1f
+    (XUL) nsThread::ProcessNextEvent(bool, bool*) + 0x128a
+    (XUL) NS_ProcessPendingEvents(nsIThread*, unsigned int) + 0x7f
+    (XUL) nsBaseAppShell::NativeEventCallback() + 0x82
+    (XUL) nsAppShell::ProcessGeckoEvents(void*) + 0x99
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x164
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (XUL) -[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] + 0xef
+    (AppKit) -[NSApplication run] + 0x292
+    (XUL) nsAppShell::Run() + 0x12f
+    (XUL) nsAppStartup::Run() + 0x29
+    (XUL) XREMain::XRE_mainRun() + 0x702
+    (XUL) XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x41f
+    (XUL) XRE_main(int, char**, mozilla::BootstrapConfig const&) + 0x98
+    (firefox) main + 0x1e4
+    (libdyld.dylib) start + 0x1

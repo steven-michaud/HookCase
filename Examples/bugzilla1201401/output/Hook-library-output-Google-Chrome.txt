@@ -1,0 +1,598 @@
+# Output of hook library for https://bugzilla.mozilla.org/show_bug.cgi?id=1201401
+# in Safari, edited for clarity. Note that Google Chrome has its symbols stripped,
+# so the stack traces aren't fully symbolicated.
+#
+# Logging from different threads can sometimes get interleaved. I've removed all
+# such cases from the following output. This is what I've called "editing for
+# clarity."
+
+(Tue Feb  4 16:20:32 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CrBrowserMain[0x11282fdc0] Hook.mm: CVCGDisplayLink::setCurrentDisplay(): self '0x7fb377016020', displayID '0x4280bc6', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink17setCurrentDisplayEj(void*, unsigned int) + 0x56
+    (CoreVideo) CVCGDisplayLink::initWithCGDisplays(unsigned int*, long, int*) + 0x1c3
+    (CoreVideo) CVDisplayLinkCreateWithCGDisplays + 0x86
+    (hook.dylib) Hooked_CVDisplayLinkCreateWithCGDisplays(unsigned int*, long, __CVDisplayLink**) + 0x34
+    (CoreVideo) CVDisplayLinkCreateWithCGDisplay + 0x1e
+    (Google Chrome Framework) ChromeMain + 0x371b90d
+    (Google Chrome Framework) ChromeMain + 0x371e28e
+    (Google Chrome Framework) ChromeMain + 0x371cf34
+    (Google Chrome Framework) ChromeMain + 0x371c722
+    (Google Chrome Framework) ChromeMain + 0x371b587
+    (Google Chrome Framework) ChromeMain + 0x5d79aa7
+    (Google Chrome Framework) ChromeMain + 0x5d799fd
+    (Google Chrome Framework) ChromeMain + 0x41b8edf
+    (Google Chrome Framework) ChromeMain + 0x41befd2
+    (Google Chrome Framework) ChromeMain + 0x41c1900
+    (Google Chrome Framework) ChromeMain + 0x41c1447
+    (Google Chrome Framework) ChromeMain + 0x41c1371
+    (Google Chrome Framework) ChromeMain + 0x5cb051b
+    (Google Chrome Framework) ChromeMain + 0x2847f12
+    (Google Chrome Framework) ChromeMain + 0x2849d16
+    (Google Chrome Framework) ChromeMain + 0x2849b9d
+    (Google Chrome Framework) ChromeMain + 0xd648b8
+    (Google Chrome Framework) ChromeMain + 0x11bf903
+    (Google Chrome Framework) ChromeMain + 0xd637c0
+    (Google Chrome Framework) ChromeMain + 0xd661e2
+    (Google Chrome Framework) ChromeMain + 0xd61faa
+    (Google Chrome Framework) ChromeMain + 0x278daf4
+    (Google Chrome Framework) ChromeMain + 0x278d7fe
+    (Google Chrome Framework) ChromeMain + 0x51f6c44
+    (Google Chrome Framework) ChromeMain + 0x278cdf4
+    (Google Chrome Framework) ChromeMain + 0xbb
+    (Google Chrome) main + 0x174
+    (libdyld.dylib) start + 0x1
+    (Google Chrome) unknown 0x1
+(Tue Feb  4 16:20:32 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CrBrowserMain[0x11282fdc0] Hook.mm: CVDisplayLinkCreateWithCGDisplays(): count '1', displayLinkOut '0x7fb377016000', returning '0'
+    Current display now '0x4280bc6'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkCreateWithCGDisplays(unsigned int*, long, __CVDisplayLink**) + 0xc9
+    (CoreVideo) CVDisplayLinkCreateWithCGDisplay + 0x1e
+    (Google Chrome Framework) ChromeMain + 0x371b90d
+    (Google Chrome Framework) ChromeMain + 0x371e28e
+    (Google Chrome Framework) ChromeMain + 0x371cf34
+    (Google Chrome Framework) ChromeMain + 0x371c722
+    (Google Chrome Framework) ChromeMain + 0x371b587
+    (Google Chrome Framework) ChromeMain + 0x5d79aa7
+    (Google Chrome Framework) ChromeMain + 0x5d799fd
+    (Google Chrome Framework) ChromeMain + 0x41b8edf
+    (Google Chrome Framework) ChromeMain + 0x41befd2
+    (Google Chrome Framework) ChromeMain + 0x41c1900
+    (Google Chrome Framework) ChromeMain + 0x41c1447
+    (Google Chrome Framework) ChromeMain + 0x41c1371
+    (Google Chrome Framework) ChromeMain + 0x5cb051b
+    (Google Chrome Framework) ChromeMain + 0x2847f12
+    (Google Chrome Framework) ChromeMain + 0x2849d16
+    (Google Chrome Framework) ChromeMain + 0x2849b9d
+    (Google Chrome Framework) ChromeMain + 0xd648b8
+    (Google Chrome Framework) ChromeMain + 0x11bf903
+    (Google Chrome Framework) ChromeMain + 0xd637c0
+    (Google Chrome Framework) ChromeMain + 0xd661e2
+    (Google Chrome Framework) ChromeMain + 0xd61faa
+    (Google Chrome Framework) ChromeMain + 0x278daf4
+    (Google Chrome Framework) ChromeMain + 0x278d7fe
+    (Google Chrome Framework) ChromeMain + 0x51f6c44
+    (Google Chrome Framework) ChromeMain + 0x278cdf4
+    (Google Chrome Framework) ChromeMain + 0xbb
+    (Google Chrome) main + 0x174
+    (libdyld.dylib) start + 0x1
+    (Google Chrome) unknown 0x1
+(Tue Feb  4 16:20:32 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CrBrowserMain[0x11282fdc0] Hook.mm: CVDisplayLinkRelease(): displayLink '0x7fb377016000'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkRelease(__CVDisplayLink*) + 0x40
+    (Google Chrome Framework) ChromeMain + 0x371b9ff
+    (Google Chrome Framework) ChromeMain + 0x371e28e
+    (Google Chrome Framework) ChromeMain + 0x371cf34
+    (Google Chrome Framework) ChromeMain + 0x371c722
+    (Google Chrome Framework) ChromeMain + 0x371b587
+    (Google Chrome Framework) ChromeMain + 0x5d79aa7
+    (Google Chrome Framework) ChromeMain + 0x5d799fd
+    (Google Chrome Framework) ChromeMain + 0x41b8edf
+    (Google Chrome Framework) ChromeMain + 0x41befd2
+    (Google Chrome Framework) ChromeMain + 0x41c1900
+    (Google Chrome Framework) ChromeMain + 0x41c1447
+    (Google Chrome Framework) ChromeMain + 0x41c1371
+    (Google Chrome Framework) ChromeMain + 0x5cb051b
+    (Google Chrome Framework) ChromeMain + 0x2847f12
+    (Google Chrome Framework) ChromeMain + 0x2849d16
+    (Google Chrome Framework) ChromeMain + 0x2849b9d
+    (Google Chrome Framework) ChromeMain + 0xd648b8
+    (Google Chrome Framework) ChromeMain + 0x11bf903
+    (Google Chrome Framework) ChromeMain + 0xd637c0
+    (Google Chrome Framework) ChromeMain + 0xd661e2
+    (Google Chrome Framework) ChromeMain + 0xd61faa
+    (Google Chrome Framework) ChromeMain + 0x278daf4
+    (Google Chrome Framework) ChromeMain + 0x278d7fe
+    (Google Chrome Framework) ChromeMain + 0x51f6c44
+    (Google Chrome Framework) ChromeMain + 0x278cdf4
+    (Google Chrome Framework) ChromeMain + 0xbb
+    (Google Chrome) main + 0x174
+    (libdyld.dylib) start + 0x1
+    (Google Chrome) unknown 0x1
+(Tue Feb  4 16:20:32 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CrBrowserMain[0x11282fdc0] Hook.mm: CVDisplayLinkSetOutputCallback(): displayLink '0x7fb377016000', callback '0x115f89420', userInfo '0x4280bc6', returning 0
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkSetOutputCallback(__CVDisplayLink*, int (*)(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*), void*) + 0x75
+    (Google Chrome Framework) ChromeMain + 0x371ba11
+    (Google Chrome Framework) ChromeMain + 0x371e28e
+    (Google Chrome Framework) ChromeMain + 0x371cf34
+    (Google Chrome Framework) ChromeMain + 0x371c722
+    (Google Chrome Framework) ChromeMain + 0x371b587
+    (Google Chrome Framework) ChromeMain + 0x5d79aa7
+    (Google Chrome Framework) ChromeMain + 0x5d799fd
+    (Google Chrome Framework) ChromeMain + 0x41b8edf
+    (Google Chrome Framework) ChromeMain + 0x41befd2
+    (Google Chrome Framework) ChromeMain + 0x41c1900
+    (Google Chrome Framework) ChromeMain + 0x41c1447
+    (Google Chrome Framework) ChromeMain + 0x41c1371
+    (Google Chrome Framework) ChromeMain + 0x5cb051b
+    (Google Chrome Framework) ChromeMain + 0x2847f12
+    (Google Chrome Framework) ChromeMain + 0x2849d16
+    (Google Chrome Framework) ChromeMain + 0x2849b9d
+    (Google Chrome Framework) ChromeMain + 0xd648b8
+    (Google Chrome Framework) ChromeMain + 0x11bf903
+    (Google Chrome Framework) ChromeMain + 0xd637c0
+    (Google Chrome Framework) ChromeMain + 0xd661e2
+    (Google Chrome Framework) ChromeMain + 0xd61faa
+    (Google Chrome Framework) ChromeMain + 0x278daf4
+    (Google Chrome Framework) ChromeMain + 0x278d7fe
+    (Google Chrome Framework) ChromeMain + 0x51f6c44
+    (Google Chrome Framework) ChromeMain + 0x278cdf4
+    (Google Chrome Framework) ChromeMain + 0xbb
+    (Google Chrome) main + 0x174
+    (libdyld.dylib) start + 0x1
+    (Google Chrome) unknown 0x1
+(Tue Feb  4 16:20:32 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CrBrowserMain[0x11282fdc0] Hook.mm: CVDisplayLinkRelease(): displayLink '0x7fb377016000'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkRelease(__CVDisplayLink*) + 0x40
+    (Google Chrome Framework) ChromeMain + 0x371b986
+    (Google Chrome Framework) ChromeMain + 0x371e28e
+    (Google Chrome Framework) ChromeMain + 0x371cf34
+    (Google Chrome Framework) ChromeMain + 0x371c722
+    (Google Chrome Framework) ChromeMain + 0x371b587
+    (Google Chrome Framework) ChromeMain + 0x5d79aa7
+    (Google Chrome Framework) ChromeMain + 0x5d799fd
+    (Google Chrome Framework) ChromeMain + 0x41b8edf
+    (Google Chrome Framework) ChromeMain + 0x41befd2
+    (Google Chrome Framework) ChromeMain + 0x41c1900
+    (Google Chrome Framework) ChromeMain + 0x41c1447
+    (Google Chrome Framework) ChromeMain + 0x41c1371
+    (Google Chrome Framework) ChromeMain + 0x5cb051b
+    (Google Chrome Framework) ChromeMain + 0x2847f12
+    (Google Chrome Framework) ChromeMain + 0x2849d16
+    (Google Chrome Framework) ChromeMain + 0x2849b9d
+    (Google Chrome Framework) ChromeMain + 0xd648b8
+    (Google Chrome Framework) ChromeMain + 0x11bf903
+    (Google Chrome Framework) ChromeMain + 0xd637c0
+    (Google Chrome Framework) ChromeMain + 0xd661e2
+    (Google Chrome Framework) ChromeMain + 0xd61faa
+    (Google Chrome Framework) ChromeMain + 0x278daf4
+    (Google Chrome Framework) ChromeMain + 0x278d7fe
+    (Google Chrome Framework) ChromeMain + 0x51f6c44
+    (Google Chrome Framework) ChromeMain + 0x278cdf4
+    (Google Chrome Framework) ChromeMain + 0xbb
+    (Google Chrome) main + 0x174
+    (libdyld.dylib) start + 0x1
+    (Google Chrome) unknown 0x1
+(Tue Feb  4 16:20:32 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CrBrowserMain[0x11282fdc0] Hook.mm: CVDisplayLinkRelease(): displayLink '0x7fb377016000'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkRelease(__CVDisplayLink*) + 0x40
+    (Google Chrome Framework) ChromeMain + 0x371c33e
+    (Google Chrome Framework) ChromeMain + 0x371e2cb
+    (Google Chrome Framework) ChromeMain + 0x371cf34
+    (Google Chrome Framework) ChromeMain + 0x371c722
+    (Google Chrome Framework) ChromeMain + 0x371b587
+    (Google Chrome Framework) ChromeMain + 0x5d79aa7
+    (Google Chrome Framework) ChromeMain + 0x5d799fd
+    (Google Chrome Framework) ChromeMain + 0x41b8edf
+    (Google Chrome Framework) ChromeMain + 0x41befd2
+    (Google Chrome Framework) ChromeMain + 0x41c1900
+    (Google Chrome Framework) ChromeMain + 0x41c1447
+    (Google Chrome Framework) ChromeMain + 0x41c1371
+    (Google Chrome Framework) ChromeMain + 0x5cb051b
+    (Google Chrome Framework) ChromeMain + 0x2847f12
+    (Google Chrome Framework) ChromeMain + 0x2849d16
+    (Google Chrome Framework) ChromeMain + 0x2849b9d
+    (Google Chrome Framework) ChromeMain + 0xd648b8
+    (Google Chrome Framework) ChromeMain + 0x11bf903
+    (Google Chrome Framework) ChromeMain + 0xd637c0
+    (Google Chrome Framework) ChromeMain + 0xd661e2
+    (Google Chrome Framework) ChromeMain + 0xd61faa
+    (Google Chrome Framework) ChromeMain + 0x278daf4
+    (Google Chrome Framework) ChromeMain + 0x278d7fe
+    (Google Chrome Framework) ChromeMain + 0x51f6c44
+    (Google Chrome Framework) ChromeMain + 0x278cdf4
+    (Google Chrome Framework) ChromeMain + 0xbb
+    (Google Chrome) main + 0x174
+    (libdyld.dylib) start + 0x1
+    (Google Chrome) unknown 0x1
+(Tue Feb  4 16:20:32 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CrBrowserMain[0x11282fdc0] Hook.mm: CVCGDisplayLink::setCurrentDisplay(): self '0x7fb377844e20', displayID '0x4280bc6', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink17setCurrentDisplayEj(void*, unsigned int) + 0x56
+    (CoreVideo) CVCGDisplayLink::initWithCGDisplays(unsigned int*, long, int*) + 0x1c3
+    (CoreVideo) CVDisplayLinkCreateWithCGDisplays + 0x86
+    (hook.dylib) Hooked_CVDisplayLinkCreateWithCGDisplays(unsigned int*, long, __CVDisplayLink**) + 0x34
+    (CoreVideo) CVDisplayLinkCreateWithCGDisplay + 0x1e
+    (Google Chrome Framework) ChromeMain + 0x371b90d
+    (Google Chrome Framework) ChromeMain + 0x51bf11a
+    (Google Chrome Framework) ChromeMain + 0x493c581
+    (Google Chrome Framework) ChromeMain + 0x51bd15d
+    (Google Chrome Framework) ChromeMain + 0x51b7064
+    (Google Chrome Framework) ChromeMain + 0x51a72f6
+    (Google Chrome Framework) ChromeMain + 0x5a99f0b
+    (Google Chrome Framework) ChromeMain + 0x5aa6e9e
+    (Google Chrome Framework) ChromeMain + 0x58c1a6b
+    (Google Chrome Framework) ChromeMain + 0x5916c44
+    (Google Chrome Framework) ChromeMain + 0x59179f3
+    (Google Chrome Framework) ChromeMain + 0x59169d5
+    (Google Chrome Framework) ChromeMain + 0x59161f5
+    (Google Chrome Framework) ChromeMain + 0x5912f4e
+    (Google Chrome Framework) ChromeMain + 0x5914d81
+    (Google Chrome Framework) ChromeMain + 0x5914a8f
+    (Google Chrome Framework) ChromeMain + 0x5912d2c
+    (Google Chrome Framework) ChromeMain + 0x59124bb
+    (Google Chrome Framework) ChromeMain + 0x284acf8
+    (Google Chrome Framework) ChromeMain + 0x2849b9d
+    (Google Chrome Framework) ChromeMain + 0xd648b8
+    (Google Chrome Framework) ChromeMain + 0x11bf903
+    (Google Chrome Framework) ChromeMain + 0xd637c0
+    (Google Chrome Framework) ChromeMain + 0xd661e2
+    (Google Chrome Framework) ChromeMain + 0xd61faa
+    (Google Chrome Framework) ChromeMain + 0x278daf4
+    (Google Chrome Framework) ChromeMain + 0x278d7fe
+    (Google Chrome Framework) ChromeMain + 0x51f6c44
+    (Google Chrome Framework) ChromeMain + 0x278cdf4
+    (Google Chrome Framework) ChromeMain + 0xbb
+    (Google Chrome) main + 0x174
+    (libdyld.dylib) start + 0x1
+    (Google Chrome) unknown 0x1
+(Tue Feb  4 16:20:32 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CrBrowserMain[0x11282fdc0] Hook.mm: CVDisplayLinkCreateWithCGDisplays(): count '1', displayLinkOut '0x7fb377844e00', returning '0'
+    Current display now '0x4280bc6'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkCreateWithCGDisplays(unsigned int*, long, __CVDisplayLink**) + 0xc9
+    (CoreVideo) CVDisplayLinkCreateWithCGDisplay + 0x1e
+    (Google Chrome Framework) ChromeMain + 0x371b90d
+    (Google Chrome Framework) ChromeMain + 0x51bf11a
+    (Google Chrome Framework) ChromeMain + 0x493c581
+    (Google Chrome Framework) ChromeMain + 0x51bd15d
+    (Google Chrome Framework) ChromeMain + 0x51b7064
+    (Google Chrome Framework) ChromeMain + 0x51a72f6
+    (Google Chrome Framework) ChromeMain + 0x5a99f0b
+    (Google Chrome Framework) ChromeMain + 0x5aa6e9e
+    (Google Chrome Framework) ChromeMain + 0x58c1a6b
+    (Google Chrome Framework) ChromeMain + 0x5916c44
+    (Google Chrome Framework) ChromeMain + 0x59179f3
+    (Google Chrome Framework) ChromeMain + 0x59169d5
+    (Google Chrome Framework) ChromeMain + 0x59161f5
+    (Google Chrome Framework) ChromeMain + 0x5912f4e
+    (Google Chrome Framework) ChromeMain + 0x5914d81
+    (Google Chrome Framework) ChromeMain + 0x5914a8f
+    (Google Chrome Framework) ChromeMain + 0x5912d2c
+    (Google Chrome Framework) ChromeMain + 0x59124bb
+    (Google Chrome Framework) ChromeMain + 0x284acf8
+    (Google Chrome Framework) ChromeMain + 0x2849b9d
+    (Google Chrome Framework) ChromeMain + 0xd648b8
+    (Google Chrome Framework) ChromeMain + 0x11bf903
+    (Google Chrome Framework) ChromeMain + 0xd637c0
+    (Google Chrome Framework) ChromeMain + 0xd661e2
+    (Google Chrome Framework) ChromeMain + 0xd61faa
+    (Google Chrome Framework) ChromeMain + 0x278daf4
+    (Google Chrome Framework) ChromeMain + 0x278d7fe
+    (Google Chrome Framework) ChromeMain + 0x51f6c44
+    (Google Chrome Framework) ChromeMain + 0x278cdf4
+    (Google Chrome Framework) ChromeMain + 0xbb
+    (Google Chrome) main + 0x174
+    (libdyld.dylib) start + 0x1
+    (Google Chrome) unknown 0x1
+(Tue Feb  4 16:20:32 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CrBrowserMain[0x11282fdc0] Hook.mm: CVDisplayLinkRelease(): displayLink '0x7fb377844e00'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkRelease(__CVDisplayLink*) + 0x40
+    (Google Chrome Framework) ChromeMain + 0x371b9ff
+    (Google Chrome Framework) ChromeMain + 0x51bf11a
+    (Google Chrome Framework) ChromeMain + 0x493c581
+    (Google Chrome Framework) ChromeMain + 0x51bd15d
+    (Google Chrome Framework) ChromeMain + 0x51b7064
+    (Google Chrome Framework) ChromeMain + 0x51a72f6
+    (Google Chrome Framework) ChromeMain + 0x5a99f0b
+    (Google Chrome Framework) ChromeMain + 0x5aa6e9e
+    (Google Chrome Framework) ChromeMain + 0x58c1a6b
+    (Google Chrome Framework) ChromeMain + 0x5916c44
+    (Google Chrome Framework) ChromeMain + 0x59179f3
+    (Google Chrome Framework) ChromeMain + 0x59169d5
+    (Google Chrome Framework) ChromeMain + 0x59161f5
+    (Google Chrome Framework) ChromeMain + 0x5912f4e
+    (Google Chrome Framework) ChromeMain + 0x5914d81
+    (Google Chrome Framework) ChromeMain + 0x5914a8f
+    (Google Chrome Framework) ChromeMain + 0x5912d2c
+    (Google Chrome Framework) ChromeMain + 0x59124bb
+    (Google Chrome Framework) ChromeMain + 0x284acf8
+    (Google Chrome Framework) ChromeMain + 0x2849b9d
+    (Google Chrome Framework) ChromeMain + 0xd648b8
+    (Google Chrome Framework) ChromeMain + 0x11bf903
+    (Google Chrome Framework) ChromeMain + 0xd637c0
+    (Google Chrome Framework) ChromeMain + 0xd661e2
+    (Google Chrome Framework) ChromeMain + 0xd61faa
+    (Google Chrome Framework) ChromeMain + 0x278daf4
+    (Google Chrome Framework) ChromeMain + 0x278d7fe
+    (Google Chrome Framework) ChromeMain + 0x51f6c44
+    (Google Chrome Framework) ChromeMain + 0x278cdf4
+    (Google Chrome Framework) ChromeMain + 0xbb
+    (Google Chrome) main + 0x174
+    (libdyld.dylib) start + 0x1
+    (Google Chrome) unknown 0x1
+(Tue Feb  4 16:20:32 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CrBrowserMain[0x11282fdc0] Hook.mm: CVDisplayLinkSetOutputCallback(): displayLink '0x7fb377844e00', callback '0x115f89420', userInfo '0x4280bc6', returning 0
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkSetOutputCallback(__CVDisplayLink*, int (*)(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*), void*) + 0x75
+    (Google Chrome Framework) ChromeMain + 0x371ba11
+    (Google Chrome Framework) ChromeMain + 0x51bf11a
+    (Google Chrome Framework) ChromeMain + 0x493c581
+    (Google Chrome Framework) ChromeMain + 0x51bd15d
+    (Google Chrome Framework) ChromeMain + 0x51b7064
+    (Google Chrome Framework) ChromeMain + 0x51a72f6
+    (Google Chrome Framework) ChromeMain + 0x5a99f0b
+    (Google Chrome Framework) ChromeMain + 0x5aa6e9e
+    (Google Chrome Framework) ChromeMain + 0x58c1a6b
+    (Google Chrome Framework) ChromeMain + 0x5916c44
+    (Google Chrome Framework) ChromeMain + 0x59179f3
+    (Google Chrome Framework) ChromeMain + 0x59169d5
+    (Google Chrome Framework) ChromeMain + 0x59161f5
+    (Google Chrome Framework) ChromeMain + 0x5912f4e
+    (Google Chrome Framework) ChromeMain + 0x5914d81
+    (Google Chrome Framework) ChromeMain + 0x5914a8f
+    (Google Chrome Framework) ChromeMain + 0x5912d2c
+    (Google Chrome Framework) ChromeMain + 0x59124bb
+    (Google Chrome Framework) ChromeMain + 0x284acf8
+    (Google Chrome Framework) ChromeMain + 0x2849b9d
+    (Google Chrome Framework) ChromeMain + 0xd648b8
+    (Google Chrome Framework) ChromeMain + 0x11bf903
+    (Google Chrome Framework) ChromeMain + 0xd637c0
+    (Google Chrome Framework) ChromeMain + 0xd661e2
+    (Google Chrome Framework) ChromeMain + 0xd61faa
+    (Google Chrome Framework) ChromeMain + 0x278daf4
+    (Google Chrome Framework) ChromeMain + 0x278d7fe
+    (Google Chrome Framework) ChromeMain + 0x51f6c44
+    (Google Chrome Framework) ChromeMain + 0x278cdf4
+    (Google Chrome Framework) ChromeMain + 0xbb
+    (Google Chrome) main + 0x174
+    (libdyld.dylib) start + 0x1
+    (Google Chrome) unknown 0x1
+(Tue Feb  4 16:20:32 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CrBrowserMain[0x11282fdc0] Hook.mm: CVDisplayLinkRelease(): displayLink '0x7fb377844e00'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkRelease(__CVDisplayLink*) + 0x40
+    (Google Chrome Framework) ChromeMain + 0x371b986
+    (Google Chrome Framework) ChromeMain + 0x51bf11a
+    (Google Chrome Framework) ChromeMain + 0x493c581
+    (Google Chrome Framework) ChromeMain + 0x51bd15d
+    (Google Chrome Framework) ChromeMain + 0x51b7064
+    (Google Chrome Framework) ChromeMain + 0x51a72f6
+    (Google Chrome Framework) ChromeMain + 0x5a99f0b
+    (Google Chrome Framework) ChromeMain + 0x5aa6e9e
+    (Google Chrome Framework) ChromeMain + 0x58c1a6b
+    (Google Chrome Framework) ChromeMain + 0x5916c44
+    (Google Chrome Framework) ChromeMain + 0x59179f3
+    (Google Chrome Framework) ChromeMain + 0x59169d5
+    (Google Chrome Framework) ChromeMain + 0x59161f5
+    (Google Chrome Framework) ChromeMain + 0x5912f4e
+    (Google Chrome Framework) ChromeMain + 0x5914d81
+    (Google Chrome Framework) ChromeMain + 0x5914a8f
+    (Google Chrome Framework) ChromeMain + 0x5912d2c
+    (Google Chrome Framework) ChromeMain + 0x59124bb
+    (Google Chrome Framework) ChromeMain + 0x284acf8
+    (Google Chrome Framework) ChromeMain + 0x2849b9d
+    (Google Chrome Framework) ChromeMain + 0xd648b8
+    (Google Chrome Framework) ChromeMain + 0x11bf903
+    (Google Chrome Framework) ChromeMain + 0xd637c0
+    (Google Chrome Framework) ChromeMain + 0xd661e2
+    (Google Chrome Framework) ChromeMain + 0xd61faa
+    (Google Chrome Framework) ChromeMain + 0x278daf4
+    (Google Chrome Framework) ChromeMain + 0x278d7fe
+    (Google Chrome Framework) ChromeMain + 0x51f6c44
+    (Google Chrome Framework) ChromeMain + 0x278cdf4
+    (Google Chrome Framework) ChromeMain + 0xbb
+    (Google Chrome) main + 0x174
+    (libdyld.dylib) start + 0x1
+    (Google Chrome) unknown 0x1
+(Tue Feb  4 16:20:33 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CrBrowserMain[0x11282fdc0] Hook.mm: CVDisplayLinkStart(): displayLink '0x7fb377844e00', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkStart(__CVDisplayLink*) + 0x46
+    (Google Chrome Framework) ChromeMain + 0x371bd4a
+    (Google Chrome Framework) ChromeMain + 0x371bcf6
+    (Google Chrome Framework) ChromeMain + 0x51c102a
+    (Google Chrome Framework) ChromeMain + 0xa5f042
+    (Google Chrome Framework) ChromeMain + 0x2e664b6
+    (Google Chrome Framework) ChromeMain + 0x2e6b9f3
+    (Google Chrome Framework) ChromeMain + 0x2e6b25b
+    (Google Chrome Framework) ChromeMain + 0x2e63513
+    (Google Chrome Framework) ChromeMain + 0x2e63e21
+    (Google Chrome Framework) ChromeMain + 0x2e7c09e
+    (Google Chrome Framework) ChromeMain + 0x48d6a66
+    (Google Chrome Framework) ChromeMain + 0x48d46a9
+    (QuartzCore) CA::Transaction::run_commit_handlers(CATransactionPhase) + 0x64
+    (QuartzCore) CA::Context::commit_transaction(CA::Transaction*, double) + 0x7de
+    (QuartzCore) CA::Transaction::commit() + 0x27e
+    (AppKit) __62+[CATransaction(NSCATransaction) NS_setFlushesWithDisplayLink]_block_invoke + 0x10a
+    (AppKit) ___NSRunLoopObserverCreateWithHandler_block_invoke + 0x29
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_AN_OBSERVER_CALLBACK_FUNCTION__ + 0x17
+    (CoreFoundation) __CFRunLoopDoObservers + 0x1c9
+    (CoreFoundation) __CFRunLoopRun + 0x4c3
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x164
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (Google Chrome Framework) ChromeMain + 0x2843450
+    (Google Chrome Framework) ChromeMain + 0x2d46a6a
+    (Google Chrome Framework) ChromeMain + 0x2843389
+    (AppKit) -[NSApplication run] + 0x292
+    (Google Chrome Framework) ChromeMain + 0x2d4cabc
+    (Google Chrome Framework) ChromeMain + 0x2d4b522
+    (Google Chrome Framework) ChromeMain + 0x2cf7837
+    (Google Chrome Framework) ChromeMain + 0x2cce707
+    (Google Chrome Framework) ChromeMain + 0x284b52f
+    (Google Chrome Framework) ChromeMain + 0xd64a5b
+    (Google Chrome Framework) ChromeMain + 0xd66542
+    (Google Chrome Framework) ChromeMain + 0xd61fba
+    (Google Chrome Framework) ChromeMain + 0x278daf4
+    (Google Chrome Framework) ChromeMain + 0x278d7fe
+    (Google Chrome Framework) ChromeMain + 0x51f6c44
+    (Google Chrome Framework) ChromeMain + 0x278cdf4
+    (Google Chrome Framework) ChromeMain + 0xbb
+    (Google Chrome) main + 0x174
+    (libdyld.dylib) start + 0x1
+    (Google Chrome) unknown 0x1
+(Tue Feb  4 16:20:33 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CVDisplayLink[0x70000d2d5000] Hook.mm: CVCGDisplayLink::getDisplayTimes(): self '0x7fb377844e20'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink15getDisplayTimesEPyS0_S0_(void*, unsigned long long*, unsigned long long*, unsigned long long*) + 0x58
+    (CoreVideo) CVHWTime::update(double, bool*, bool*) + 0x39
+    (CoreVideo) CVXTime::update() + 0x2c
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x247
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 16:20:33 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CVDisplayLink[0x70000d2d5000] Hook.mm: CVDisplayLinkOutputCallback(): displayLink '0x7fb377844e00', displayLinkContext '0x4280bc6', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkOutputCallback(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*) + 0x78
+    (CoreVideo) CVDisplayLink::performIO(CVTimeStamp*) + 0xe6
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x272
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 16:20:33 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CVDisplayLink[0x70000d2d5000] Hook.mm: CVCGDisplayLink::getDisplayTimes(): self '0x7fb377844e20'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink15getDisplayTimesEPyS0_S0_(void*, unsigned long long*, unsigned long long*, unsigned long long*) + 0x58
+    (CoreVideo) CVHWTime::update(double, bool*, bool*) + 0x39
+    (CoreVideo) CVXTime::update() + 0x2c
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x247
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 16:20:33 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CVDisplayLink[0x70000d2d5000] Hook.mm: CVDisplayLinkOutputCallback(): displayLink '0x7fb377844e00', displayLinkContext '0x4280bc6', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkOutputCallback(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*) + 0x78
+    (CoreVideo) CVDisplayLink::performIO(CVTimeStamp*) + 0xe6
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x272
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 16:20:33 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CVDisplayLink[0x70000d2d5000] Hook.mm: CVCGDisplayLink::getDisplayTimes(): self '0x7fb377844e20'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink15getDisplayTimesEPyS0_S0_(void*, unsigned long long*, unsigned long long*, unsigned long long*) + 0x58
+    (CoreVideo) CVHWTime::update(double, bool*, bool*) + 0x39
+    (CoreVideo) CVXTime::update() + 0x2c
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x247
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 16:20:33 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CVDisplayLink[0x70000d2d5000] Hook.mm: CVDisplayLinkOutputCallback(): displayLink '0x7fb377844e00', displayLinkContext '0x4280bc6', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkOutputCallback(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*) + 0x78
+    (CoreVideo) CVDisplayLink::performIO(CVTimeStamp*) + 0xe6
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x272
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 16:20:33 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CVDisplayLink[0x70000d2d5000] Hook.mm: CVCGDisplayLink::getDisplayTimes(): self '0x7fb377844e20'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN15CVCGDisplayLink15getDisplayTimesEPyS0_S0_(void*, unsigned long long*, unsigned long long*, unsigned long long*) + 0x58
+    (CoreVideo) CVHWTime::update(double, bool*, bool*) + 0x39
+    (CoreVideo) CVXTime::update() + 0x2c
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x247
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 16:20:33 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CVDisplayLink[0x70000d2d5000] Hook.mm: CVDisplayLinkOutputCallback(): displayLink '0x7fb377844e00', displayLinkContext '0x4280bc6', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkOutputCallback(__CVDisplayLink*, CVTimeStamp const*, CVTimeStamp const*, unsigned long long, unsigned long long*, void*) + 0x78
+    (CoreVideo) CVDisplayLink::performIO(CVTimeStamp*) + 0xe6
+    (CoreVideo) CVDisplayLink::runIOThread() + 0x272
+    (libsystem_pthread.dylib) _pthread_start + 0x94
+    (libsystem_pthread.dylib) thread_start + 0xf
+(Tue Feb  4 16:20:33 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CrBrowserMain[0x11282fdc0] Hook.mm: CVDisplayLink::stop(): self '0x7fb377844e20', returning '0'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked__ZN13CVDisplayLink4stopEv(void*) + 0x46
+    (Google Chrome Framework) ChromeMain + 0x371c277
+    (Google Chrome Framework) ChromeMain + 0x371c4a2
+    (Google Chrome Framework) ChromeMain + 0x2ce767f
+    (Google Chrome Framework) ChromeMain + 0x2cf6f7a
+    (Google Chrome Framework) ChromeMain + 0x2cf6d17
+    (Google Chrome Framework) ChromeMain + 0x2d4c2b1
+    (Google Chrome Framework) ChromeMain + 0x2d46a6a
+    (Google Chrome Framework) ChromeMain + 0x2d4bb8f
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x258
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (Google Chrome Framework) ChromeMain + 0x2843450
+    (Google Chrome Framework) ChromeMain + 0x2d46a6a
+    (Google Chrome Framework) ChromeMain + 0x2843389
+    (AppKit) -[NSApplication run] + 0x292
+    (Google Chrome Framework) ChromeMain + 0x2d4cabc
+    (Google Chrome Framework) ChromeMain + 0x2d4b522
+    (Google Chrome Framework) ChromeMain + 0x2cf7837
+    (Google Chrome Framework) ChromeMain + 0x2cce707
+    (Google Chrome Framework) ChromeMain + 0x284b52f
+    (Google Chrome Framework) ChromeMain + 0xd64a5b
+    (Google Chrome Framework) ChromeMain + 0xd66542
+    (Google Chrome Framework) ChromeMain + 0xd61fba
+    (Google Chrome Framework) ChromeMain + 0x278daf4
+    (Google Chrome Framework) ChromeMain + 0x278d7fe
+    (Google Chrome Framework) ChromeMain + 0x51f6c44
+    (Google Chrome Framework) ChromeMain + 0x278cdf4
+    (Google Chrome Framework) ChromeMain + 0xbb
+    (Google Chrome) main + 0x174
+    (libdyld.dylib) start + 0x1
+    (Google Chrome) unknown 0x1
+[2176:775:0204/162041.010375:ERROR:gles2_cmd_decoder.cc(18847)] [.DisplayCompositor]GL ERROR :GL_INVALID_OPERATION : glCreateAndConsumeTextureCHROMIUM: invalid mailbox name
+[2176:775:0204/162041.010497:ERROR:gles2_cmd_decoder.cc(10753)] [.DisplayCompositor]RENDER WARNING: texture bound to texture unit 0 is not renderable. It might be non-power-of-2 or have incompatible texture filtering (maybe)?
+(Tue Feb  4 16:20:41 2020) /Applications/Google Chrome.app/Contents/MacOS/Google Chrome[2170] CrBrowserMain[0x11282fdc0] Hook.mm: CVDisplayLinkRelease(): displayLink '0x7fb377844e00'
+    (hook.dylib) PrintStackTrace() + 0xae
+    (hook.dylib) Hooked_CVDisplayLinkRelease(__CVDisplayLink*) + 0x40
+    (Google Chrome Framework) ChromeMain + 0x371c33e
+    (Google Chrome Framework) ChromeMain + 0x51bb6e6
+    (Google Chrome Framework) ChromeMain + 0x51bbe7e
+    (Google Chrome Framework) ChromeMain + 0x51b6d91
+    (Google Chrome Framework) ChromeMain + 0x494022a
+    (CoreFoundation) __CFNOTIFICATIONCENTER_IS_CALLING_OUT_TO_AN_OBSERVER__ + 0xc
+    (CoreFoundation) ___CFXRegistrationPost1_block_invoke + 0x3f
+    (CoreFoundation) _CFXRegistrationPost1 + 0x174
+    (CoreFoundation) ___CFXNotificationPost_block_invoke + 0x61
+    (CoreFoundation) -[_CFXNotificationRegistrar find:object:observer:enumerator:] + 0x627
+    (CoreFoundation) _CFXNotificationPost + 0x547
+    (Foundation) -[NSNotificationCenter postNotificationName:object:userInfo:] + 0x3b
+    (AppKit) -[NSWindow _finishClosingWindow] + 0xb9
+    (AppKit) -[NSWindow _close] + 0x160
+    (Google Chrome Framework) ChromeMain + 0x493dc82
+    (Google Chrome Framework) ChromeMain + 0x2ce767f
+    (Google Chrome Framework) ChromeMain + 0x2cf6f7a
+    (Google Chrome Framework) ChromeMain + 0x2cf6d17
+    (Google Chrome Framework) ChromeMain + 0x2d4c2b1
+    (Google Chrome Framework) ChromeMain + 0x2d46a6a
+    (Google Chrome Framework) ChromeMain + 0x2d4bb8f
+    (CoreFoundation) __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 0x11
+    (CoreFoundation) __CFRunLoopDoSource0 + 0x67
+    (CoreFoundation) __CFRunLoopDoSources0 + 0xd1
+    (CoreFoundation) __CFRunLoopRun + 0x4f8
+    (CoreFoundation) CFRunLoopRunSpecific + 0x1f3
+    (HIToolbox) RunCurrentEventLoopInMode + 0x124
+    (HIToolbox) ReceiveNextEventCommon + 0x258
+    (HIToolbox) _BlockUntilNextEventMatchingListInModeWithFilter + 0x40
+    (AppKit) _DPSNextEvent + 0x3de
+    (AppKit) -[NSApplication(NSEvent) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 0x548
+    (Google Chrome Framework) ChromeMain + 0x2843450
+    (Google Chrome Framework) ChromeMain + 0x2d46a6a
+    (Google Chrome Framework) ChromeMain + 0x2843389
+    (AppKit) -[NSApplication run] + 0x292
+    (Google Chrome Framework) ChromeMain + 0x2d4cabc
+    (Google Chrome Framework) ChromeMain + 0x2d4b522
+    (Google Chrome Framework) ChromeMain + 0x2cf7837
+    (Google Chrome Framework) ChromeMain + 0x2cce707
+    (Google Chrome Framework) ChromeMain + 0x284b52f
+    (Google Chrome Framework) ChromeMain + 0xd64a5b
+    (Google Chrome Framework) ChromeMain + 0xd66542
+    (Google Chrome Framework) ChromeMain + 0xd61fba
+    (Google Chrome Framework) ChromeMain + 0x278daf4
+    (Google Chrome Framework) ChromeMain + 0x278d7fe
+    (Google Chrome Framework) ChromeMain + 0x51f6c44
+    (Google Chrome Framework) ChromeMain + 0x278cdf4
+    (Google Chrome Framework) ChromeMain + 0xbb
+    (Google Chrome) main + 0x174
+    (libdyld.dylib) start + 0x1
+    (Google Chrome) unknown 0x1
