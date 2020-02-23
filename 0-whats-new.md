@@ -1,3 +1,8 @@
+# What's New in Version 4.0.2
+
+This version of HookCase fixes two intermittent kernel panics. For
+more information see [Issue #14](https://github.com/steven-michaud/HookCase/issues/14).
+
 # What's New in Version 4.0.1
 
 This version of HookCase documents how to use `sudo mount -uw /` to
@@ -113,7 +118,7 @@ prevented interpose hooks from working outside the shared cache of
 system modules.
 
 * Version 2.0
-[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L9945)
+[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L9959)
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0
