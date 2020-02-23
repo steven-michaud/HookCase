@@ -8776,13 +8776,13 @@ bool set_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp)
     cast_hookp->num_patch_hooks = num_patch_hooks;
   }
 
-  thread_interrupt_level(old_state);
-
   if (!check_for_pending_user_hooks(patch_hooks, num_patch_hooks,
                                     interpose_hooks, num_interpose_hooks))
   {
     retval = false;
   }
+
+  thread_interrupt_level(old_state);
 
   return retval;
 }
@@ -9275,6 +9275,20 @@ void on_add_image(x86_saved_state_t *intr_state)
                                    hookp->interpose_hooks,
                                    hookp->num_interpose_hooks);
   }
+
+  thread_interrupt_level(old_state);
+
+  // set_interpose_hooks_for_module() can take so long that our hook has been
+  // deleted by the time it finishes, leading to kernel panics in the code
+  // below.  Check for this here.
+  hook_t *old_hookp = hookp;
+  hookp = find_hook_with_add_image_func(proc_uniqueid(proc));
+  if ((hookp != old_hookp) || (hookp->state != hook_state_floating)) {
+    vm_map_deallocate(proc_map);
+    return;
+  }
+
+  old_state = thread_interrupt_level(THREAD_UNINT);
 
   if (hookp->patch_hooks) {
     int i;
@@ -10264,37 +10278,32 @@ bool unhook_mac_file_check_mmap()
 extern "C" const char *vnode_getname(vnode_t vp);
 extern "C" void vnode_putname(const char *name);
 
-bool get_vnode_path(struct vnode *vp, char **path, vm_size_t *path_size)
+// Don't use IOMalloc() here.  Doing so apparently triggers intermittent
+// kernel panics in mac_vnode_check_open_hook() calling its original function.
+// Apple's documentation on IOMalloc() says it "may block and so should not be
+// called from interrupt level."  This may also be behind the trouble with
+// IOMalloc() in reset_hook(), add_patch_hook() and get_dynamic_caller()
+// above.
+bool get_vnode_path(struct vnode *vp, char *path, vm_size_t path_size)
 {
   if (!path || !path_size) {
     return false;
   }
-  *path = NULL;
-  *path_size = 0;
+  path[0] = 0;
 
   char vnode_path[MAXPATHLEN];
-  strncpy(vnode_path, "null", sizeof(vnode_path));
+  vnode_path[0] = 0;
   if (vp) {
     int length = MAXPATHLEN;
     if (vn_getpath(vp, vnode_path, &length) != 0) {
-      const char *vnode_name = vnode_getname(vp);
-      if (vnode_name) {
-        strncpy(vnode_path, vnode_name, sizeof(vnode_path));
-        vnode_putname(vnode_name);
-      } else {
-        strncpy(vnode_path, "unknown", sizeof(vnode_path));
-      }
+      vnode_path[0] = 0;
     }
   }
-
-  vm_size_t size = strlen(vnode_path) + 1;
-  char *holder = (char *) IOMalloc(size);
-  if (!holder) {
+  if (vnode_path[0] == 0) {
     return false;
   }
-  strncpy(holder, vnode_path, size);
-  *path_size = size;
-  *path = holder;
+
+  strncpy(path, vnode_path, path_size);
   return true;
 }
 
@@ -10310,20 +10319,21 @@ void mac_vnode_check_open_hook(x86_saved_state_t *intr_state)
   struct vnode *vp = (struct vnode *) intr_state->ss_64.rsi;
   int acc_mode = (int) intr_state->ss_64.rdx;
 
-  bool vnode_is_hook_library = false;
-  hook_t *cast_hookp = find_cast_hook(proc_uniqueid(current_proc()));
+  bool skip_vnode_check = false;
+  hook_t *cast_hookp = NULL;
+  if (!(acc_mode & FWRITE)) {
+    cast_hookp = find_cast_hook(proc_uniqueid(current_proc()));
+  }
   if (cast_hookp) {
-    char *vnode_path;
-    vm_size_t vnode_path_size;
-    if (get_vnode_path(vp, &vnode_path, &vnode_path_size)) {
-      vnode_is_hook_library =
+    char vnode_path[MAXPATHLEN];
+    if (get_vnode_path(vp, vnode_path, sizeof(vnode_path))) {
+      skip_vnode_check =
         !strcmp(vnode_path, cast_hookp->inserted_dylib_path);
-      IOFree(vnode_path, vnode_path_size);
     }
   }
 
   int retval = 0;
-  if (!vnode_is_hook_library || (acc_mode & FWRITE)) {
+  if (!skip_vnode_check) {
     retval = mac_vnode_check_open_caller(ctx, vp, acc_mode);
   }
   intr_state->ss_64.rax = retval;
