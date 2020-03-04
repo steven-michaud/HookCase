@@ -10263,27 +10263,24 @@ bool unhook_mac_file_check_mmap()
 // As of macOS Catalina (10.15), when filesystem protections are enabled (via
 // csrutil), calling dlopen() from a sandboxed process (like xpcproxy) will
 // result in the Sandbox kernel extension checking "vnode open" permissions on
-// the module to be dlopened, with 'acc_mode' set to FREAD.  In
-// process_hook_cast() above, we set up a call to dlopen() on our hook library
-// (if HC_INSERT_LIBRARY has been set in the process).  Without our
-// intervention here, the kernel will always deny "vnode open" permission on
-// our hook library unless that permission has been given in the process's
-// sandbox rules (which it generally won't have been), and the call to
-// dlopen() will fail (with a Sandbox error message about denying
-// "file-read-data").  To get around this we hook mac_vnode_check_open() in
-// the kernel and grant FREAD-only permission on our hook library every time
-// the Sandbox kernel extension asks for it (if we're trying to load a hook
-// library in the process).
+// the module to be dlopened. In process_hook_cast() above, we set up a call
+// to dlopen() on our hook library (if HC_INSERT_LIBRARY has been set in the
+// process).  Without our intervention here, the kernel will always deny
+// "vnode open" permission on our hook library unless that permission has been
+// given in the process's sandbox rules (which it generally won't have been),
+// and the call to dlopen() will fail (with a Sandbox error message about
+// denying "file-read-data").  To get around this we hook
+// mac_vnode_check_open() in the kernel and grant "vnode open" permission on
+// our hook library every time the Sandbox kernel extension asks for it (if
+// we're trying to load a hook library in the process).
 
 extern "C" const char *vnode_getname(vnode_t vp);
 extern "C" void vnode_putname(const char *name);
 
-// Don't use IOMalloc() here.  Doing so apparently triggers intermittent
-// kernel panics in mac_vnode_check_open_hook() calling its original function.
-// Apple's documentation on IOMalloc() says it "may block and so should not be
-// called from interrupt level."  This may also be behind the trouble with
-// IOMalloc() in reset_hook(), add_patch_hook() and get_dynamic_caller()
-// above.
+// Don't use IOMalloc() here.  Apple's documentation says it "may block and
+// so should not be called from interrupt level."  This may be behind the
+// trouble with IOMalloc() in reset_hook(), add_patch_hook() and
+// get_dynamic_caller() above.
 bool get_vnode_path(struct vnode *vp, char *path, vm_size_t path_size)
 {
   if (!path || !path_size) {
@@ -10321,9 +10318,13 @@ void mac_vnode_check_open_hook(x86_saved_state_t *intr_state)
 
   bool skip_vnode_check = false;
   hook_t *cast_hookp = NULL;
-  if (!(acc_mode & FWRITE)) {
-    cast_hookp = find_cast_hook(proc_uniqueid(current_proc()));
-  }
+  // Don't change our behavior here according to the characteristics of
+  // acc_mode.  We used to call find_cast_hook() only if acc_mode didn't
+  // contain an FWRITE bit.  (In other words, we would never skip calls to the
+  // original function if write access was requested.)  But that confused
+  // calling code, and led to intermittent kernel panics dereferencing an
+  // invalid pointer on subsequent calls to the original function.
+  cast_hookp = find_cast_hook(proc_uniqueid(current_proc()));
   if (cast_hookp) {
     char vnode_path[MAXPATHLEN];
     if (get_vnode_path(vp, vnode_path, sizeof(vnode_path))) {
