@@ -1,3 +1,10 @@
+# What's New in Version 4.0.3
+
+It turns out my version 4.0.2 patch didn't fix one of the kernel
+panics it was supposed to. This version's patch really does fix it, as
+best I can tell after several days of testing. See
+[Issue #14](https://github.com/steven-michaud/HookCase/issues/14).
+
 # What's New in Version 4.0.2
 
 This version of HookCase fixes two intermittent kernel panics. For
