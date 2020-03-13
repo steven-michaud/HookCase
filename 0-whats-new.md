@@ -1,3 +1,15 @@
+# What's New in Version 4.0.4
+
+My version 4.0.3 patch didn't fix that kernel panic, either (the one
+in `vn_authorize_open_existing()`). Now I really think I've found the
+problem -- one that dates back to the earliest HookCase release. It's
+only by chance that it didn't become visible earlier. I've done a week
+of hard testing without seeing any more kernel panics. For more
+information see
+[Really really fix kernel panic reported at issue #14](https://github.com/steven-michaud/HookCase/commit/8cf8a444aacea7c1cd752f09407224458cf190b6)
+and
+[Issue #14](https://github.com/steven-michaud/HookCase/issues/14).
+
 # What's New in Version 4.0.3
 
 It turns out my version 4.0.2 patch didn't fix one of the kernel
