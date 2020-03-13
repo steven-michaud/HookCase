@@ -567,12 +567,12 @@ Entry(user_trampoline)
 5: mov     %r15, %rdi
 
    push    %r15
-   sti
    mov     %rsp, %r15                /* Apparently the Apple ABI requires */
    and     $0xFFFFFFFFFFFFFFF0, %rsp /* a 16-byte aligned stack on calls. */
+   sti
    call    *%rax
-   mov     %r15, %rsp
    cli
+   mov     %r15, %rsp
    pop     %r15
 
 6: jmp     EXT(teardown)
@@ -604,13 +604,19 @@ Entry(kernel_trampoline)
 
 5: mov     %r15, %rdi
 
-   sti
    cld
 
    push    %r15
    mov     %rsp, %r15                /* Apparently the Apple ABI requires */
    and     $0xFFFFFFFFFFFFFFF0, %rsp /* a 16-byte aligned stack on calls. */
+   /* We need to invoke 'cli' after 'call *%rax', as we have always done in
+    * 'user_trampoline'.  Not doing so causes intermittent failures restoring
+    * registers in 'kernel_teardown'.  One case of this was issue #14, where
+    * R15 was restored incorrectly and caused kernel panics.
+    */
+   sti
    call    *%rax
+   cli
    mov     %r15, %rsp
    pop     %r15
 

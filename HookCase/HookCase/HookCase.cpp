@@ -10318,13 +10318,9 @@ void mac_vnode_check_open_hook(x86_saved_state_t *intr_state)
 
   bool skip_vnode_check = false;
   hook_t *cast_hookp = NULL;
-  // Don't change our behavior here according to the characteristics of
-  // acc_mode.  We used to call find_cast_hook() only if acc_mode didn't
-  // contain an FWRITE bit.  (In other words, we would never skip calls to the
-  // original function if write access was requested.)  But that confused
-  // calling code, and led to intermittent kernel panics dereferencing an
-  // invalid pointer on subsequent calls to the original function.
-  cast_hookp = find_cast_hook(proc_uniqueid(current_proc()));
+  if (!(acc_mode & FWRITE)) {
+    cast_hookp = find_cast_hook(proc_uniqueid(current_proc()));
+  }
   if (cast_hookp) {
     char vnode_path[MAXPATHLEN];
     if (get_vnode_path(vp, vnode_path, sizeof(vnode_path))) {
