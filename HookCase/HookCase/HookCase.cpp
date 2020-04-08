@@ -6663,14 +6663,14 @@ typedef struct _hook {
 // contain more than one with the same hook_addr.
 typedef struct _hook_thread_info {
   LIST_ENTRY(_hook_thread_info) list_entry;
-  // A thread on which one or more patch hooks has recently executed.  Each
-  // value of hook_thread is unique in this list, per process.
+  // A thread on which one or more patch hooks has recently executed.  The
+  // same hook_thread may appear more than once in this list per process, if
+  // two or more hooks are on a single thread's stack.  But each combination
+  // of hook_thread and patch_hook->hook_addr is unique per process.
   thread_t hook_thread;
-  // The patch hook that has executed most recently on hook_thread. This
-  // value will remain current (and correct) while patch_hook->hook_addr is
-  // running, if hook_thread is the current thread.  The same patch_hook may
-  // appear more than once in this list, per process.  This will happen if
-  // patch_hook runs on different threads.
+  // The patch hook that has executed most recently on hook_thread.  The same
+  // patch_hook may appear more than once in this list, per process.  This
+  // will happen if patch_hook runs on different threads.
   hook_t *patch_hook;
   uint64_t unique_pid;
 } hook_thread_info_t;
@@ -6947,15 +6947,18 @@ hook_t *find_hook(user_addr_t orig_addr, uint64_t unique_pid)
   return hookp;
 }
 
-hook_thread_info_t *find_hook_thread_info(thread_t thread, uint64_t unique_pid)
+hook_thread_info_t *find_hook_thread_info(thread_t thread, uint64_t unique_pid,
+                                          user_addr_t hook_addr)
 {
-  if (!check_init_locks() || !thread || !unique_pid) {
+  if (!check_init_locks() || !thread || !unique_pid || !hook_addr) {
     return NULL;
   }
   all_hooks_lock();
   hook_thread_info_t *infop = NULL;
   LIST_FOREACH(infop, &g_all_hook_thread_infos, list_entry) {
-    if ((infop->hook_thread == thread) && (infop->unique_pid == unique_pid)) {
+    if ((infop->hook_thread == thread) && (infop->unique_pid == unique_pid) &&
+        infop->patch_hook && (infop->patch_hook->hook_addr == hook_addr))
+    {
       break;
     }
   }
@@ -6963,16 +6966,19 @@ hook_thread_info_t *find_hook_thread_info(thread_t thread, uint64_t unique_pid)
   return infop;
 }
 
-hook_t *find_hook_by_thread(thread_t thread, uint64_t unique_pid)
+hook_t *find_hook_by_thread_and_hook_addr(thread_t thread, uint64_t unique_pid,
+                                          user_addr_t hook_addr)
 {
-  if (!check_init_locks() || !thread || !unique_pid) {
+  if (!check_init_locks() || !thread || !unique_pid || !hook_addr) {
     return NULL;
   }
   all_hooks_lock();
   hook_t *hookp = NULL;
   hook_thread_info_t *infop = NULL;
   LIST_FOREACH(infop, &g_all_hook_thread_infos, list_entry) {
-    if ((infop->hook_thread == thread) && (infop->unique_pid == unique_pid)) {
+    if ((infop->hook_thread == thread) && (infop->unique_pid == unique_pid) &&
+        infop->patch_hook && (infop->patch_hook->hook_addr == hook_addr))
+    {
       hookp = infop->patch_hook;
       break;
     }
@@ -9103,15 +9109,8 @@ void process_hook_set(hook_t *hookp, x86_saved_state_t *intr_state)
 
   // Keep g_all_hook_thread_infos up to date.
   hook_thread_info_t *infop =
-    find_hook_thread_info(current_thread(), unique_pid);
-  if (infop) {
-    if (check_init_locks()) {
-      all_hooks_lock();
-      infop->patch_hook = hookp;
-      infop->unique_pid = unique_pid;
-      all_hooks_unlock();
-    }
-  } else {
+    find_hook_thread_info(current_thread(), unique_pid, hookp->hook_addr);
+  if (!infop) {
     infop = create_hook_thread_info();
     if (infop) {
       infop->patch_hook = hookp;
@@ -9194,10 +9193,10 @@ void reset_hook(x86_saved_state_t *intr_state)
     return;
   }
 
-  hook_t *hookp = find_hook_by_thread(current_thread(), proc_uniqueid(proc));
-  if (!hookp || (hookp->hook_addr != hook_addr) ||
-      (hookp->state != hook_state_unset))
-  {
+  hook_t *hookp =
+    find_hook_by_thread_and_hook_addr(current_thread(), proc_uniqueid(proc),
+                                      hook_addr);
+  if (!hookp || (hookp->state != hook_state_unset)) {
     vm_map_deallocate(proc_map);
     return;
   }
@@ -9449,8 +9448,10 @@ void get_dynamic_caller(x86_saved_state_t *intr_state)
     return;
   }
 
-  hook_t *hookp = find_hook_by_thread(current_thread(), proc_uniqueid(proc));
-  if (!hookp || !hookp->is_dynamic_hook || (hookp->hook_addr != hook_addr)) {
+  hook_t *hookp =
+    find_hook_by_thread_and_hook_addr(current_thread(), proc_uniqueid(proc),
+                                      hook_addr);
+  if (!hookp || !hookp->is_dynamic_hook) {
     vm_map_deallocate(proc_map);
     return;
   }

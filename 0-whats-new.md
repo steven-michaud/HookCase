@@ -1,3 +1,11 @@
+# What's New in Version 4.0.5
+
+This version of HookCase fixes a bug which caused some patch hooks not
+to work properly. If the original function didn't have a standard
+prologue, the hook's call to `reset_hook()` would fail and the hook
+would only be called once. For more information see
+[Issue #17](https://github.com/steven-michaud/HookCase/issues/17)
+
 # What's New in Version 4.0.4
 
 My version 4.0.3 patch didn't fix that kernel panic, either (the one
