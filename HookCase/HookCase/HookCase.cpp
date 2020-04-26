@@ -130,6 +130,11 @@
 #include <i386/cpuid.h>
 #include <i386/proc_reg.h>
 
+#include <libkern/c++/OSNumber.h>
+#include <libkern/c++/OSString.h>
+#include <libkern/c++/OSArray.h>
+#include <libkern/c++/OSDictionary.h>
+#include <libkern/c++/OSSerialize.h>
 #include <IOKit/IOLib.h>
 
 #include "HookCase.h"
@@ -476,32 +481,57 @@ bool find_kernel_header()
   return true;
 }
 
-// The running kernel contains a valid symbol table.  We can use this to find
-// the address of any "external" kernel symbol, including those considered
-// "private".  'symbol' should be exactly what's listed in the symbol table,
-// including the "extra" leading underscore.
-void *kernel_dlsym(const char *symbol)
+// Fill the whole structure with 0xFF to indicate that it hasn't yet been
+// initialized.
+typedef struct _symbol_table_info {
+  vm_offset_t symbolTableOffset;
+  vm_offset_t stringTableOffset;
+  uint32_t symbols_index;
+  uint32_t symbols_count;
+} symbol_table_info_t;
+
+void *kernel_module_dlsym(struct mach_header_64 *header, const char *symbol,
+                          symbol_table_info_t *info)
 {
-  if (!find_kernel_header()) {
+  if (!header || !symbol) {
     return NULL;
   }
 
-  static bool found_symbol_table = false;
+  // Sanity check
+  if (!pmap_find_phys(kernel_pmap, (addr64_t) header)) {
+    return NULL;
+  }
+  if ((header->magic != MH_MAGIC_64) ||
+      (header->cputype != CPU_TYPE_X86_64) ||
+      (header->cpusubtype != CPU_SUBTYPE_I386_ALL) ||
+      ((header->filetype != MH_EXECUTE) &&
+       (header->filetype != MH_KEXT_BUNDLE)) ||
+      ((header->flags & MH_NOUNDEFS) == 0))
+  {
+    return NULL;
+  }
 
-  static vm_offset_t symbolTableOffset = 0;
-  static vm_offset_t stringTableOffset = 0;
-  static uint32_t symbols_index = 0;
-  static uint32_t symbols_count = 0;
+  vm_offset_t symbolTableOffset = 0;
+  vm_offset_t stringTableOffset = 0;
+  uint32_t symbols_index = 0;
+  uint32_t symbols_count = 0;
+  uint32_t all_symbols_count = 0;
 
-  // Find the symbol table
-  if (!found_symbol_table) {
+  // Find the symbol table, if need be
+  if (info && info->symbolTableOffset != -1L) {
+    symbolTableOffset = info->symbolTableOffset;
+    stringTableOffset = info->stringTableOffset;
+    symbols_index = info->symbols_index;
+    symbols_count = info->symbols_count;
+  } else {
     vm_offset_t linkedit_fileoff_increment = 0;
+    bool found_symbol_table = false;
     bool found_linkedit_segment = false;
     bool found_symtab_segment = false;
     bool found_dysymtab_segment = false;
-    uint32_t num_commands = g_kernel_header->ncmds;
+    uint32_t num_commands = header->ncmds;
     const struct load_command *load_command = (struct load_command *)
-      ((vm_offset_t)g_kernel_header + sizeof(struct mach_header_64));
+      ((vm_offset_t)header + sizeof(struct mach_header_64));
     uint32_t i;
     for (i = 1; i <= num_commands; ++i) {
       uint32_t cmd = load_command->cmd;
@@ -526,6 +556,7 @@ void *kernel_dlsym(const char *symbol)
             (struct symtab_command *) load_command;
           symbolTableOffset = command->symoff + linkedit_fileoff_increment;
           stringTableOffset = command->stroff + linkedit_fileoff_increment;
+          all_symbols_count = command->nsyms;
           found_symtab_segment = true;
           break;
         }
@@ -535,8 +566,16 @@ void *kernel_dlsym(const char *symbol)
           }
           struct dysymtab_command *command =
             (struct dysymtab_command *) load_command;
-          symbols_index = command->iextdefsym;
-          symbols_count = symbols_index + command->nextdefsym;
+          // It seems that either LC_SYMTAB's nsyms will be set or LC_DSYMTAB's
+          // iextdefsym and nextdefsym, but not both.  Loaded kexts use nsyms,
+          // but the kernel itself uses iextdefsym and nextdefsym.
+          if (all_symbols_count) {
+            symbols_index = 0;
+            symbols_count = all_symbols_count;
+          } else {
+            symbols_index = command->iextdefsym;
+            symbols_count = symbols_index + command->nextdefsym;
+          }
           found_dysymtab_segment = true;
           break;
         }
@@ -557,8 +596,22 @@ void *kernel_dlsym(const char *symbol)
     if (!found_symbol_table) {
       return NULL;
     }
+    if (info) {
+      info->symbolTableOffset = symbolTableOffset;
+      info->stringTableOffset = stringTableOffset;
+      info->symbols_index = symbols_index;
+      info->symbols_count = symbols_count;
+    }
   }
 
+  // If we're in a kernel extension, the symbol and string tables won't be
+  // accessible unless the "keepsyms=1" kernel boot arg has been specified.
+  // Use this check to fail gracefully in this situation.
+  if (!pmap_find_phys(kernel_pmap, (addr64_t) symbolTableOffset) ||
+      !pmap_find_phys(kernel_pmap, (addr64_t) stringTableOffset))
+  {
+    return NULL;
+  }
   // Search the symbol table
   uint32_t i;
   for (i = symbols_index; i < symbols_count; ++i) {
@@ -581,6 +634,100 @@ void *kernel_dlsym(const char *symbol)
   }
 
   return NULL;
+}
+
+// The running kernel contains a valid symbol table.  We can use this to find
+// the address of any "external" kernel symbol, including those considered
+// "private".  'symbol' should be exactly what's listed in the symbol table,
+// including the "extra" leading underscore.
+void *kernel_dlsym(const char *symbol)
+{
+  if (!find_kernel_header()) {
+    return NULL;
+  }
+
+  static symbol_table_info_t kernel_symbol_info;
+  static bool found_symbol_table = false;
+  if (!found_symbol_table) {
+    memset((void *) &kernel_symbol_info, 0xFF, sizeof(kernel_symbol_info));
+  }
+
+  void *retval =
+    kernel_module_dlsym(g_kernel_header, symbol, &kernel_symbol_info);
+
+  if (kernel_symbol_info.symbolTableOffset != -1L) {
+    found_symbol_table = true;
+  }
+
+  return retval;
+}
+
+typedef OSDictionary *(*OSKext_copyLoadedKextInfo_t)(OSArray *kextIdentifiers,
+                                              OSArray *infoKeys);
+static OSKext_copyLoadedKextInfo_t OSKext_copyLoadedKextInfo = NULL;
+
+#define kOSBundleLoadAddressKey "OSBundleLoadAddress"
+
+// Loaded kernel extensions also contain valid symbol tables.  But unless the
+// "keepsyms=1" kernel boot arg has been specified, they have been made
+// inaccessible in OSKext::jettisonLinkeditSegment().
+void *kext_dlsym(const char *bundle_id, const char *symbol)
+{
+  if (!OSKext_copyLoadedKextInfo) {
+    OSKext_copyLoadedKextInfo = (OSKext_copyLoadedKextInfo_t)
+      kernel_dlsym("__ZN6OSKext18copyLoadedKextInfoEP7OSArrayS1_");
+    if (!OSKext_copyLoadedKextInfo) {
+      return NULL;
+    }
+  }
+
+  if (!bundle_id || !symbol) {
+    return NULL;
+  }
+
+  const OSString *id_string = OSString::withCString(bundle_id);
+  if (!id_string) {
+    return NULL;
+  }
+  OSArray *id_array =
+    OSArray::withObjects((const OSObject **) &id_string, 1, 0);
+  if (!id_array) {
+    id_string->release();
+    return NULL;
+  }
+  OSDictionary *kext_info =
+    OSDynamicCast(OSDictionary, OSKext_copyLoadedKextInfo(id_array, 0));
+  if (!kext_info) {
+    id_string->release();
+    id_array->release();
+    return NULL;
+  }
+  OSNumber *load_address =
+    OSDynamicCast(OSNumber, kext_info->getObject(kOSBundleLoadAddressKey));
+  if (!load_address) {
+    OSDictionary *more_kext_info =
+      OSDynamicCast(OSDictionary, kext_info->getObject(bundle_id));
+    kext_info = more_kext_info;
+    if (kext_info) {
+      load_address =
+        OSDynamicCast(OSNumber, kext_info->getObject(kOSBundleLoadAddressKey));
+    }
+  }
+  if (!load_address) {
+    id_string->release();
+    id_array->release();
+    return NULL;
+  }
+
+  struct mach_header_64 *kext_header = (struct mach_header_64 *)
+    (load_address->unsigned64BitValue() + g_kernel_slide);
+
+  void *retval = kernel_module_dlsym(kext_header, symbol, NULL);
+
+  id_string->release();
+  id_array->release();
+
+  return retval;
 }
 
 // The system call table (aka the sysent table) is used by the kernel to
@@ -855,7 +1002,10 @@ vm_page_t *g_vm_page_array_ending_addr = NULL;
 // Kernel private globals (end)
 
 // From the xnu kernel's osfmk/mach/vm_types.h
-typedef uint8_t vm_tag_t;
+typedef uint16_t vm_tag_t;
+
+// From the xnu kernel's osfmk/mach/vm_statistics.h
+#define VM_KERN_MEMORY_NONE 0
 
 // From the xnu kernel's osfmk/mach/thread_status.h
 typedef natural_t *thread_state_t; /* Variable-length array */
@@ -900,6 +1050,7 @@ typedef kern_return_t (*vm_fault_t)(vm_map_t map,
                                     vm_map_offset_t vaddr,
                                     vm_prot_t fault_type,
                                     boolean_t change_wiring,
+                                    vm_tag_t wire_tag,
                                     int interruptible,
                                     pmap_t pmap,
                                     vm_map_offset_t pmap_addr);
@@ -4573,7 +4724,8 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
   // to remedy some kind of race condition -- without it we sometimes panic
   // with a write-protect GPF.
   kern_return_t rv =
-    vm_fault(proc_map, dest_rounded, new_prot, false, THREAD_UNINT, NULL, 0);
+    vm_fault(proc_map, dest_rounded, new_prot, false,
+             VM_KERN_MEMORY_NONE, THREAD_UNINT, NULL, 0);
   if (rv == KERN_SUCCESS) {
     vm_map_t oldmap = vm_map_switch(proc_map);
     rv = copyout(source, dest, len);
