@@ -558,21 +558,25 @@ void *kernel_module_dlsym(struct mach_header_64 *header, const char *symbol,
           stringTableOffset = command->stroff + linkedit_fileoff_increment;
           all_symbols_count = command->nsyms;
           found_symtab_segment = true;
+          // It seems that either LC_SYMTAB's nsyms will be set or LC_DSYMTAB's
+          // iextdefsym and nextdefsym, but not both. Loaded kexts use nsyms,
+          // but the kernel itself uses iextdefsym and nextdefsym. If nsyms is
+          // set, LC_DYSYMTAB is no longer needed. And as of the macOS 10.15.5
+          // supplemental update it's absent altogether in kexts.
+          if (all_symbols_count) {
+            symbols_index = 0;
+            symbols_count = all_symbols_count;
+            found_dysymtab_segment = true;
+          }
           break;
         }
         case LC_DYSYMTAB: {
           if (!found_linkedit_segment) {
             return NULL;
           }
-          struct dysymtab_command *command =
-            (struct dysymtab_command *) load_command;
-          // It seems that either LC_SYMTAB's nsyms will be set or LC_DSYMTAB's
-          // iextdefsym and nextdefsym, but not both.  Loaded kexts use nsyms,
-          // but the kernel itself uses iextdefsym and nextdefsym.
-          if (all_symbols_count) {
-            symbols_index = 0;
-            symbols_count = all_symbols_count;
-          } else {
+          if (!all_symbols_count) {
+            struct dysymtab_command *command =
+              (struct dysymtab_command *) load_command;
             symbols_index = command->iextdefsym;
             symbols_count = symbols_index + command->nextdefsym;
           }
