@@ -73,15 +73,12 @@ bool IsMainThread()
   return (!gMainThreadID || (gMainThreadID == pthread_self()));
 }
 
-void CreateGlobalSymbolicator();
-
 bool sGlobalInitDone = false;
 
 void basic_init()
 {
   if (!sGlobalInitDone) {
     gMainThreadID = pthread_self();
-    CreateGlobalSymbolicator();
     sGlobalInitDone = true;
   }
 }
@@ -1583,6 +1580,8 @@ void PrintStackTrace()
   if (!CanUseCF()) {
     return;
   }
+
+  CreateGlobalSymbolicator();
 
   void **addresses = (void **) calloc(STACK_MAX, sizeof(void *));
   if (!addresses) {

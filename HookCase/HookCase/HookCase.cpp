@@ -6831,6 +6831,14 @@ typedef struct _hook_thread_info {
   uint64_t unique_pid;
 } hook_thread_info_t;
 
+typedef struct _kern_hook {
+  LIST_ENTRY(_kern_hook) list_entry;
+  vm_offset_t orig_addr;
+  vm_offset_t hook_addr;
+  vm_offset_t caller_addr;
+  uint32_t orig_begin;
+} kern_hook_t;
+
 #define CALL_ORIG_FUNC_SIZE 0x20
 #define MAX_CALL_ORIG_FUNCS 128 // PAGE_SIZE / CALL_ORIG_FUNC_SIZE
 
@@ -6876,6 +6884,8 @@ typedef struct _hook_thread_info {
 
 // unsigned char[] = {0xcd, HC_INT5} when stored in little endian format
 #define HC_INT5_OPCODE_SHORT ((HC_INT5 << 8) + 0xcd)
+
+#define HC_INT_OPCODE_BYTE 0xcd
 
 // xor   %rax, %rax
 // ret
@@ -6942,16 +6952,93 @@ const char *g_call_orig_func_64bit =
 const char *g_call_orig_func_32bit =
   "55 89 E5 E8 00 00 00 00 58 8D 80 F8 0F 00 00 8B 00 83 C0 03 FF E0 ";
 
+bool hook_kern_method(vm_offset_t method, uint32_t *method_begin,
+                      uint16_t intr_opcode)
+{
+  if (!method || !method_begin) {
+    return false;
+  }
+  if ((intr_opcode & 0xff) != HC_INT_OPCODE_BYTE) {
+    return false;
+  }
+
+  *method_begin = 0;
+
+  uint32_t *target = (uint32_t *) method;
+  *method_begin = target[0];
+
+  bool retval = true;
+
+  uint32_t new_begin = *method_begin;
+  new_begin &= 0xffff0000;
+  new_begin |= intr_opcode;
+
+  boolean_t org_int_level = ml_set_interrupts_enabled(false);
+  disable_preemption();
+  uintptr_t org_cr0 = get_cr0();
+  set_cr0(org_cr0 & ~CR0_WP);
+
+  if (!OSCompareAndSwap(*method_begin, new_begin, target)) {
+    *method_begin = 0;
+    retval = false;
+  }
+
+  set_cr0(org_cr0);
+  enable_preemption();
+  ml_set_interrupts_enabled(org_int_level);
+
+  return retval;
+}
+
+bool unhook_kern_method(vm_offset_t method, uint32_t method_begin)
+{
+  if (!method || !method_begin) {
+    return false;
+  }
+
+  // If method is/was in a kernel extension, it might have been unloaded.
+  if (!pmap_find_phys(kernel_pmap, method)) {
+    return false;
+  }
+
+  bool retval = true;
+
+  uint32_t *target = (uint32_t *) method;
+  uint32_t current_value = target[0];
+  if ((current_value & 0xff) != HC_INT_OPCODE_BYTE) {
+    return false;
+  }
+
+  boolean_t org_int_level = ml_set_interrupts_enabled(false);
+  disable_preemption();
+  uintptr_t org_cr0 = get_cr0();
+  set_cr0(org_cr0 & ~CR0_WP);
+
+  if (!OSCompareAndSwap(current_value, method_begin, target)) {
+    retval = false;
+  }
+
+  set_cr0(org_cr0);
+  enable_preemption();
+  ml_set_interrupts_enabled(org_int_level);
+
+  return retval;
+}
+
 bool g_locks_inited = false;
 
 lck_grp_attr_t *all_hooks_grp_attr = NULL;
 lck_grp_t *all_hooks_grp = NULL;
 lck_attr_t *all_hooks_attr = NULL;
-lck_mtx_t *all_hooks_mlock = NULL;
+lck_rw_t *all_hooks_mlock = NULL;
 LIST_HEAD(hook_list, _hook);
 struct hook_list g_all_hooks;
 LIST_HEAD(hook_thread_info_list, _hook_thread_info);
 struct hook_thread_info_list g_all_hook_thread_infos;
+
+LIST_HEAD(kern_hook_list, _kern_hook);
+struct kern_hook_list g_all_kern_hooks;
+lck_rw_t *all_kern_hooks_mlock = NULL;
 
 bool check_init_locks()
 {
@@ -6973,8 +7060,14 @@ bool check_init_locks()
   if (!all_hooks_attr) {
     return false;
   }
-  all_hooks_mlock = lck_mtx_alloc_init(all_hooks_grp, all_hooks_attr);
+  all_hooks_mlock = lck_rw_alloc_init(all_hooks_grp, all_hooks_attr);
   if (!all_hooks_mlock) {
+    return false;
+  }
+
+  LIST_INIT(&g_all_kern_hooks);
+  all_kern_hooks_mlock = lck_rw_alloc_init(all_hooks_grp, all_hooks_attr);
+  if (!all_kern_hooks_mlock) {
     return false;
   }
 
@@ -6982,17 +7075,59 @@ bool check_init_locks()
   return true;
 }
 
-void all_hooks_lock()
+void all_hooks_lock_write()
 {
   if (check_init_locks()) {
-    lck_mtx_lock(all_hooks_mlock);
+    lck_rw_lock_exclusive(all_hooks_mlock);
   }
 }
 
-void all_hooks_unlock()
+void all_hooks_unlock_write()
 {
   if (check_init_locks()) {
-    lck_mtx_unlock(all_hooks_mlock);
+    lck_rw_unlock_exclusive(all_hooks_mlock);
+  }
+}
+
+void all_hooks_lock_read()
+{
+  if (check_init_locks()) {
+    lck_rw_lock_shared(all_hooks_mlock);
+  }
+}
+
+void all_hooks_unlock_read()
+{
+  if (check_init_locks()) {
+    lck_rw_unlock_shared(all_hooks_mlock);
+  }
+}
+
+void all_kern_hooks_lock_write()
+{
+  if (check_init_locks()) {
+    lck_rw_lock_exclusive(all_kern_hooks_mlock);
+  }
+}
+
+void all_kern_hooks_unlock_write()
+{
+  if (check_init_locks()) {
+    lck_rw_unlock_exclusive(all_kern_hooks_mlock);
+  }
+}
+
+void all_kern_hooks_lock_read()
+{
+  if (check_init_locks()) {
+    lck_rw_lock_shared(all_kern_hooks_mlock);
+  }
+}
+
+void all_kern_hooks_unlock_read()
+{
+  if (check_init_locks()) {
+    lck_rw_unlock_shared(all_kern_hooks_mlock);
   }
 }
 
@@ -7020,9 +7155,9 @@ void add_hook(hook_t *hookp)
   if (!hookp || !check_init_locks()) {
     return;
   }
-  all_hooks_lock();
+  all_hooks_lock_write();
   LIST_INSERT_HEAD(&g_all_hooks, hookp, list_entry);
-  all_hooks_unlock();
+  all_hooks_unlock_write();
 }
 
 void add_hook_thread_info(hook_thread_info_t *infop)
@@ -7030,9 +7165,9 @@ void add_hook_thread_info(hook_thread_info_t *infop)
   if (!infop || !check_init_locks()) {
     return;
   }
-  all_hooks_lock();
+  all_hooks_lock_write();
   LIST_INSERT_HEAD(&g_all_hook_thread_infos, infop, list_entry);
-  all_hooks_unlock();
+  all_hooks_unlock_write();
 }
 
 void free_hook(hook_t *hookp)
@@ -7068,10 +7203,10 @@ void remove_hook(hook_t *hookp)
   if (!hookp || !check_init_locks()) {
     return;
   }
-  all_hooks_lock();
+  all_hooks_lock_write();
   LIST_REMOVE(hookp, list_entry);
   free_hook(hookp);
-  all_hooks_unlock();
+  all_hooks_unlock_write();
 }
 
 void remove_hook_thread_info(hook_thread_info_t *infop)
@@ -7079,10 +7214,10 @@ void remove_hook_thread_info(hook_thread_info_t *infop)
   if (!infop || !check_init_locks()) {
     return;
   }
-  all_hooks_lock();
+  all_hooks_lock_write();
   LIST_REMOVE(infop, list_entry);
   free_hook_thread_info(infop);
-  all_hooks_unlock();
+  all_hooks_unlock_write();
 }
 
 hook_t *find_hook(user_addr_t orig_addr, uint64_t unique_pid)
@@ -7090,7 +7225,7 @@ hook_t *find_hook(user_addr_t orig_addr, uint64_t unique_pid)
   if (!check_init_locks() || !orig_addr || !unique_pid) {
     return NULL;
   }
-  all_hooks_lock();
+  all_hooks_lock_read();
   hook_t *hookp = NULL;
   LIST_FOREACH(hookp, &g_all_hooks, list_entry) {
     if ((hookp->orig_addr == orig_addr) &&
@@ -7099,7 +7234,7 @@ hook_t *find_hook(user_addr_t orig_addr, uint64_t unique_pid)
       break;
     }
   }
-  all_hooks_unlock();
+  all_hooks_unlock_read();
   return hookp;
 }
 
@@ -7109,7 +7244,7 @@ hook_thread_info_t *find_hook_thread_info(thread_t thread, uint64_t unique_pid,
   if (!check_init_locks() || !thread || !unique_pid || !hook_addr) {
     return NULL;
   }
-  all_hooks_lock();
+  all_hooks_lock_read();
   hook_thread_info_t *infop = NULL;
   LIST_FOREACH(infop, &g_all_hook_thread_infos, list_entry) {
     if ((infop->hook_thread == thread) && (infop->unique_pid == unique_pid) &&
@@ -7118,7 +7253,7 @@ hook_thread_info_t *find_hook_thread_info(thread_t thread, uint64_t unique_pid,
       break;
     }
   }
-  all_hooks_unlock();
+  all_hooks_unlock_read();
   return infop;
 }
 
@@ -7128,7 +7263,7 @@ hook_t *find_hook_by_thread_and_hook_addr(thread_t thread, uint64_t unique_pid,
   if (!check_init_locks() || !thread || !unique_pid || !hook_addr) {
     return NULL;
   }
-  all_hooks_lock();
+  all_hooks_lock_read();
   hook_t *hookp = NULL;
   hook_thread_info_t *infop = NULL;
   LIST_FOREACH(infop, &g_all_hook_thread_infos, list_entry) {
@@ -7139,7 +7274,7 @@ hook_t *find_hook_by_thread_and_hook_addr(thread_t thread, uint64_t unique_pid,
       break;
     }
   }
-  all_hooks_unlock();
+  all_hooks_unlock_read();
   return hookp;
 }
 
@@ -7152,7 +7287,7 @@ bool hook_exists_with_hook_addr(user_addr_t hook_addr, uint64_t unique_pid)
   if (!check_init_locks() || !hook_addr || !unique_pid) {
     return false;
   }
-  all_hooks_lock();
+  all_hooks_lock_read();
   bool retval = false;
   hook_t *hookp = NULL;
   LIST_FOREACH(hookp, &g_all_hooks, list_entry) {
@@ -7163,7 +7298,7 @@ bool hook_exists_with_hook_addr(user_addr_t hook_addr, uint64_t unique_pid)
       break;
     }
   }
-  all_hooks_unlock();
+  all_hooks_unlock_read();
   return retval;
 }
 
@@ -7172,14 +7307,14 @@ hook_t *find_hook_with_add_image_func(uint64_t unique_pid)
   if (!check_init_locks() || !unique_pid) {
     return NULL;
   }
-  all_hooks_lock();
+  all_hooks_lock_read();
   hook_t *hookp = NULL;
   LIST_FOREACH(hookp, &g_all_hooks, list_entry) {
     if ((hookp->unique_pid == unique_pid) && hookp->add_image_func_addr) {
       break;
     }
   }
-  all_hooks_unlock();
+  all_hooks_unlock_read();
   return hookp;
 }
 
@@ -7188,14 +7323,14 @@ hook_t *find_cast_hook(uint64_t unique_pid)
   if (!check_init_locks() || !unique_pid) {
     return NULL;
   }
-  all_hooks_lock();
+  all_hooks_lock_read();
   hook_t *hookp = NULL;
   LIST_FOREACH(hookp, &g_all_hooks, list_entry) {
     if ((hookp->unique_pid == unique_pid) && hookp->is_cast_hook) {
       break;
     }
   }
-  all_hooks_unlock();
+  all_hooks_unlock_read();
   return hookp;
 }
 
@@ -7204,7 +7339,7 @@ void remove_process_hooks(uint64_t unique_pid)
   if (!check_init_locks() || !unique_pid) {
     return;
   }
-  all_hooks_lock();
+  all_hooks_lock_write();
   hook_thread_info_t *infop = NULL;
   hook_thread_info_t *tmp_infop = NULL;
   LIST_FOREACH_SAFE(infop, &g_all_hook_thread_infos, list_entry, tmp_infop) {
@@ -7221,7 +7356,7 @@ void remove_process_hooks(uint64_t unique_pid)
       free_hook(hookp);
     }
   }
-  all_hooks_unlock();
+  all_hooks_unlock_write();
 }
 
 bool process_has_hooks(uint64_t unique_pid)
@@ -7230,7 +7365,7 @@ bool process_has_hooks(uint64_t unique_pid)
     return false;
   }
   bool retval = false;
-  all_hooks_lock();
+  all_hooks_lock_read();
   hook_t *hookp = NULL;
   LIST_FOREACH(hookp, &g_all_hooks, list_entry) {
     if (hookp->unique_pid == unique_pid) {
@@ -7238,7 +7373,7 @@ bool process_has_hooks(uint64_t unique_pid)
       break;
     }
   }
-  all_hooks_unlock();
+  all_hooks_unlock_read();
   return retval;
 }
 
@@ -7251,7 +7386,7 @@ void remove_zombie_hooks()
   if (!check_init_locks()) {
     return;
   }
-  all_hooks_lock();
+  all_hooks_lock_write();
   hook_t *hookp = NULL;
   hook_t *tmp_hookp = NULL;
   LIST_FOREACH_SAFE(hookp, &g_all_hooks, list_entry, tmp_hookp) {
@@ -7261,9 +7396,92 @@ void remove_zombie_hooks()
       free_hook(hookp);
     }
   }
-  all_hooks_unlock();
+  all_hooks_unlock_write();
 }
 #endif
+
+kern_hook_t *create_kern_hook()
+{
+  kern_hook_t *retval = (kern_hook_t *)
+    IOMalloc(sizeof(kern_hook_t));
+  if (retval) {
+    bzero(retval, sizeof(kern_hook_t));
+  }
+  return retval;
+}
+
+void add_kern_hook(kern_hook_t *kern_hookp)
+{
+  if (!kern_hookp || !check_init_locks()) {
+    return;
+  }
+  all_kern_hooks_lock_write();
+  LIST_INSERT_HEAD(&g_all_kern_hooks, kern_hookp, list_entry);
+  all_kern_hooks_unlock_write();
+}
+
+void free_kern_hook(kern_hook_t *kern_hookp)
+{
+  if (!kern_hookp) {
+    return;
+  }
+  IOFree(kern_hookp, sizeof(kern_hook_t));
+}
+
+kern_hook_t *find_kern_hook(vm_offset_t orig_addr)
+{
+  if (!check_init_locks() || !orig_addr) {
+    return NULL;
+  }
+  all_kern_hooks_lock_read();
+  kern_hook_t *kern_hookp = NULL;
+  LIST_FOREACH(kern_hookp, &g_all_kern_hooks, list_entry) {
+    if (kern_hookp->orig_addr == orig_addr) {
+      break;
+    }
+  }
+  all_kern_hooks_unlock_read();
+  return kern_hookp;
+}
+
+bool set_kern_hook(vm_offset_t orig_addr, vm_offset_t hook_addr,
+                   vm_offset_t caller_addr)
+{
+  if (!orig_addr || !hook_addr || !caller_addr) {
+    return false;
+  }
+
+  if (find_kern_hook(orig_addr)) {
+    return false;
+  }
+
+  kern_hook_t *kern_hookp = create_kern_hook();
+  if (!kern_hookp) {
+    return false;
+  }
+
+  uint32_t orig_begin = 0;
+  if (!hook_kern_method(orig_addr, &orig_begin, HC_INT1_OPCODE_SHORT)) {
+    free_kern_hook(kern_hookp);
+    return false;
+  }
+
+  kern_hookp->orig_addr = orig_addr;
+  kern_hookp->hook_addr = hook_addr;
+  kern_hookp->caller_addr = caller_addr;
+  kern_hookp->orig_begin = orig_begin;
+  add_kern_hook(kern_hookp);
+
+  return true;
+}
+
+void unset_kern_hook(kern_hook_t *kern_hookp)
+{
+  if (!kern_hookp) {
+    return;
+  }
+  unhook_kern_method(kern_hookp->orig_addr, kern_hookp->orig_begin);
+}
 
 void destroy_locks()
 {
@@ -7271,9 +7489,15 @@ void destroy_locks()
     return;
   }
 
-  if (all_hooks_mlock && all_hooks_grp) {
-    lck_mtx_free(all_hooks_mlock, all_hooks_grp);
-    all_hooks_mlock = NULL;
+  if (all_hooks_grp) {
+    if (all_hooks_mlock) {
+      lck_rw_free(all_hooks_mlock, all_hooks_grp);
+      all_hooks_mlock = NULL;
+    }
+    if (all_kern_hooks_mlock) {
+      lck_rw_free(all_kern_hooks_mlock, all_hooks_grp);
+      all_kern_hooks_mlock = NULL;
+    }
   }
   if (all_hooks_attr) {
     lck_attr_free(all_hooks_attr);
@@ -7296,7 +7520,7 @@ void destroy_all_hooks()
   if (!check_init_locks()) {
     return;
   }
-  all_hooks_lock();
+  all_hooks_lock_write();
   hook_thread_info_t *infop = NULL;
   hook_thread_info_t *tmp_infop = NULL;
   LIST_FOREACH_SAFE(infop, &g_all_hook_thread_infos, list_entry, tmp_infop) {
@@ -7309,8 +7533,29 @@ void destroy_all_hooks()
     LIST_REMOVE(hookp, list_entry);
     free_hook(hookp);
   }
-  all_hooks_unlock();
+  all_hooks_unlock_write();
+}
 
+void destroy_all_kern_hooks()
+{
+  if (!check_init_locks()) {
+    return;
+  }
+  all_kern_hooks_lock_write();
+  kern_hook_t *kern_hookp = NULL;
+  kern_hook_t *tmp_kern_hookp = NULL;
+  LIST_FOREACH_SAFE(kern_hookp, &g_all_kern_hooks, list_entry, tmp_kern_hookp) {
+    LIST_REMOVE(kern_hookp, list_entry);
+    unset_kern_hook(kern_hookp);
+    free_kern_hook(kern_hookp);
+  }
+  all_kern_hooks_unlock_write();
+}
+
+void destroy_all_lists()
+{
+  destroy_all_hooks();
+  destroy_all_kern_hooks();
   destroy_locks();
 }
 
@@ -7338,6 +7583,24 @@ void unlock_hook(IORecursiveLock *a_lock)
   if (a_lock && process_has_hooks(proc_uniqueid(current_proc()))) {
     IORecursiveLockUnlock(a_lock);
   }
+}
+
+typedef void
+(*hook_function)(x86_saved_state_t *intr_state, kern_hook_t *kern_hookp);
+
+void do_kern_hook(x86_saved_state_t *intr_state)
+{
+  vm_offset_t orig_addr = intr_state->ss_64.isf.rip - 2;
+  kern_hook_t *kern_hookp = find_kern_hook(orig_addr);
+  if (!kern_hookp || !kern_hookp->hook_addr || !kern_hookp->caller_addr) {
+    uint64_t return_address = *((uint64_t *)(intr_state->ss_64.isf.rsp));
+    intr_state->ss_64.isf.rsp += 8;
+    intr_state->ss_64.isf.rip = return_address;
+    return;
+  }
+
+  hook_function hook = (hook_function) kern_hookp->hook_addr;
+  hook(intr_state, kern_hookp);
 }
 
 // Check if 'proc' (or its XPC parent) has an HC_INSERT_LIBRARY, HC_NOKIDS or
@@ -9529,9 +9792,9 @@ void add_patch_hook(x86_saved_state_t *intr_state)
   // function can't be assigned more than one hook.
   if (orig_func_hook) {
     if (orig_func_hook->is_dynamic_hook && check_init_locks()) {
-      all_hooks_lock();
+      all_hooks_lock_write();
       orig_func_hook->hook_addr = hook_addr;
-      all_hooks_unlock();
+      all_hooks_unlock_write();
     }
     vm_map_deallocate(proc_map);
     return;
@@ -9931,7 +10194,11 @@ static thread_bootstrap_return_t thread_bootstrap_return = NULL;
 static thread_exception_return_t thread_exception_return = NULL;
 static dtrace_thread_bootstrap_t dtrace_thread_bootstrap = NULL;
 
-uint32_t thread_bootstrap_return_begin = 0;
+extern "C" void __attribute__ ((noinline))
+thread_exception_return_caller_dummy()
+{
+  printf("Not called!\n");
+}
 
 // thread_bootstrap_return() gets called whenever a thread is "continued" --
 // when it starts for the first time or restarts after haven been awoken.
@@ -9947,7 +10214,8 @@ uint32_t thread_bootstrap_return_begin = 0;
 // be) called from one of our other hooks (like hook_execve() and
 // hook_posix_spawn() above).  But, thanks to our checks in maybe_cast_hook(),
 // this isn't an absolute requirement.
-void thread_bootstrap_return_hook(x86_saved_state_t *intr_state)
+void thread_bootstrap_return_hook(x86_saved_state_t *intr_state,
+                                  kern_hook_t *kern_hookp)
 {
   // The original thread_bootstrap_return() calls dtrace_thread_bootstrap()
   // and falls through to thread_exception_return().
@@ -9982,10 +10250,6 @@ void thread_bootstrap_return_hook(x86_saved_state_t *intr_state)
 // to call the original method from our hook.
 bool hook_thread_bootstrap_return()
 {
-  if (thread_bootstrap_return_begin) {
-    return true;
-  }
-
   if (!thread_bootstrap_return) {
     thread_bootstrap_return = (thread_bootstrap_return_t)
       kernel_dlsym("_thread_bootstrap_return");
@@ -10017,64 +10281,13 @@ bool hook_thread_bootstrap_return()
     }
   }
 
-  bool retval = true;
-
-  uint32_t *target = (uint32_t *) thread_bootstrap_return;
-  thread_bootstrap_return_begin = target[0];
-
-  uint32_t new_begin = thread_bootstrap_return_begin;
-  new_begin &= 0xffff0000;
-  new_begin |= HC_INT1_OPCODE_SHORT;
-
-  boolean_t org_int_level = ml_set_interrupts_enabled(false);
-  disable_preemption();
-  uintptr_t org_cr0 = get_cr0();
-  set_cr0(org_cr0 & ~CR0_WP);
-
-  if (!OSCompareAndSwap(thread_bootstrap_return_begin, new_begin, target)) {
-    retval = false;
-  }
-
-  set_cr0(org_cr0);
-  enable_preemption();
-  ml_set_interrupts_enabled(org_int_level);
-
-  return retval;
-}
-
-bool unhook_thread_bootstrap_return()
-{
-  if (!thread_bootstrap_return_begin) {
-    return false;
-  }
-
-  bool retval = true;
-
-  uint32_t *target = (uint32_t *) thread_bootstrap_return;
-  uint32_t current_value = target[0];
-
-  boolean_t org_int_level = ml_set_interrupts_enabled(false);
-  disable_preemption();
-  uintptr_t org_cr0 = get_cr0();
-  set_cr0(org_cr0 & ~CR0_WP);
-
-  if (!OSCompareAndSwap(current_value, thread_bootstrap_return_begin, target)) {
-    retval = false;
-  }
-
-  set_cr0(org_cr0);
-  enable_preemption();
-  ml_set_interrupts_enabled(org_int_level);
-
-  thread_bootstrap_return_begin = 0;
-
-  return retval;
+  return set_kern_hook((vm_offset_t)thread_bootstrap_return,
+                       (vm_offset_t)thread_bootstrap_return_hook,
+                       (vm_offset_t)thread_exception_return_caller_dummy);
 }
 
 typedef void (*vm_page_validate_cs_t)(vm_page_t page);
 extern "C" vm_page_validate_cs_t vm_page_validate_cs = NULL;
-
-uint32_t vm_page_validate_cs_begin = 0;
 
 // Under circumstance that I haven't been able to figure out, we sometimes get
 // kernel panics in vm_page_validate_cs() with the message "page is slid", at
@@ -10088,7 +10301,8 @@ uint32_t vm_page_validate_cs_begin = 0;
 //
 // This bug appears to have been fixed in macOS 10.14 (Mojave).  So as of
 // Mojave we no longer need to use this hook.
-void vm_page_validate_cs_hook(x86_saved_state_t *intr_state)
+void vm_page_validate_cs_hook(x86_saved_state_t *intr_state,
+                              kern_hook_t *kern_hookp)
 {
   vm_page_t page = (vm_page_t) intr_state->ss_64.rdi;
 
@@ -10111,7 +10325,9 @@ void vm_page_validate_cs_hook(x86_saved_state_t *intr_state)
   }
 
   if (object_code_signed && !page_slid) {
-    vm_page_validate_cs_caller(page);
+    vm_page_validate_cs_t caller = (vm_page_validate_cs_t)
+      kern_hookp->caller_addr;
+    caller(page);
   } else {
     // The following line fixes a bug that can be reproduced as follows:
     // 1) Load HookCase.kext into the kernel.
@@ -10129,16 +10345,12 @@ void vm_page_validate_cs_hook(x86_saved_state_t *intr_state)
   intr_state->ss_64.isf.rip = return_address;
 }
 
-// Set an "int 0x31" breakpoint at the beginning of vm_page_validate_cs(),
+// Set an "int 0x30" breakpoint at the beginning of vm_page_validate_cs(),
 // which will trigger calls to vm_page_validate_cs_hook().  Because this
 // method has a standard C/C++ prologue, we can use a CALLER to call the
 // original method from the hook.  See CALLER in HookCase.s.
 bool hook_vm_page_validate_cs()
 {
-  if (vm_page_validate_cs_begin) {
-    return true;
-  }
-
   if (!vm_page_validate_cs) {
     vm_page_validate_cs = (vm_page_validate_cs_t)
       kernel_dlsym("_vm_page_validate_cs");
@@ -10147,58 +10359,9 @@ bool hook_vm_page_validate_cs()
     }
   }
 
-  bool retval = true;
-
-  uint32_t *target = (uint32_t *) vm_page_validate_cs;
-  vm_page_validate_cs_begin = target[0];
-
-  uint32_t new_begin = vm_page_validate_cs_begin;
-  new_begin &= 0xffff0000;
-  new_begin |= HC_INT2_OPCODE_SHORT;
-
-  boolean_t org_int_level = ml_set_interrupts_enabled(false);
-  disable_preemption();
-  uintptr_t org_cr0 = get_cr0();
-  set_cr0(org_cr0 & ~CR0_WP);
-
-  if (!OSCompareAndSwap(vm_page_validate_cs_begin, new_begin, target)) {
-    retval = false;
-  }
-
-  set_cr0(org_cr0);
-  enable_preemption();
-  ml_set_interrupts_enabled(org_int_level);
-
-  return retval;
-}
-
-bool unhook_vm_page_validate_cs()
-{
-  if (!vm_page_validate_cs_begin) {
-    return false;
-  }
-
-  bool retval = true;
-
-  uint32_t *target = (uint32_t *) vm_page_validate_cs;
-  uint32_t current_value = target[0];
-
-  boolean_t org_int_level = ml_set_interrupts_enabled(false);
-  disable_preemption();
-  uintptr_t org_cr0 = get_cr0();
-  set_cr0(org_cr0 & ~CR0_WP);
-
-  if (!OSCompareAndSwap(current_value, vm_page_validate_cs_begin, target)) {
-    retval = false;
-  }
-
-  set_cr0(org_cr0);
-  enable_preemption();
-  ml_set_interrupts_enabled(org_int_level);
-
-  vm_page_validate_cs_begin = 0;
-
-  return retval;
+  return set_kern_hook((vm_offset_t)vm_page_validate_cs,
+                       (vm_offset_t)vm_page_validate_cs_hook,
+                       (vm_offset_t)vm_page_validate_cs_caller);
 }
 
 typedef int (*mac_file_check_library_validation_t)(proc_t proc,
@@ -10208,8 +10371,6 @@ typedef int (*mac_file_check_library_validation_t)(proc_t proc,
                                                    size_t error_message_size);
 extern "C" mac_file_check_library_validation_t
   mac_file_check_library_validation = NULL;
-
-uint32_t mac_file_check_library_validation_begin = 0;
 
 // On macOS Sierra (as of macOS 10.12.4?) Apple started preventing unsigned
 // hook libraries (or those with non-Apple signatures) from being loaded into
@@ -10226,7 +10387,8 @@ uint32_t mac_file_check_library_validation_begin = 0;
 // prevent these checks from running on our hook libraries by hooking
 // mac_file_check_library_validation() and/or mac_file_check_mmap() in the
 // kernel.
-void mac_file_check_library_validation_hook(x86_saved_state_t *intr_state)
+void mac_file_check_library_validation_hook(x86_saved_state_t *intr_state,
+                                            kern_hook_t *kern_hookp)
 {
   proc_t proc = (proc_t) intr_state->ss_64.rdi;
   struct fileglob *fg = (struct fileglob *) intr_state->ss_64.rsi;
@@ -10236,10 +10398,9 @@ void mac_file_check_library_validation_hook(x86_saved_state_t *intr_state)
 
   int retval = 0;
   if (!process_has_hooks(proc_uniqueid(current_proc()))) {
-    retval =
-      mac_file_check_library_validation_caller(proc, fg, slice_offset,
-                                               error_message,
-                                               error_message_size);
+    mac_file_check_library_validation_t caller =
+      (mac_file_check_library_validation_t) kern_hookp->caller_addr;
+    retval = caller(proc, fg, slice_offset, error_message, error_message_size);
   }
   intr_state->ss_64.rax = retval;
 
@@ -10250,10 +10411,6 @@ void mac_file_check_library_validation_hook(x86_saved_state_t *intr_state)
 
 bool hook_mac_file_check_library_validation()
 {
-  if (mac_file_check_library_validation_begin) {
-    return true;
-  }
-
   if (!mac_file_check_library_validation) {
     mac_file_check_library_validation = (mac_file_check_library_validation_t)
       kernel_dlsym("_mac_file_check_library_validation");
@@ -10262,63 +10419,9 @@ bool hook_mac_file_check_library_validation()
     }
   }
 
-  bool retval = true;
-
-  uint32_t *target = (uint32_t *) mac_file_check_library_validation;
-  mac_file_check_library_validation_begin = target[0];
-
-  uint32_t new_begin = mac_file_check_library_validation_begin;
-  new_begin &= 0xffff0000;
-  new_begin |= HC_INT3_OPCODE_SHORT;
-
-  boolean_t org_int_level = ml_set_interrupts_enabled(false);
-  disable_preemption();
-  uintptr_t org_cr0 = get_cr0();
-  set_cr0(org_cr0 & ~CR0_WP);
-
-  if (!OSCompareAndSwap(mac_file_check_library_validation_begin,
-                        new_begin, target))
-  {
-    retval = false;
-  }
-
-  set_cr0(org_cr0);
-  enable_preemption();
-  ml_set_interrupts_enabled(org_int_level);
-
-  return retval;
-}
-
-bool unhook_mac_file_check_library_validation()
-{
-  if (!mac_file_check_library_validation_begin) {
-    return false;
-  }
-
-  bool retval = true;
-
-  uint32_t *target = (uint32_t *) mac_file_check_library_validation;
-  uint32_t current_value = target[0];
-
-  boolean_t org_int_level = ml_set_interrupts_enabled(false);
-  disable_preemption();
-  uintptr_t org_cr0 = get_cr0();
-  set_cr0(org_cr0 & ~CR0_WP);
-
-  if (!OSCompareAndSwap(current_value,
-                        mac_file_check_library_validation_begin,
-                        target))
-  {
-    retval = false;
-  }
-
-  set_cr0(org_cr0);
-  enable_preemption();
-  ml_set_interrupts_enabled(org_int_level);
-
-  mac_file_check_library_validation_begin = 0;
-
-  return retval;
+  return set_kern_hook((vm_offset_t)mac_file_check_library_validation,
+                       (vm_offset_t)mac_file_check_library_validation_hook,
+                       (vm_offset_t)mac_file_check_library_validation_caller);
 }
 
 typedef int (*mac_file_check_mmap_t)(struct ucred *cred, struct fileglob *fg,
@@ -10326,9 +10429,8 @@ typedef int (*mac_file_check_mmap_t)(struct ucred *cred, struct fileglob *fg,
                                      int *maxprot);
 extern "C" mac_file_check_mmap_t mac_file_check_mmap = NULL;
 
-uint32_t mac_file_check_mmap_begin = 0;
-
-void mac_file_check_mmap_hook(x86_saved_state_t *intr_state)
+void mac_file_check_mmap_hook(x86_saved_state_t *intr_state,
+                              kern_hook_t *kern_hookp)
 {
   struct ucred *cred = (struct ucred *) intr_state->ss_64.rdi;
   struct fileglob *fg = (struct fileglob *) intr_state->ss_64.rsi;
@@ -10339,8 +10441,9 @@ void mac_file_check_mmap_hook(x86_saved_state_t *intr_state)
 
   int retval = 0;
   if (!process_has_hooks(proc_uniqueid(current_proc()))) {
-    retval = mac_file_check_mmap_caller(cred, fg, prot, flags,
-                                        offset, maxprot);
+    mac_file_check_mmap_t caller =
+      (mac_file_check_mmap_t) kern_hookp->caller_addr;
+    retval = caller(cred, fg, prot, flags, offset, maxprot);
   }
   intr_state->ss_64.rax = retval;
 
@@ -10351,10 +10454,6 @@ void mac_file_check_mmap_hook(x86_saved_state_t *intr_state)
 
 bool hook_mac_file_check_mmap()
 {
-  if (mac_file_check_mmap_begin) {
-    return true;
-  }
-
   if (!mac_file_check_mmap) {
     mac_file_check_mmap = (mac_file_check_mmap_t)
       kernel_dlsym("_mac_file_check_mmap");
@@ -10363,58 +10462,9 @@ bool hook_mac_file_check_mmap()
     }
   }
 
-  bool retval = true;
-
-  uint32_t *target = (uint32_t *) mac_file_check_mmap;
-  mac_file_check_mmap_begin = target[0];
-
-  uint32_t new_begin = mac_file_check_mmap_begin;
-  new_begin &= 0xffff0000;
-  new_begin |= HC_INT4_OPCODE_SHORT;
-
-  boolean_t org_int_level = ml_set_interrupts_enabled(false);
-  disable_preemption();
-  uintptr_t org_cr0 = get_cr0();
-  set_cr0(org_cr0 & ~CR0_WP);
-
-  if (!OSCompareAndSwap(mac_file_check_mmap_begin, new_begin, target)) {
-    retval = false;
-  }
-
-  set_cr0(org_cr0);
-  enable_preemption();
-  ml_set_interrupts_enabled(org_int_level);
-
-  return retval;
-}
-
-bool unhook_mac_file_check_mmap()
-{
-  if (!mac_file_check_mmap_begin) {
-    return false;
-  }
-
-  bool retval = true;
-
-  uint32_t *target = (uint32_t *) mac_file_check_mmap;
-  uint32_t current_value = target[0];
-
-  boolean_t org_int_level = ml_set_interrupts_enabled(false);
-  disable_preemption();
-  uintptr_t org_cr0 = get_cr0();
-  set_cr0(org_cr0 & ~CR0_WP);
-
-  if (!OSCompareAndSwap(current_value, mac_file_check_mmap_begin, target)) {
-    retval = false;
-  }
-
-  set_cr0(org_cr0);
-  enable_preemption();
-  ml_set_interrupts_enabled(org_int_level);
-
-  mac_file_check_mmap_begin = 0;
-
-  return retval;
+  return set_kern_hook((vm_offset_t)mac_file_check_mmap,
+                       (vm_offset_t)mac_file_check_mmap_hook,
+                       (vm_offset_t)mac_file_check_mmap_caller);
 }
 
 // As of macOS Catalina (10.15), when filesystem protections are enabled (via
@@ -10465,9 +10515,8 @@ typedef int (*mac_vnode_check_open_t)(vfs_context_t ctx, struct vnode *vp, int a
 
 extern "C" mac_vnode_check_open_t mac_vnode_check_open = NULL;
 
-uint32_t mac_vnode_check_open_begin = 0;
-
-void mac_vnode_check_open_hook(x86_saved_state_t *intr_state)
+void mac_vnode_check_open_hook(x86_saved_state_t *intr_state,
+                               kern_hook_t *kern_hookp)
 {
   vfs_context_t ctx = (vfs_context_t) intr_state->ss_64.rdi;
   struct vnode *vp = (struct vnode *) intr_state->ss_64.rsi;
@@ -10488,7 +10537,9 @@ void mac_vnode_check_open_hook(x86_saved_state_t *intr_state)
 
   int retval = 0;
   if (!skip_vnode_check) {
-    retval = mac_vnode_check_open_caller(ctx, vp, acc_mode);
+    mac_vnode_check_open_t caller =
+      (mac_vnode_check_open_t) kern_hookp->caller_addr;
+    retval = caller(ctx, vp, acc_mode);
   }
   intr_state->ss_64.rax = retval;
 
@@ -10499,10 +10550,6 @@ void mac_vnode_check_open_hook(x86_saved_state_t *intr_state)
 
 bool hook_mac_vnode_check_open()
 {
-  if (mac_vnode_check_open_begin) {
-    return true;
-  }
-
   if (!mac_vnode_check_open) {
     mac_vnode_check_open = (mac_vnode_check_open_t)
       kernel_dlsym("_mac_vnode_check_open");
@@ -10511,58 +10558,9 @@ bool hook_mac_vnode_check_open()
     }
   }
 
-  bool retval = true;
-
-  uint32_t *target = (uint32_t *) mac_vnode_check_open;
-  mac_vnode_check_open_begin = target[0];
-
-  uint32_t new_begin = mac_vnode_check_open_begin;
-  new_begin &= 0xffff0000;
-  new_begin |= HC_INT5_OPCODE_SHORT;
-
-  boolean_t org_int_level = ml_set_interrupts_enabled(false);
-  disable_preemption();
-  uintptr_t org_cr0 = get_cr0();
-  set_cr0(org_cr0 & ~CR0_WP);
-
-  if (!OSCompareAndSwap(mac_vnode_check_open_begin, new_begin, target)) {
-    retval = false;
-  }
-
-  set_cr0(org_cr0);
-  enable_preemption();
-  ml_set_interrupts_enabled(org_int_level);
-
-  return retval;
-}
-
-bool unhook_mac_vnode_check_open()
-{
-  if (!mac_vnode_check_open_begin) {
-    return false;
-  }
-
-  bool retval = true;
-
-  uint32_t *target = (uint32_t *) mac_vnode_check_open;
-  uint32_t current_value = target[0];
-
-  boolean_t org_int_level = ml_set_interrupts_enabled(false);
-  disable_preemption();
-  uintptr_t org_cr0 = get_cr0();
-  set_cr0(org_cr0 & ~CR0_WP);
-
-  if (!OSCompareAndSwap(current_value, mac_vnode_check_open_begin, target)) {
-    retval = false;
-  }
-
-  set_cr0(org_cr0);
-  enable_preemption();
-  ml_set_interrupts_enabled(org_int_level);
-
-  mac_vnode_check_open_begin = 0;
-
-  return retval;
+  return set_kern_hook((vm_offset_t)mac_vnode_check_open,
+                       (vm_offset_t)mac_vnode_check_open_hook,
+                       (vm_offset_t)mac_vnode_check_open_caller);
 }
 
 boolean_t *g_no_shared_cr3_ptr = (boolean_t *) -1;
@@ -11323,11 +11321,7 @@ void remove_intr_handlers()
   if (!find_kernel_private_functions()) {
     return;
   }
-  unhook_thread_bootstrap_return();
-  unhook_mac_file_check_mmap();
-  unhook_mac_file_check_library_validation();
-  unhook_vm_page_validate_cs();
-  unhook_mac_vnode_check_open();
+  destroy_all_lists();
   remove_intr_handler(HC_INT1);
   remove_intr_handler(HC_INT2);
   remove_intr_handler(HC_INT3);
@@ -11363,27 +11357,7 @@ extern "C" void handle_user_hc_int5(x86_saved_state_t *intr_state)
 
 extern "C" void handle_kernel_hc_int1(x86_saved_state_t *intr_state)
 {
-  thread_bootstrap_return_hook(intr_state);
-}
-
-extern "C" void handle_kernel_hc_int2(x86_saved_state_t *intr_state)
-{
-  vm_page_validate_cs_hook(intr_state);
-}
-
-extern "C" void handle_kernel_hc_int3(x86_saved_state_t *intr_state)
-{
-  mac_file_check_library_validation_hook(intr_state);
-}
-
-extern "C" void handle_kernel_hc_int4(x86_saved_state_t *intr_state)
-{
-  mac_file_check_mmap_hook(intr_state);
-}
-
-extern "C" void handle_kernel_hc_int5(x86_saved_state_t *intr_state)
-{
-  mac_vnode_check_open_hook(intr_state);
+  do_kern_hook(intr_state);
 }
 
 extern "C" kern_return_t HookCase_start(kmod_info_t * ki, void *d);
@@ -11449,6 +11423,5 @@ kern_return_t HookCase_stop(kmod_info_t *ki, void *d)
 {
   remove_intr_handlers();
   remove_sysent_hooks();
-  destroy_all_hooks();
   return KERN_SUCCESS;
 }

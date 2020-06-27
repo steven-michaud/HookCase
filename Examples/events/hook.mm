@@ -69,15 +69,12 @@ bool IsMainThread()
   return (!gMainThreadID || (gMainThreadID == pthread_self()));
 }
 
-void CreateGlobalSymbolicator();
-
 bool sGlobalInitDone = false;
 
 void basic_init()
 {
   if (!sGlobalInitDone) {
     gMainThreadID = pthread_self();
-    CreateGlobalSymbolicator();
     sGlobalInitDone = true;
   }
 }
@@ -213,7 +210,6 @@ typedef struct _CSTypeRef {
 
 static CSTypeRef initializer = {0};
 
-void CreateGlobalSymbolicator();
 const char *GetOwnerName(void *address, CSTypeRef owner = initializer);
 const char *GetAddressString(void *address, CSTypeRef owner = initializer);
 void PrintAddress(void *address, CSTypeRef symbolicator = initializer);
@@ -1858,6 +1854,8 @@ void PrintStackTrace()
   if (!CanUseCF()) {
     return;
   }
+
+  CreateGlobalSymbolicator();
 
   void **addresses = (void **) calloc(STACK_MAX, sizeof(void *));
   if (!addresses) {

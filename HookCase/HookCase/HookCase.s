@@ -583,26 +583,10 @@ Entry(user_trampoline)
 Entry(kernel_trampoline)
    mov     R64_TRAPNO(%r15), %cx
    cmpw    $(HC_INT1), %cx
-   jne     1f
-   lea     EXT(handle_kernel_hc_int1)(%rip), %rax
-   jmp     5f
-1: cmpw    $(HC_INT2), %cx
    jne     2f
-   lea     EXT(handle_kernel_hc_int2)(%rip), %rax
-   jmp     5f
-2: cmpw    $(HC_INT3), %cx
-   jne     3f
-   lea     EXT(handle_kernel_hc_int3)(%rip), %rax
-   jmp     5f
-3: cmpw    $(HC_INT4), %cx
-   jne     4f
-   lea     EXT(handle_kernel_hc_int4)(%rip), %rax
-   jmp     5f
-4: cmpw    $(HC_INT5), %cx
-   jne     6f
-   lea     EXT(handle_kernel_hc_int5)(%rip), %rax
+   lea     EXT(handle_kernel_hc_int1)(%rip), %rax
 
-5: mov     %r15, %rdi
+1: mov     %r15, %rdi
 
    cld
 
@@ -620,7 +604,7 @@ Entry(kernel_trampoline)
    mov     %r15, %rsp
    pop     %r15
 
-6: jmp     EXT(kernel_teardown)
+2: jmp     EXT(kernel_teardown)
 
 /* Called with:
  *   R15 == x86_saved_state_t
