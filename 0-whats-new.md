@@ -138,16 +138,16 @@ instead of `int 0x22`, as follows:
 at a particular address in a given module.  This means that HookCase
 can now hook methods that aren't in their module's symbol table.  For
 more information see
-[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L873).
+[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L870).
 
-* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L8696) that
+* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L8963) that
 prevented interpose hooks from working outside the shared cache of
 system modules.
 
 * Version 2.0
-[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L10112)
+[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L10332)
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0
-[fixes a premature-release bug](Examples/events/hook.mm#L1339)
+[fixes a premature-release bug](Examples/events/hook.mm#L1340)
 in the "System Events" example's hook library.

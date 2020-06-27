@@ -23,7 +23,7 @@ kernel extensions whose `start()` method fails.
 
 Note that there's a workaround, which involves installing a serial
 port and using `kprintf()` to write to it.  For more information see
-[HookCase_start()](HookCase/HookCase/HookCase.cpp#L11388).
+[HookCase_start()](HookCase/HookCase/HookCase.cpp#L11366).
 
 The root of the problem is that the messages received by Apple's new
 logging subsystem no longer contain full strings.  Instead each
@@ -105,7 +105,7 @@ load a hook library.  Furthermore, logging doesn't work at all from
 `diagnosticd` (possibly because it controls the logging subsystem).
 So `diagnosticd-hook.dylib` writes all its output to a serial port.
 This is easiest to set up in a virtual machine.  For more information
-see [diagnosticd-hook.mm](Examples/kernel-logging/diagnosticd-hook.mm#L315).
+see [diagnosticd-hook.mm](Examples/kernel-logging/diagnosticd-hook.mm#L312).
 Note that user-mode code and the kernel can't both access the serial
 port at the same time.
 
