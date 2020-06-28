@@ -984,7 +984,14 @@ Hooked_CFRunLoopObserverCallBack(CFRunLoopObserverRef observer, CFRunLoopActivit
 {
   CFRunLoopObserverCallBack caller = (CFRunLoopObserverCallBack)
     get_dynamic_caller(reinterpret_cast<void*>(Hooked_CFRunLoopObserverCallBack));
-  caller(observer, activity, info);
+  // For some reason, 'info' is sometimes NULL here when we've hooked the
+  // callout function. We'll crash if we call the original function. This may
+  // be a timing problem, presumably caused by the fact that at least one of
+  // our callbacks ('caller's) doesn't have a standard prologue (which means
+  // that a lot of time is lost unsetting and resetting its breakpoint).
+  if (info != NULL) {
+    caller(observer, activity, info);
+  }
   LogWithFormat(true, "Hook.mm: CFRunLoopObserverCallBack(): observer \'%p\', activity \'0x%llx\', info \'%p\'",
                 observer, activity, info);
   // Not always required, but using it when not required does no harm.
