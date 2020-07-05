@@ -19,7 +19,7 @@ Nightly to see how it works. (Firefox and Chrome releases have their
 symbols stripped, but Firefox Nightlies don't. So stack traces of
 Firefox Nightlies contain much more information.)
 
-        HC_INSERT_LIBRARY=/full/path/to/hook.dylib /Applications/Firefox Nightly.app/Contents/MacOS/firefox
+        HC_INSERT_LIBRARY=/full/path/to/hook.dylib "/Applications/Firefox Nightly.app/Contents/MacOS/firefox"
 
 Firefox Nightlies are available for download
 [here](https://nightly.mozilla.org/).

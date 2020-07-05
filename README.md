@@ -16,7 +16,7 @@ be used with applications that have
 [entitlements](https://developer.apple.com/library/content/documentation/Miscellaneous/Reference/EntitlementKeyReference/Chapters/AboutEntitlements.html).
 HookCase runs on OS X 10.9 (Mavericks) through macOS 10.15 (Catalina).
 
-Steven Michaud, 10/2020
+Steven Michaud, 7/2020
 
 ## Table of Contents
 
