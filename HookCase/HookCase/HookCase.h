@@ -1,6 +1,6 @@
 /* The MIT License (MIT)
  *
- * Copyright (c) 2019 Steven Michaud
+ * Copyright (c) 2020 Steven Michaud
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -152,18 +152,32 @@ typedef enum {
 /*
  * Prior to version 2.1, HookCase used the interrupts from 0x20 through 0x23.
  * But this caused trouble with VMware Fusion running as host, so now we use
- * 0x30 through 0x33. The problem with VMware Fusion is reported at bug #5
+ * 0x30 through 0x35. The problem with VMware Fusion is reported at bug #5
  * (https://github.com/steven-michaud/HookCase/issues/5).
  */
 
-/* Define the interrupts that HookCase will use internally. */
+/* Define the interrupts that HookCase will use internally. Interrupts in the
+ * ranges 0x40 - 0x4F, 0x50 - 0x5F and 0xD0 - 0xDF are reserved for APIC
+ * interrupts (see osfmk/x86_64/idt_table.h and osfmk/i386/lapic.h). VMWare
+ * uses at least one interrupt in the range 0x20 - 0x2F.
+ */
 #define HC_INT1 0x30UL
 #define HC_INT2 0x31UL
 #define HC_INT3 0x32UL
 #define HC_INT4 0x33UL
 #define HC_INT5 0x34UL
+#define HC_INT6 0x35UL
 
 #ifndef __ASSEMBLER__
+
+/* From the xnu kernel's osfmk/i386/trap.h (begin) */
+
+#define T_PAGE_FAULT  14
+#define T_PF_PROT     0x1
+#define T_PF_WRITE    0x2
+#define T_PF_USER     0x4
+
+/* From the xnu kernel's osfmk/i386/trap.h (end) */
 
 /* From the xnu kernel's osfmk/i386/thread_status.h (begin) */
 
@@ -378,6 +392,7 @@ extern "C" void hc_int2_raw_handler(void);
 extern "C" void hc_int3_raw_handler(void);
 extern "C" void hc_int4_raw_handler(void);
 extern "C" void hc_int5_raw_handler(void);
+extern "C" void hc_int6_raw_handler(void);
 
 extern "C" void stub_handler(void);
 
@@ -410,6 +425,7 @@ extern "C" int mac_file_check_mmap_caller(struct ucred *cred, struct fileglob *f
                                           int prot, int flags, uint64_t offset,
                                           int *maxprot);
 extern "C" int mac_vnode_check_open_caller(vfs_context_t ctx, struct vnode *vp, int acc_mode);
+extern "C" void user_trap_caller(x86_saved_state_t *state);
 
 #endif /* #ifndef __ASSEMBLER__ */
 

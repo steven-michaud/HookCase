@@ -279,7 +279,7 @@ static void LogWithFormatV(bool decorate, const char *format, va_list args)
     vasprintf(&message, format, args);
   }
 
-  char *finished = (char *) calloc(strlen(message) + 1024, 1);
+  char *finished = (char *) calloc(strlen(message) + 1048, 1);
   char timestamp[30] = {0};
   if (CanUseCF()) {
     const time_t currentTime = time(NULL);
@@ -804,13 +804,16 @@ typedef struct _watcher_info {
 // a "page" of memory (usually 4096 bytes long). So calling config_watcher()
 // to set a "watchpoint" on a particular memory address actually ends up
 // setting a "watch range" on a particular page (block) of memory.
-bool config_watcher(void *watchpoint, watcher_info *info, bool set)
+bool config_watcher(void *watchpoint, watcher_info_t *info, bool set)
 {
   bool retval;
   __asm__ volatile("int %0" :: "N" (0x35));
   __asm__ volatile("movb %%al, %0" : "=r" (retval));
   return retval;
 }
+
+kern_return_t (*IOAccelContextGetSidebandBuffer_ptr)(CFTypeRef group, unsigned long *address,
+                                                     unsigned long *size) = NULL;
 
 class loadHandler
 {
@@ -826,6 +829,10 @@ loadHandler::loadHandler()
   LogWithFormat(true, "Hook.mm: loadHandler()");
   PrintStackTrace();
 #endif
+
+  IOAccelContextGetSidebandBuffer_ptr =
+    (kern_return_t (*)(CFTypeRef, unsigned long *, unsigned long *))
+    module_dlsym("IOAccelerator", "_IOAccelContextGetSidebandBuffer");
 }
 
 loadHandler::~loadHandler()
@@ -1007,6 +1014,104 @@ static int Hooked_interpose_example(char *arg1, int (*arg2)(char *))
 
 // Put other hooked methods and swizzled classes here
 
+watcher_info_t s_watcher_info = {0};
+
+// A trivial example of watchpoint use: It sets a watchpoint and triggers it.
+
+CFStringRef (*CFBundleGetIdentifier_caller)(CFBundleRef bundle) = NULL;
+
+static CFStringRef Hooked_CFBundleGetIdentifier(CFBundleRef bundle)
+{
+  CFStringRef retval = CFBundleGetIdentifier_caller(bundle);
+
+  if (CanUseCF()) {
+    unsigned char *pages = (unsigned char *) valloc(PAGE_SIZE);
+    if (pages) {
+      bzero(pages, PAGE_SIZE);
+      void *watchpoint = pages;
+      if (config_watcher(watchpoint, &s_watcher_info, true)) {
+        pages[0] = 1;
+        config_watcher(watchpoint, &s_watcher_info, false);
+        if (s_watcher_info.hit) {
+          pthread_t thread =
+            pthread_from_mach_thread_np(s_watcher_info.mach_thread);
+          char thread_name[PROC_PIDPATHINFO_MAXSIZE] = {0};
+          if (thread) {
+            pthread_getname_np(thread, thread_name, sizeof(thread_name) - 1);
+          }
+          LogWithFormat(true, "Hook.mm: CFBundleGetIdentifier(): returning %@, pages[0] 0x%x, watchpoint %p, hit 0x%llx, thread %s[%p], mach_thread 0x%x\n",
+                        retval, pages[0], watchpoint, s_watcher_info.hit, thread_name, thread, s_watcher_info.mach_thread);
+          PrintCallstack(s_watcher_info.callstack);
+        }
+      }
+      free(pages);
+    }
+  }
+
+  return retval;
+}
+
+// A more useful example of watchpoint use, but it only works on a system that
+// has graphics acceleration, and in an application that uses OpenGL (like
+// Firefox or Chrome, but not Safari). An IOAccelContext object's "sideband
+// buffer" contains "tokens" that are processed by calls to
+// IOAccelContextSubmitDataBuffersExt2() (in the IOAccelerator private
+// framework). (This is in turn called by gpusSubmitDataBuffers() in the
+// GPUSupport private framework.) This example sets a watchpoint on the
+// beginning of the sideband buffer just after every call to the hooked
+// function, then unsets it (and collects its information) just before every
+// call to the hooked function. This shows which functions write tokens to the
+// sideband buffer -- something that's otherwise quite difficult to find out.
+// A comprehensive investigation would involve creating a hook for each new
+// function we find writing to the sideband buffer, and setting a new
+// watchpoint in it to catch subsequent writes to the sideband buffer.
+
+unsigned long s_sideband_buffer_addr = 0;
+unsigned long s_sideband_buffer_size = 0;
+
+kern_return_t
+(*IOAccelContextSubmitDataBuffersExt2_caller)(CFTypeRef context, unsigned int arg1,
+                                              unsigned int *arg2, unsigned int *arg3,
+                                              unsigned int *arg4, unsigned int *arg5) = NULL;
+
+static kern_return_t
+Hooked_IOAccelContextSubmitDataBuffersExt2(CFTypeRef context, unsigned int arg1,
+                                           unsigned int *arg2, unsigned int *arg3,
+                                           unsigned int *arg4, unsigned int *arg5)
+{
+  void *watchpoint = NULL;
+  if (s_sideband_buffer_addr) {
+    watchpoint = (void *) s_sideband_buffer_addr;
+  }
+  if (watchpoint) {
+    config_watcher(watchpoint, &s_watcher_info, false);
+    if (s_watcher_info.hit) {
+      pthread_t thread =
+        pthread_from_mach_thread_np(s_watcher_info.mach_thread);
+      char thread_name[PROC_PIDPATHINFO_MAXSIZE] = {0};
+      if (thread) {
+        pthread_getname_np(thread, thread_name, sizeof(thread_name) - 1);
+      }
+      LogWithFormat(true, "Hook.mm: IOAccelContextSubmitDataBuffersExt2(): context %@, watchpoint %p, hit 0x%llx on thread %s[%p]",
+                    context, watchpoint, s_watcher_info.hit, thread_name, thread);
+      PrintCallstack(s_watcher_info.callstack);
+    }
+  }
+
+  kern_return_t retval =
+    IOAccelContextSubmitDataBuffersExt2_caller(context, arg1, arg2, arg3, arg4, arg5);
+
+  if (!s_sideband_buffer_addr) {
+    IOAccelContextGetSidebandBuffer_ptr(context, &s_sideband_buffer_addr,
+                                        &s_sideband_buffer_size);
+  }
+  if (watchpoint) {
+    config_watcher(watchpoint, &s_watcher_info, true);
+  }
+
+  return retval;
+}
+
 #pragma mark -
 
 typedef struct _hook_desc {
@@ -1038,6 +1143,9 @@ __attribute__((used)) static const hook_desc user_hooks[]
 {
   INTERPOSE_FUNCTION(NSPushAutoreleasePool),
   PATCH_FUNCTION(__CFInitialize, /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation),
+
+  //PATCH_FUNCTION(CFBundleGetIdentifier, /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation),
+  PATCH_FUNCTION(IOAccelContextSubmitDataBuffersExt2, /System/Library/PrivateFrameworks/IOAccelerator.framework/IOAccelerator),
 };
 
 // What follows are declarations of the CoreSymbolication APIs that we use to

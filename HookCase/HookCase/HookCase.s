@@ -1,6 +1,6 @@
 /* The MIT License (MIT)
  *
- * Copyright (c) 2019 Steven Michaud
+ * Copyright (c) 2020 Steven Michaud
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -22,12 +22,12 @@
  */
 
 /* This file mostly contains support for HookCase.kext's use of software
- * interrupts, including the raw handlers for interrupts HC_INT1, HC_INT2,
- * HC_INT3 and HC_INT4. This is modeled to some extent on code in the xnu
- * kernel's osfmk/x86_64/idt64.s, but is much simpler (since that code also
- * supports hardware interrupts and syscalls).  In both user mode and kernel
- * mode, we treat our software interrupts more like syscalls than like
- * interrupts.  So, for example, we don't change %gs:CPU_PREEMPTION_LEVEL or
+ * interrupts, including the raw handlers for interrupts HC_INT1 through
+ * HC_INT6. This is modeled to some extent on code in the xnu kernel's
+ * osfmk/x86_64/idt64.s, but is much simpler (since that code also supports
+ * hardware interrupts and syscalls).  In both user mode and kernel mode, we
+ * treat our software interrupts more like syscalls than like interrupts.
+ * So, for example, we don't change %gs:CPU_PREEMPTION_LEVEL or
  * %gs:CPU_INTERRUPT_LEVEL.
  *
  * There are also miscellaneous methods, callable from C/C++ code, that needed
@@ -547,24 +547,28 @@ Entry(user_trampoline)
    cmpw    $(HC_INT1), %cx
    jne     1f
    lea     EXT(handle_user_hc_int1)(%rip), %rax
-   jmp     5f
+   jmp     6f
 1: cmpw    $(HC_INT2), %cx
    jne     2f
    lea     EXT(handle_user_hc_int2)(%rip), %rax
-   jmp     5f
+   jmp     6f
 2: cmpw    $(HC_INT3), %cx
    jne     3f
    lea     EXT(handle_user_hc_int3)(%rip), %rax
-   jmp     5f
+   jmp     6f
 3: cmpw    $(HC_INT4), %cx
    jne     4f
    lea     EXT(handle_user_hc_int4)(%rip), %rax
-   jmp     5f
+   jmp     6f
 4: cmpw    $(HC_INT5), %cx
-   jne     6f
+   jne     5f
    lea     EXT(handle_user_hc_int5)(%rip), %rax
+   jmp     6f
+5: cmpw    $(HC_INT6), %cx
+   jne     7f
+   lea     EXT(handle_user_hc_int6)(%rip), %rax
 
-5: mov     %r15, %rdi
+6: mov     %r15, %rdi
 
    push    %r15
    mov     %rsp, %r15                /* Apparently the Apple ABI requires */
@@ -575,7 +579,7 @@ Entry(user_trampoline)
    mov     %r15, %rsp
    pop     %r15
 
-6: jmp     EXT(teardown)
+7: jmp     EXT(teardown)
 
 /* Calls one of our kernel interrupt handlers in HookCase.cpp.  Called with:
  *   R15 == x86_saved_state_t
@@ -610,11 +614,12 @@ Entry(kernel_trampoline)
  *   R15 == x86_saved_state_t
  */
 Entry(kernel_teardown)
-   /* IRETQ apparently doesn't restore RSP (and SS) when returning from intra-
-    * privilege-level interrupts (as we're doing here).  So if we want to
-    * apply changes we may have made to RSP in the x86_64_intr_stack_frame
-    * structure, we need to do it "by hand".  For this we sacrifice R10 and
-    * R11.  The C/C++ ABI doesn't require these registers be preserved across
+   /* IRETQ apparently doesn't restore RSP from the stack when returning from
+    * intra-privilege-level interrupts (as we're doing here). Instead it just
+    * seems to copy the original RSP from some other location. So if we want
+    * to apply changes we may have made to RSP in the x86_64_intr_stack_frame
+    * structure, we need to do it "by hand". For this we sacrifice R10 and
+    * R11. The C/C++ ABI doesn't require these registers be preserved across
     * function calls, and we don't need them for values returned from our
     * hooks.
     */
@@ -656,6 +661,9 @@ Entry(hc_int4_raw_handler)
 
 Entry(hc_int5_raw_handler)
    SETUP(HC_INT5)
+
+Entry(hc_int6_raw_handler)
+   SETUP(HC_INT6)
 
 /* In developer and debug kernels, the OSCompareAndSwap...() all enforce a
  * requirement that 'address' be 4-byte aligned.  But this is actually only
@@ -787,7 +795,11 @@ Entry(stub_handler)
    jne     5f
    pop     %rax
    jmp     EXT(hc_int5_raw_handler)
-5: pop     %rax
+5: cmpq    $(HC_INT6), %rax
+   jne     6f
+   pop     %rax
+   jmp     EXT(hc_int6_raw_handler)
+6: pop     %rax
    iretq
 
 /* CALLER is for kernel methods we've breakpointed which have a standard C/C++
@@ -814,4 +826,6 @@ CALLER(mac_file_check_library_validation)
 CALLER(mac_file_check_mmap)
 
 CALLER(mac_vnode_check_open)
+
+CALLER(user_trap)
 

@@ -21,6 +21,7 @@ partition that is by default mounted read-only. The effect of the
 reboot your computer.
 
 * [Dynamic patch hooks](examples-dynamic-hooking.md)
+* [Watchpoints](examples-watchpoints.md)
 * [xpcproxy trampoline](examples-xpcproxy.md)
 * [secinit subsystem](examples-secinit.md)
 * [System events](examples-events.md)

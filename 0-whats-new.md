@@ -1,3 +1,13 @@
+# What's New in Version 4.1
+
+This version of HookCase supports watchpoints. You can now set a
+watchpoint on a location in memory and gather information (including a
+stack trace) about the code that writes to that location.  For more
+information see
+[config_watcher() in the hook library template](HookLibraryTemplate/hook.mm#L793),
+[Hooked_watcher_example() in the hook library template](HookLibraryTemplate/hook.mm#L929)
+and [the watchpoints example](examples-watchpoints.md).
+
 # What's New in Version 4.0.5
 
 This version of HookCase fixes a bug which caused some patch hooks not
@@ -58,7 +68,7 @@ HookCase now supports dynamically adding patch hooks for raw function
 pointers. This is useful in hooks for methods that use callbacks --
 for example CFMachPortCreate() and CFRunLoopObserverCreate(). For more
 information see
-[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L834)
+[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L873)
 and [the dynamic patch hooks example](examples-dynamic-hooking.md).
 
 # What's New in Version 3.2.1
@@ -110,7 +120,7 @@ HookCase now supports macOS Mojave (10.14).
 
 But Mojave's Debug kernel is currently very flaky -- lots of panics,
 with and without HookCase.  So support for the Debug kernel
-[has been disabled](HookCase/HookCase/HookCase.cpp#L370), at least
+[has been disabled](HookCase/HookCase/HookCase.cpp#L371), at least
 temporarily.
 
 # What's New in Version 2.1
@@ -138,16 +148,16 @@ instead of `int 0x22`, as follows:
 at a particular address in a given module.  This means that HookCase
 can now hook methods that aren't in their module's symbol table.  For
 more information see
-[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L870).
+[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L912).
 
-* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L8963) that
+* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L9349) that
 prevented interpose hooks from working outside the shared cache of
 system modules.
 
 * Version 2.0
-[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L10332)
+[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L10830)
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0
-[fixes a premature-release bug](Examples/events/hook.mm#L1340)
+[fixes a premature-release bug](Examples/events/hook.mm#L1335)
 in the "System Events" example's hook library.

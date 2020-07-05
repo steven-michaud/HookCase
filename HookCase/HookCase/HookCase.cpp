@@ -1,6 +1,6 @@
 // The MIT License (MIT)
 //
-// Copyright (c) 2019 Steven Michaud
+// Copyright (c) 2020 Steven Michaud
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -70,11 +70,12 @@
 // Software interrupts are mostly not used on BSD-style operating systems like
 // macOS and OS X.  This can be seen from the contents of the xnu kernel's
 // osfmk/x86_64/idt_table.h.  The unused interrupts are marked there as
-// "INTERRUPT(0xNN)".  But note that the ranges 0xD0-0xFF and 0x50-0x5F are
-// reserved for APIC interrupts (see the xnu kernel's osfmk/i386/lapic.h).
-// So we're reasonably safe reserving the range 0x30-0x37 for our own use,
-// though we currently only use 0x30-0x34.  And aside from plenty of them
-// being available, there are other advantages to using interrupts as
+// "INTERRUPT(0xNN)".  (But note that the ranges 0xD0-0xFF, 0x50-0x5F and
+// 0x40-0x4F are reserved for APIC interrupts (see the xnu kernel's
+// osfmk/i386/lapic.h).  And VMWare uses at least one interrupt in the range
+// 0x20-0x2F.)  So we're reasonably safe reserving the range 0x30-0x37 for our
+// own use, though we currently only use 0x30-0x35.  And aside from plenty of
+// them being available, there are other advantages to using interrupts as
 // breakpoints:  They're short (they take up just two bytes of machine code),
 // but provide more information than other instructions of equal length (like
 // syscall, which doesn't have different "interrupt numbers").  Software
@@ -1074,6 +1075,11 @@ typedef kern_return_t (*vm_map_lookup_locked_t)(vm_map_t *var_map,
                                                 boolean_t *wired,
                                                 vm_object_fault_info_t fault_info,
                                                 vm_map_t *real_map);
+typedef kern_return_t (*vm_map_protect_t)(vm_map_t map,
+                                          vm_map_offset_t start,
+                                          vm_map_offset_t end,
+                                          vm_prot_t new_prot,
+                                          boolean_t set_max);
 typedef void (*pmap_protect_t)(pmap_t map,
                                vm_map_offset_t sva,
                                vm_map_offset_t eva,
@@ -1090,6 +1096,10 @@ typedef vm_page_t (*vm_page_lookup_t)(vm_object_t object,
 typedef void (*vm_object_lock_t)(vm_object_t object);
 typedef void (*pmap_sync_page_attributes_phys_t)(ppnum_t pa);
 typedef task_t (*get_threadtask_t)(thread_t th);
+typedef mach_port_name_t (*ipc_port_copyout_send_t)(ipc_port_t sright,
+                                                    ipc_space_t space);
+typedef ipc_space_t (*get_task_ipcspace_t)(task_t task);
+typedef ipc_port_t (*convert_thread_to_port_t)(thread_t thread);
 typedef void (*task_coalition_ids_t)(task_t task,
                                      uint64_t ids[2 /* COALITION_NUM_TYPES */]);
 typedef coalition_t (*coalition_find_by_id_t)(uint64_t coal_id);
@@ -1118,12 +1128,16 @@ static vm_map_page_mask_t vm_map_page_mask = NULL;
 static vm_map_page_size_t vm_map_page_size = NULL;
 static vm_map_lookup_entry_t vm_map_lookup_entry = NULL;
 static vm_map_lookup_locked_t vm_map_lookup_locked = NULL;
+static vm_map_protect_t vm_map_protect = NULL;
 static pmap_protect_t pmap_protect = NULL;
 static pmap_enter_t pmap_enter = NULL;
 static vm_page_lookup_t vm_page_lookup = NULL;
 static vm_object_lock_t vm_object_lock = NULL;
 static pmap_sync_page_attributes_phys_t pmap_sync_page_attributes_phys = NULL;
 static get_threadtask_t get_threadtask = NULL;
+static ipc_port_copyout_send_t ipc_port_copyout_send = NULL;
+static get_task_ipcspace_t get_task_ipcspace = NULL;
+static convert_thread_to_port_t convert_thread_to_port = NULL;
 // Only on ElCapitan and up (begin)
 static task_coalition_ids_t task_coalition_ids = NULL;
 static coalition_find_by_id_t coalition_find_by_id = NULL;
@@ -1314,6 +1328,13 @@ bool find_kernel_private_functions()
       return false;
     }
   }
+  if (!vm_map_protect) {
+    vm_map_protect = (vm_map_protect_t)
+      kernel_dlsym("_vm_map_protect");
+    if (!vm_map_protect) {
+      return false;
+    }
+  }
   if (!pmap_protect) {
     pmap_protect = (pmap_protect_t)
       kernel_dlsym("_pmap_protect");
@@ -1353,6 +1374,27 @@ bool find_kernel_private_functions()
     get_threadtask = (get_threadtask_t)
       kernel_dlsym("_get_threadtask");
     if (!get_threadtask) {
+      return false;
+    }
+  }
+  if (!ipc_port_copyout_send) {
+    ipc_port_copyout_send = (ipc_port_copyout_send_t)
+      kernel_dlsym("_ipc_port_copyout_send");
+    if (!ipc_port_copyout_send) {
+      return false;
+    }
+  }
+  if (!get_task_ipcspace) {
+    get_task_ipcspace = (get_task_ipcspace_t)
+      kernel_dlsym("_get_task_ipcspace");
+    if (!get_task_ipcspace) {
+      return false;
+    }
+  }
+  if (!convert_thread_to_port) {
+    convert_thread_to_port = (convert_thread_to_port_t)
+      kernel_dlsym("_convert_thread_to_port");
+    if (!convert_thread_to_port) {
       return false;
     }
   }
@@ -6839,6 +6881,32 @@ typedef struct _kern_hook {
   uint32_t orig_begin;
 } kern_hook_t;
 
+#define STACK_MAX 256
+typedef uint64_t callstack_t[STACK_MAX];
+
+typedef struct _watcher_info {
+  // Stack trace of the code running when the watchpoint is hit.
+  callstack_t callstack;
+  // Exact address hit (inside the watchpoint's address range).
+  uint64_t hit;
+  // User-land equivalent of the thread (kernel-mode thread_t object) running
+  // when the watchpoint is hit. Use pthread_from_mach_thread_np() to convert
+  // it to a pthread object.
+  uint32_t mach_thread;
+  // Needed to make structure size the same in 64bit and 32bit modes.
+  uint32_t pad;
+} watcher_info_t;
+
+typedef struct _watcher {
+  LIST_ENTRY(_watcher) list_entry;
+  vm_offset_t range_start;
+  vm_offset_t range_end;
+  vm_prot_t orig_prot;
+  uint64_t unique_pid;
+  watcher_info_t info;
+  user_addr_t info_addr;
+} watcher_t;
+
 #define CALL_ORIG_FUNC_SIZE 0x20
 #define MAX_CALL_ORIG_FUNCS 128 // PAGE_SIZE / CALL_ORIG_FUNC_SIZE
 
@@ -6884,6 +6952,9 @@ typedef struct _kern_hook {
 
 // unsigned char[] = {0xcd, HC_INT5} when stored in little endian format
 #define HC_INT5_OPCODE_SHORT ((HC_INT5 << 8) + 0xcd)
+
+// unsigned char[] = {0xcd, HC_INT6} when stored in little endian format
+#define HC_INT6_OPCODE_SHORT ((HC_INT6 << 8) + 0xcd)
 
 #define HC_INT_OPCODE_BYTE 0xcd
 
@@ -7025,6 +7096,57 @@ bool unhook_kern_method(vm_offset_t method, uint32_t method_begin)
   return retval;
 }
 
+void get_callstack(vm_map_t proc_map, x86_saved_state_t *intr_state,
+                   callstack_t callstack)
+{
+  if (!proc_map || !intr_state || !callstack) {
+    return;
+  }
+  bzero(callstack, sizeof(callstack_t));
+
+  user_addr_t frame;
+  user_addr_t caller;
+  size_t item_size;
+  if (intr_state->flavor == x86_SAVED_STATE64) {
+    frame = (user_addr_t) intr_state->ss_64.rbp;
+    caller = (user_addr_t) intr_state->ss_64.isf.rip;
+    item_size = sizeof(uint64_t);
+  } else { // flavor == x86_SAVED_STATE32
+    frame = (user_addr_t) intr_state->ss_32.ebp;
+    caller = (user_addr_t) intr_state->ss_32.eip;
+    item_size = sizeof(uint32_t);
+  }
+
+  int i;
+  for (i = 0; i < STACK_MAX; ++i) {
+    callstack[i] = caller;
+
+    if (!proc_copyin(proc_map, frame + item_size, &caller, item_size)) {
+      break;
+    }
+    user_addr_t caller_code;
+    if (!proc_copyin(proc_map, caller, &caller_code, sizeof(user_addr_t))) {
+      break;
+    }
+
+    if (!proc_copyin(proc_map, frame, &frame, item_size)) {
+      callstack[i] = caller;
+      break;
+    }
+    if (intr_state->flavor == x86_SAVED_STATE64) {
+      if (frame & 0xf) {        // 'frame' is unaligned
+        callstack[i] = caller;
+        break;
+      }
+    } else { // flavor == x86_SAVED_STATE32
+      if ((frame & 0xf) != 8) { // 'frame' is unaligned
+        callstack[i] = caller;
+        break;
+      }
+    }
+  }
+}
+
 bool g_locks_inited = false;
 
 lck_grp_attr_t *all_hooks_grp_attr = NULL;
@@ -7039,6 +7161,13 @@ struct hook_thread_info_list g_all_hook_thread_infos;
 LIST_HEAD(kern_hook_list, _kern_hook);
 struct kern_hook_list g_all_kern_hooks;
 lck_rw_t *all_kern_hooks_mlock = NULL;
+
+lck_grp_attr_t *all_watchers_grp_attr = NULL;
+lck_grp_t *all_watchers_grp = NULL;
+lck_attr_t *all_watchers_attr = NULL;
+lck_rw_t *all_watchers_mlock = NULL;
+LIST_HEAD(watcher_list, _watcher);
+struct watcher_list g_all_watchers;
 
 bool check_init_locks()
 {
@@ -7068,6 +7197,24 @@ bool check_init_locks()
   LIST_INIT(&g_all_kern_hooks);
   all_kern_hooks_mlock = lck_rw_alloc_init(all_hooks_grp, all_hooks_attr);
   if (!all_kern_hooks_mlock) {
+    return false;
+  }
+
+  LIST_INIT(&g_all_watchers);
+  all_watchers_grp_attr = lck_grp_attr_alloc_init();
+  if (!all_watchers_grp_attr) {
+    return false;
+  }
+  all_watchers_grp = lck_grp_alloc_init("watcher", all_watchers_grp_attr);
+  if (!all_watchers_grp) {
+    return false;
+  }
+  all_watchers_attr = lck_attr_alloc_init();
+  if (!all_watchers_attr) {
+    return false;
+  }
+  all_watchers_mlock = lck_rw_alloc_init(all_watchers_grp, all_watchers_attr);
+  if (!all_watchers_mlock) {
     return false;
   }
 
@@ -7128,6 +7275,34 @@ void all_kern_hooks_unlock_read()
 {
   if (check_init_locks()) {
     lck_rw_unlock_shared(all_kern_hooks_mlock);
+  }
+}
+
+void all_watchers_lock_write()
+{
+  if (check_init_locks()) {
+    lck_rw_lock_exclusive(all_watchers_mlock);
+  }
+}
+
+void all_watchers_unlock_write()
+{
+  if (check_init_locks()) {
+    lck_rw_unlock_exclusive(all_watchers_mlock);
+  }
+}
+
+void all_watchers_lock_read()
+{
+  if (check_init_locks()) {
+    lck_rw_lock_shared(all_watchers_mlock);
+  }
+}
+
+void all_watchers_unlock_read()
+{
+  if (check_init_locks()) {
+    lck_rw_unlock_shared(all_watchers_mlock);
   }
 }
 
@@ -7334,11 +7509,14 @@ hook_t *find_cast_hook(uint64_t unique_pid)
   return hookp;
 }
 
+void free_watcher(watcher_t *watcherp);
+
 void remove_process_hooks(uint64_t unique_pid)
 {
   if (!check_init_locks() || !unique_pid) {
     return;
   }
+
   all_hooks_lock_write();
   hook_thread_info_t *infop = NULL;
   hook_thread_info_t *tmp_infop = NULL;
@@ -7357,6 +7535,17 @@ void remove_process_hooks(uint64_t unique_pid)
     }
   }
   all_hooks_unlock_write();
+
+  all_watchers_lock_write();
+  watcher_t *watcherp = NULL;
+  watcher_t *tmp_watcherp = NULL;
+  LIST_FOREACH_SAFE(watcherp, &g_all_watchers, list_entry, tmp_watcherp) {
+    if (watcherp->unique_pid == unique_pid) {
+      LIST_REMOVE(watcherp, list_entry);
+      free_watcher(watcherp);
+    }
+  }
+  all_watchers_unlock_write();
 }
 
 bool process_has_hooks(uint64_t unique_pid)
@@ -7483,6 +7672,170 @@ void unset_kern_hook(kern_hook_t *kern_hookp)
   unhook_kern_method(kern_hookp->orig_addr, kern_hookp->orig_begin);
 }
 
+watcher_t *create_watcher()
+{
+  watcher_t *retval = (watcher_t *) IOMalloc(sizeof(watcher_t));
+  if (retval) {
+    bzero(retval, sizeof(watcher_t));
+  }
+  return retval;
+}
+
+void add_watcher(watcher_t *watcherp)
+{
+  if (!watcherp || !check_init_locks()) {
+    return;
+  }
+  all_watchers_lock_write();
+  LIST_INSERT_HEAD(&g_all_watchers, watcherp, list_entry);
+  all_watchers_unlock_write();
+}
+
+void free_watcher(watcher_t *watcherp)
+{
+  if (!watcherp) {
+    return;
+  }
+  IOFree(watcherp, sizeof(watcher_t));
+}
+
+void remove_watcher(watcher_t *watcherp)
+{
+  if (!watcherp || !check_init_locks()) {
+    return;
+  }
+  all_watchers_lock_write();
+  LIST_REMOVE(watcherp, list_entry);
+  free_watcher(watcherp);
+  all_watchers_unlock_write();
+}
+
+watcher_t *find_watcher(user_addr_t addr, uint64_t unique_pid)
+{
+  if (!check_init_locks() || !addr || !unique_pid) {
+    return NULL;
+  }
+  all_watchers_lock_read();
+  watcher_t *watcherp = NULL;
+  LIST_FOREACH(watcherp, &g_all_watchers, list_entry) {
+    if ((unique_pid == watcherp->unique_pid) &&
+        (addr >= watcherp->range_start) &&
+        (addr <= watcherp->range_end))
+    {
+      break;
+    }
+  }
+  all_watchers_unlock_read();
+  return watcherp;
+}
+
+bool set_watcher(vm_map_t proc_map, user_addr_t watchpoint,
+                 user_addr_t info_addr)
+{
+  if (!proc_map || !watchpoint) {
+    return false;
+  }
+
+  proc_t proc = current_proc();
+  uint64_t unique_pid = proc_uniqueid(proc);
+  pid_t pid = proc_pid(proc);
+  char procname[PATH_MAX];
+  proc_name(pid, procname, sizeof(procname));
+
+  unsigned int page_size = vm_map_page_size(proc_map);
+  user_addr_t range_start =
+    (watchpoint & ~((signed)(vm_map_page_mask(proc_map))));
+  user_addr_t range_end = range_start + page_size;
+
+  vm_region_submap_info_data_64_t info;
+  bzero(&info, sizeof(info));
+  if (vm_region_get_info(proc_map, range_start, &info) != KERN_SUCCESS) {
+    printf("HookCase(%s[%d]): set_watcher(): watchpoint address \'0x%llx\' is invalid\n",
+           procname, pid, watchpoint);
+    return false;
+  }
+  if (info.protection == VM_PROT_NONE) {
+    printf("HookCase(%s[%d]): set_watcher(): Unexpected VM_PROT_NONE permission at watchpoint \'0x%llx\'\n",
+           procname, pid, watchpoint);
+    return false;
+  }
+
+  bool have_old_watcher = true;
+  watcher_t *watcherp = find_watcher(watchpoint, unique_pid);
+  if (!watcherp) {
+    have_old_watcher = false;
+    watcherp = create_watcher();
+    if (!watcherp) {
+      return false;
+    }
+  }
+
+  vm_prot_t new_prot = (info.protection & ~VM_PROT_WRITE);
+  kern_return_t rv =
+    vm_map_protect(proc_map, range_start, range_end, new_prot, false);
+
+  if (rv != KERN_SUCCESS) {
+    printf("HookCase(%s[%d]): set_watcher(): vm_map_protect() failed at watchpoint \'0x%llx\' and returned 0x%x\n",
+           procname, pid, watchpoint, rv);
+    if (have_old_watcher) {
+      remove_watcher(watcherp);
+    } else {
+      free_watcher(watcherp);
+    }
+    return false;
+  }
+
+  if (have_old_watcher) {
+    all_watchers_lock_write();
+    bzero(&watcherp->info, sizeof(watcher_info_t));
+  }
+  watcherp->range_start = range_start;
+  watcherp->range_end = range_end;
+  watcherp->orig_prot = info.protection;
+  watcherp->unique_pid = unique_pid;
+  watcherp->info_addr = info_addr; // May be 0
+  if (have_old_watcher) {
+    all_watchers_unlock_write();
+  } else {
+    add_watcher(watcherp);
+  }
+
+  return true;
+}
+
+bool unset_watcher(vm_map_t proc_map, watcher_t *watcherp)
+{
+  if (!proc_map || !watcherp) {
+    return false;
+  }
+
+  unsigned int page_size = vm_map_page_size(proc_map);
+  if (page_size > PAGE_SIZE) {
+    page_size = PAGE_SIZE;
+  }
+  pid_t pid = proc_pid(current_proc());
+  char procname[PATH_MAX];
+  proc_name(pid, procname, sizeof(procname));
+
+  unsigned char range[page_size];
+  if (!proc_copyin(proc_map, watcherp->range_start, &range, page_size)) {
+    printf("HookCase(%s[%d]): unset_watcher(): range \'0x%lx\' to \'0x%lx\' is invalid\n",
+           procname, pid, watcherp->range_start, watcherp->range_end);
+    return false;
+  }
+
+  vm_prot_t new_prot = watcherp->orig_prot;
+  kern_return_t rv = vm_map_protect(proc_map, watcherp->range_start,
+                                    watcherp->range_end, new_prot, false);
+
+  if (rv != KERN_SUCCESS) {
+    printf("HookCase(%s[%d]): unset_watcher(): vm_map_protect() failed (\'0x%x\') at \'0x%lx\' with protection \'0x%x\'\n",
+           procname, pid, rv, watcherp->range_start, new_prot);
+  }
+
+  return (rv == KERN_SUCCESS);
+}
+
 void destroy_locks()
 {
   if (!g_locks_inited) {
@@ -7510,6 +7863,23 @@ void destroy_locks()
   if (all_hooks_grp_attr) {
     lck_grp_attr_free(all_hooks_grp_attr);
     all_hooks_grp_attr = NULL;
+  }
+
+  if (all_watchers_mlock && all_watchers_grp) {
+    lck_rw_free(all_watchers_mlock, all_watchers_grp);
+    all_watchers_mlock = NULL;
+  }
+  if (all_watchers_attr) {
+    lck_attr_free(all_watchers_attr);
+    all_watchers_attr = NULL;
+  }
+  if (all_watchers_grp) {
+    lck_grp_free(all_watchers_grp);
+    all_watchers_grp = NULL;
+  }
+  if (all_watchers_grp_attr) {
+    lck_grp_attr_free(all_watchers_grp_attr);
+    all_watchers_grp_attr = NULL;
   }
 
   g_locks_inited = false;
@@ -7552,10 +7922,26 @@ void destroy_all_kern_hooks()
   all_kern_hooks_unlock_write();
 }
 
+void destroy_all_watchers()
+{
+  if (!check_init_locks()) {
+    return;
+  }
+  all_watchers_lock_write();
+  watcher_t *watcherp = NULL;
+  watcher_t *tmp_watcherp = NULL;
+  LIST_FOREACH_SAFE(watcherp, &g_all_watchers, list_entry, tmp_watcherp) {
+    LIST_REMOVE(watcherp, list_entry);
+    free_watcher(watcherp);
+  }
+  all_watchers_unlock_write();
+}
+
 void destroy_all_lists()
 {
   destroy_all_hooks();
   destroy_all_kern_hooks();
+  destroy_all_watchers();
   destroy_locks();
 }
 
@@ -9890,6 +10276,118 @@ void get_dynamic_caller(x86_saved_state_t *intr_state)
   vm_map_deallocate(proc_map);
 }
 
+// A hook has called config_watcher() in a hook library. This method sets or
+// unsets a watchpoint (actually a "watch range" of page length). On unsetting
+// a watchpoint it also copies information back to 'info_addr' (in user-land)
+// on whatever code may have hit the watchpoint. It creates or destroys
+// "watcher" objects, which are used to keep track of various watchpoints and
+// collect information on whatever code "hits" them.
+void config_watcher(x86_saved_state_t *intr_state)
+{
+  if (!intr_state) {
+    return;
+  }
+
+  // Initialize "return value" to 'false'.
+  if (intr_state->flavor == x86_SAVED_STATE64) {
+    intr_state->ss_64.rax = 0;
+  } else { // flavor == x86_SAVED_STATE32
+    intr_state->ss_32.eax = 0;
+  }
+
+  proc_t proc = current_proc();
+  vm_map_t proc_map = task_map_for_proc(proc);
+  if (!proc_map) {
+    return;
+  }
+
+  wait_interrupt_t old_state = thread_interrupt_level(THREAD_UNINT);
+
+  user_addr_t watchpoint = 0;
+  user_addr_t info_addr = 0;
+  bool set = false;
+  if (intr_state->flavor == x86_SAVED_STATE64) {
+    watchpoint = intr_state->ss_64.rdi;
+    info_addr = intr_state->ss_64.rsi;
+    set = (bool) intr_state->ss_64.rdx;
+  } else { // flavor == x86_SAVED_STATE32
+    uint32_t stack[5];
+    bzero(stack, sizeof(stack));
+    proc_copyin(proc_map, intr_state->ss_32.ebp, stack, sizeof(stack));
+    watchpoint = stack[2];
+    info_addr = stack[3];
+    set = stack[4];
+  }
+
+  uint64_t unique_pid = proc_uniqueid(proc);
+  pid_t pid = proc_pid(proc);
+  char procname[PATH_MAX];
+  proc_name(pid, procname, sizeof(procname));
+
+  bool bad_info_addr = true;
+  watcher_info_t user_watcher_info;
+  if (info_addr) {
+    if (proc_copyin(proc_map, info_addr, &user_watcher_info,
+                    sizeof(watcher_info_t)))
+    {
+      bad_info_addr = false;
+    }
+  }
+  if (bad_info_addr) {
+    printf("HookCase(%s[%d]): config_watcher(): \"info\" address \'0x%llx\' is invalid\n",
+           procname, pid, info_addr);
+    info_addr = 0;
+  }
+
+  bool retval = false;
+
+  if (watchpoint) {
+    if (set) {
+      retval = set_watcher(proc_map, watchpoint, info_addr);
+    } else {
+      watcher_t *watcherp = find_watcher(watchpoint, unique_pid);
+      if (watcherp) {
+        retval = unset_watcher(proc_map, watcherp);
+        if (retval) {
+          bool bad_watcherp_info_addr = true;
+          if (watcherp->info_addr) {
+            if (proc_copyin(proc_map, watcherp->info_addr, &user_watcher_info,
+                            sizeof(watcher_info_t)))
+            {
+              bad_watcherp_info_addr = false;
+            }
+          }
+
+          if ((info_addr != watcherp->info_addr) && !bad_info_addr) {
+            all_watchers_lock_write();
+            watcherp->info_addr = info_addr;
+            all_watchers_unlock_write();
+            bad_watcherp_info_addr = false;
+          }
+
+          if (!bad_watcherp_info_addr) {
+            retval = proc_copyout(proc_map, &watcherp->info,
+                                  watcherp->info_addr, sizeof(watcher_info_t));
+          } else {
+            retval = false;
+          }
+        }
+      }
+    }
+  }
+
+  thread_interrupt_level(old_state);
+
+  // Set "return value".
+  if (intr_state->flavor == x86_SAVED_STATE64) {
+    intr_state->ss_64.rax = retval;
+  } else { // flavor == x86_SAVED_STATE32
+    intr_state->ss_32.eax = retval;
+  }
+
+  vm_map_deallocate(proc_map);
+}
+
 typedef struct _posix_spawnattr *_posix_spawnattr_t;
 typedef struct _posix_spawn_file_actions *_posix_spawn_file_actions_t;
 typedef struct _posix_spawn_port_actions *_posix_spawn_port_actions_t;
@@ -10563,6 +11061,94 @@ bool hook_mac_vnode_check_open()
                        (vm_offset_t)mac_vnode_check_open_caller);
 }
 
+typedef void (*user_trap_t)(x86_saved_state_t *state);
+
+user_trap_t user_trap = NULL;
+
+void user_trap_hook(x86_saved_state_t *intr_state, kern_hook_t *hookp)
+{
+  x86_saved_state_t *state = (x86_saved_state_t *) intr_state->ss_64.rdi;
+
+  int type = 0;
+  int code = 0;
+  user_addr_t cr2 = 0;
+  if (state->flavor == x86_SAVED_STATE64) {
+    type = state->ss_64.isf.trapno;
+    code = (int) (state->ss_64.isf.err & 0xffff);
+    cr2 = state->ss_64.cr2;
+  } else { // flavor == x86_SAVED_STATE32
+    type = state->ss_32.trapno;
+    code = (state->ss_32.err & 0xffff);
+    cr2 = (user_addr_t) state->ss_32.cr2;
+  }
+
+  // Check to see if our fault was triggered by hitting a watchpoint. If so,
+  // unset the watchpoint and store information on the code that hit it. For
+  // reasons that aren't completely clear, when we unset a watchpoint we
+  // must still fall through to the original user_trap() method. Returning
+  // early produces very bad results.
+  if ((type == T_PAGE_FAULT) &&
+      (code & (T_PF_WRITE | T_PF_USER)))
+  {
+    wait_interrupt_t old_state = thread_interrupt_level(THREAD_UNINT);
+
+    proc_t proc = current_proc();
+    uint64_t unique_pid = 0;
+    if (proc) {
+      unique_pid = proc_uniqueid(proc);
+    }
+
+    watcher_t *watcherp = find_watcher(cr2, unique_pid);
+    if (watcherp) {
+      mach_port_name_t mach_thread = 0;
+      thread_t thread = current_thread();
+      task_t task = current_task();
+      if (thread && task) {
+        // Maybe we should use retrieve_thread_self_fast() here.
+        // convert_port_to_thread() consumes a reference.
+        thread_reference(thread);
+        ipc_port_t port = convert_thread_to_port(thread);
+        ipc_space_t space = get_task_ipcspace(task);
+        if (port && space) {
+          mach_thread = ipc_port_copyout_send(port, space);
+        }
+      }
+      watcherp->info.mach_thread = mach_thread;
+      watcherp->info.hit = cr2;
+
+      vm_map_t proc_map = task_map_for_proc(proc);
+      if (proc_map) {
+        get_callstack(proc_map, state, watcherp->info.callstack);
+        unset_watcher(proc_map, watcherp);
+        vm_map_deallocate(proc_map);
+      }
+    }
+
+    thread_interrupt_level(old_state);
+  }
+
+  user_trap_t caller = (user_trap_t) hookp->caller_addr;
+  caller(state); // Might not return
+
+  uint64_t return_address = *((uint64_t *)(intr_state->ss_64.isf.rsp));
+  intr_state->ss_64.isf.rsp += 8;
+  intr_state->ss_64.isf.rip = return_address;
+}
+
+bool hook_user_trap()
+{
+  if (!user_trap) {
+    user_trap = (user_trap_t) kernel_dlsym("_user_trap");
+    if (!user_trap) {
+      return false;
+    }
+  }
+
+  return set_kern_hook((vm_offset_t)user_trap,
+                       (vm_offset_t)user_trap_hook,
+                       (vm_offset_t)user_trap_caller);
+}
+
 boolean_t *g_no_shared_cr3_ptr = (boolean_t *) -1;
 boolean_t *g_pmap_smap_enabled_ptr = (boolean_t *) -1;
 
@@ -10619,11 +11205,15 @@ char old_hc_int4_stub[16];
 idt64_entry old_hc_int5_idt_entry;
 char old_hc_int5_stub[16];
 
+idt64_entry old_hc_int6_idt_entry;
+char old_hc_int6_stub[16];
+
 bool s_installed_hc_int1_handler = false;
 bool s_installed_hc_int2_handler = false;
 bool s_installed_hc_int3_handler = false;
 bool s_installed_hc_int4_handler = false;
 bool s_installed_hc_int5_handler = false;
+bool s_installed_hc_int6_handler = false;
 
 // In the macOS 10.13.2 release Apple implemented KPTI (kernel page-table
 // isolation) as a workaround for Intel's Meltdown bug
@@ -11118,6 +11708,14 @@ bool install_intr_handler(int intr_num)
       old_stub = old_hc_int5_stub;
       raw_handler = (vm_offset_t) hc_int5_raw_handler;
       break;
+    case HC_INT6:
+      if (s_installed_hc_int6_handler) {
+        return true;
+      }
+      old_idt_entry = &old_hc_int6_idt_entry;
+      old_stub = old_hc_int6_stub;
+      raw_handler = (vm_offset_t) hc_int6_raw_handler;
+      break;
     default:
       return false;
   }
@@ -11177,6 +11775,9 @@ bool install_intr_handler(int intr_num)
     case HC_INT5:
       s_installed_hc_int5_handler = true;
       break;
+    case HC_INT6:
+      s_installed_hc_int6_handler = true;
+      break;
     default:
       break;
   }
@@ -11224,6 +11825,13 @@ void remove_intr_handler(int intr_num)
       old_idt_entry = &old_hc_int5_idt_entry;
       old_stub = old_hc_int5_stub;
       break;
+    case HC_INT6:
+      if (!s_installed_hc_int6_handler) {
+        return;
+      }
+      old_idt_entry = &old_hc_int6_idt_entry;
+      old_stub = old_hc_int6_stub;
+      break;
     default:
       return;
   }
@@ -11248,6 +11856,9 @@ void remove_intr_handler(int intr_num)
       break;
     case HC_INT5:
       s_installed_hc_int5_handler = false;
+      break;
+    case HC_INT6:
+      s_installed_hc_int6_handler = false;
       break;
     default:
       break;
@@ -11288,6 +11899,9 @@ bool install_intr_handlers()
   if (!install_intr_handler(HC_INT5)) {
     return false;
   }
+  if (!install_intr_handler(HC_INT6)) {
+    return false;
+  }
 
   if (!macOS_Mojave() && !macOS_Catalina()) {
     if (!hook_vm_page_validate_cs()) {
@@ -11313,6 +11927,9 @@ bool install_intr_handlers()
       return false;
     }
   }
+  if (!hook_user_trap()) {
+    return false;
+  }
   return hook_thread_bootstrap_return();
 }
 
@@ -11327,6 +11944,7 @@ void remove_intr_handlers()
   remove_intr_handler(HC_INT3);
   remove_intr_handler(HC_INT4);
   remove_intr_handler(HC_INT5);
+  remove_intr_handler(HC_INT6);
   remove_stub_dispatcher();
 }
 
@@ -11353,6 +11971,11 @@ extern "C" void handle_user_hc_int4(x86_saved_state_t *intr_state)
 extern "C" void handle_user_hc_int5(x86_saved_state_t *intr_state)
 {
   get_dynamic_caller(intr_state);
+}
+
+extern "C" void handle_user_hc_int6(x86_saved_state_t *intr_state)
+{
+  config_watcher(intr_state);
 }
 
 extern "C" void handle_kernel_hc_int1(x86_saved_state_t *intr_state)
