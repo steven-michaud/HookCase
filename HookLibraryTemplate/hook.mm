@@ -804,7 +804,7 @@ typedef struct _watcher_info {
 // a "page" of memory (usually 4096 bytes long). So calling config_watcher()
 // to set a "watchpoint" on a particular memory address actually ends up
 // setting a "watch range" on a particular page (block) of memory.
-bool config_watcher(void *watchpoint, watcher_info *info, bool set)
+bool config_watcher(void *watchpoint, watcher_info_t *info, bool set)
 {
   bool retval;
   __asm__ volatile("int %0" :: "N" (0x35));

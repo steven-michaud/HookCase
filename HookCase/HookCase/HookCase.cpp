@@ -10333,7 +10333,7 @@ void config_watcher(x86_saved_state_t *intr_state)
       bad_info_addr = false;
     }
   }
-  if (bad_info_addr) {
+  if (bad_info_addr && (info_addr != 0)) {
     printf("HookCase(%s[%d]): config_watcher(): \"info\" address \'0x%llx\' is invalid\n",
            procname, pid, info_addr);
     info_addr = 0;
