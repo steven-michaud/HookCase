@@ -803,7 +803,10 @@ typedef struct _watcher_info {
 // saves it to a watcher_info_t structure. Memory access permissions are for
 // a "page" of memory (usually 4096 bytes long). So calling config_watcher()
 // to set a "watchpoint" on a particular memory address actually ends up
-// setting a "watch range" on a particular page (block) of memory.
+// setting a "watch range" on a particular page (block) of memory. To avoid
+// confusion, it's best to set watchpoints only in buffers that are page-
+// aligned.
+
 bool config_watcher(void *watchpoint, watcher_info_t *info, bool set)
 {
   bool retval;

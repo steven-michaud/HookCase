@@ -61,7 +61,9 @@ of memory and get information on the code that writes to it -- for
 example a stack trace of the write operation and the id of the thread
 on which it ran. This is useful for reverse engineering the use of
 certain buffers in memory, for example the "sideband buffer" that's
-used by OpenGL accelerated graphics. For more information see
+used by OpenGL accelerated graphics. Watchpoints are per page of
+memory. So to avoid confusion, it's best to set them in buffers that
+are page-aligned. For more information see
 [config_watcher() in the hook library template](HookLibraryTemplate/hook.mm#L793),
 [Hooked_watcher_example() in the hook library template](HookLibraryTemplate/hook.mm#L929)
 and [the watchpoints example](examples-watchpoints.md).
