@@ -1108,10 +1108,41 @@ Hooked_IOAccelContextSubmitDataBuffersExt2(CFTypeRef context, unsigned int arg1,
                                         &s_sideband_buffer_size);
   }
   if (watchpoint) {
+    // We also hook ioAccelContextFinalize() (below) to make sure we don't
+    // leave any watchpoint unset when the application quits. If a block of
+    // memory is freed with a watchpoint still set in it, it may be recycled
+    // to other apps, causing them to crash mysteriously.
     config_watcher(watchpoint, &s_watcher_info, true);
   }
 
   return retval;
+}
+
+void (*ioAccelContextFinalize_caller)(CFTypeRef context) = NULL;
+
+void Hooked_ioAccelContextFinalize(CFTypeRef context)
+{
+  void *watchpoint = NULL;
+  if (s_sideband_buffer_addr) {
+    watchpoint = (void *) s_sideband_buffer_addr;
+  }
+
+  if (watchpoint) {
+    config_watcher(watchpoint, &s_watcher_info, false);
+    if (s_watcher_info.hit) {
+      pthread_t thread =
+        pthread_from_mach_thread_np(s_watcher_info.mach_thread);
+      char thread_name[PROC_PIDPATHINFO_MAXSIZE] = {0};
+      if (thread) {
+        pthread_getname_np(thread, thread_name, sizeof(thread_name) - 1);
+      }
+      LogWithFormat(true, "Hook.mm: ioAccelContextFinalize(): context %@, watchpoint %p, hit 0x%llx on thread %s[%p]",
+                    context, watchpoint, s_watcher_info.hit, thread_name, thread);
+      PrintCallstack(s_watcher_info.callstack);
+    }
+  }
+
+  ioAccelContextFinalize_caller(context);
 }
 
 #pragma mark -
@@ -1147,7 +1178,9 @@ __attribute__((used)) static const hook_desc user_hooks[]
   PATCH_FUNCTION(__CFInitialize, /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation),
 
   //PATCH_FUNCTION(CFBundleGetIdentifier, /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation),
+
   PATCH_FUNCTION(IOAccelContextSubmitDataBuffersExt2, /System/Library/PrivateFrameworks/IOAccelerator.framework/IOAccelerator),
+  PATCH_FUNCTION(ioAccelContextFinalize, /System/Library/PrivateFrameworks/IOAccelerator.framework/IOAccelerator),
 };
 
 // What follows are declarations of the CoreSymbolication APIs that we use to
