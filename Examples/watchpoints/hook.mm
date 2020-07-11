@@ -1068,8 +1068,68 @@ static CFStringRef Hooked_CFBundleGetIdentifier(CFBundleRef bundle)
 // function we find writing to the sideband buffer, and setting a new
 // watchpoint in it to catch subsequent writes to the sideband buffer.
 
-unsigned long s_sideband_buffer_addr = 0;
-unsigned long s_sideband_buffer_size = 0;
+static CFMutableDictionaryRef sideband_buffers = NULL;
+
+static void ensure_sideband_buffers()
+{
+  if (!sideband_buffers) {
+    sideband_buffers =
+      CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
+                                &kCFTypeDictionaryKeyCallBacks,
+                                &kCFTypeDictionaryValueCallBacks);
+  }
+}
+
+static void add_sideband_buffer(CFTypeRef context,
+                                unsigned long sideband_buffer)
+{
+  if (!context || !sideband_buffer) {
+    return;
+  }
+  ensure_sideband_buffers();
+  CFNumberRef key =
+    CFNumberCreate(kCFAllocatorDefault, kCFNumberLongType, &context);
+  CFNumberRef value =
+    CFNumberCreate(kCFAllocatorDefault, kCFNumberLongType, &sideband_buffer);
+  if (CFDictionaryContainsKey(sideband_buffers, key)) {
+    CFDictionaryReplaceValue(sideband_buffers, key, value);
+  } else {
+    CFDictionaryAddValue(sideband_buffers, key, value);
+  }
+  CFRelease(key);
+  CFRelease(value);
+}
+
+static void remove_context(CFTypeRef context)
+{
+  if (!context) {
+    return;
+  }
+  ensure_sideband_buffers();
+  CFNumberRef key =
+    CFNumberCreate(kCFAllocatorDefault, kCFNumberLongType, &context);
+  CFDictionaryRemoveValue(sideband_buffers, key);
+  CFRelease(key);
+}
+
+static unsigned long get_sideband_buffer(CFTypeRef context)
+{
+  if (!context) {
+    return 0;
+  }
+  ensure_sideband_buffers();
+  CFNumberRef key =
+    CFNumberCreate(kCFAllocatorDefault, kCFNumberLongType, &context);
+  CFNumberRef value = (CFNumberRef)
+    CFDictionaryGetValue(sideband_buffers, key);
+  CFRelease(key);
+  if (!value) {
+    return 0;
+  }
+  vm_offset_t retval = 0;
+  CFNumberGetValue(value, kCFNumberLongType, &retval);
+  return retval;
+}
 
 kern_return_t
 (*IOAccelContextSubmitDataBuffersExt2_caller)(CFTypeRef context, unsigned int arg1,
@@ -1081,38 +1141,40 @@ Hooked_IOAccelContextSubmitDataBuffersExt2(CFTypeRef context, unsigned int arg1,
                                            unsigned int *arg2, unsigned int *arg3,
                                            unsigned int *arg4, unsigned int *arg5)
 {
-  void *watchpoint = NULL;
-  if (s_sideband_buffer_addr) {
-    watchpoint = (void *) s_sideband_buffer_addr;
-  }
+  void *watchpoint = (void *) get_sideband_buffer(context);
+
   if (watchpoint) {
-    config_watcher(watchpoint, &s_watcher_info, false);
-    if (s_watcher_info.hit) {
+    watcher_info_t watcher_info = {0};
+    config_watcher(watchpoint, &watcher_info, false);
+    if (watcher_info.hit) {
       pthread_t thread =
-        pthread_from_mach_thread_np(s_watcher_info.mach_thread);
+        pthread_from_mach_thread_np(watcher_info.mach_thread);
       char thread_name[PROC_PIDPATHINFO_MAXSIZE] = {0};
       if (thread) {
         pthread_getname_np(thread, thread_name, sizeof(thread_name) - 1);
       }
       LogWithFormat(true, "Hook.mm: IOAccelContextSubmitDataBuffersExt2(): context %@, watchpoint %p, hit 0x%llx on thread %s[%p]",
-                    context, watchpoint, s_watcher_info.hit, thread_name, thread);
-      PrintCallstack(s_watcher_info.callstack);
+                    context, watchpoint, watcher_info.hit, thread_name, thread);
+      PrintCallstack(watcher_info.callstack);
     }
   }
 
   kern_return_t retval =
     IOAccelContextSubmitDataBuffersExt2_caller(context, arg1, arg2, arg3, arg4, arg5);
 
-  if (!s_sideband_buffer_addr) {
-    IOAccelContextGetSidebandBuffer_ptr(context, &s_sideband_buffer_addr,
-                                        &s_sideband_buffer_size);
+  unsigned long sideband_buffer = get_sideband_buffer(context);
+  if (!sideband_buffer) {
+    unsigned long sideband_buffer_addr = 0;
+    unsigned long sideband_buffer_size = 0;
+    IOAccelContextGetSidebandBuffer_ptr(context, &sideband_buffer_addr,
+                                        &sideband_buffer_size);
+    if (sideband_buffer_addr) {
+      add_sideband_buffer(context, sideband_buffer_addr);
+    }
   }
+
   if (watchpoint) {
-    // We also hook ioAccelContextFinalize() (below) to make sure we don't
-    // leave any watchpoint unset when the application quits. If a block of
-    // memory is freed with a watchpoint still set in it, it may be recycled
-    // to other apps, causing them to crash mysteriously.
-    config_watcher(watchpoint, &s_watcher_info, true);
+    config_watcher(watchpoint, NULL, true);
   }
 
   return retval;
@@ -1122,25 +1184,25 @@ void (*ioAccelContextFinalize_caller)(CFTypeRef context) = NULL;
 
 void Hooked_ioAccelContextFinalize(CFTypeRef context)
 {
-  void *watchpoint = NULL;
-  if (s_sideband_buffer_addr) {
-    watchpoint = (void *) s_sideband_buffer_addr;
-  }
+  void *watchpoint = (void *) get_sideband_buffer(context);
 
   if (watchpoint) {
-    config_watcher(watchpoint, &s_watcher_info, false);
-    if (s_watcher_info.hit) {
+    watcher_info_t watcher_info = {0};
+    config_watcher(watchpoint, &watcher_info, false);
+    if (watcher_info.hit) {
       pthread_t thread =
-        pthread_from_mach_thread_np(s_watcher_info.mach_thread);
+        pthread_from_mach_thread_np(watcher_info.mach_thread);
       char thread_name[PROC_PIDPATHINFO_MAXSIZE] = {0};
       if (thread) {
         pthread_getname_np(thread, thread_name, sizeof(thread_name) - 1);
       }
       LogWithFormat(true, "Hook.mm: ioAccelContextFinalize(): context %@, watchpoint %p, hit 0x%llx on thread %s[%p]",
-                    context, watchpoint, s_watcher_info.hit, thread_name, thread);
-      PrintCallstack(s_watcher_info.callstack);
+                    context, watchpoint, watcher_info.hit, thread_name, thread);
+      PrintCallstack(watcher_info.callstack);
     }
   }
+
+  remove_context(context);
 
   ioAccelContextFinalize_caller(context);
 }
