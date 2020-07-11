@@ -7510,6 +7510,7 @@ hook_t *find_cast_hook(uint64_t unique_pid)
 }
 
 void free_watcher(watcher_t *watcherp);
+bool unset_watcher(vm_map_t proc_map, watcher_t *watcherp);
 
 void remove_process_hooks(uint64_t unique_pid)
 {
@@ -7536,16 +7537,25 @@ void remove_process_hooks(uint64_t unique_pid)
   }
   all_hooks_unlock_write();
 
+  vm_map_t proc_map = task_map_for_proc(current_proc());
+
   all_watchers_lock_write();
   watcher_t *watcherp = NULL;
   watcher_t *tmp_watcherp = NULL;
   LIST_FOREACH_SAFE(watcherp, &g_all_watchers, list_entry, tmp_watcherp) {
     if (watcherp->unique_pid == unique_pid) {
       LIST_REMOVE(watcherp, list_entry);
+      if (proc_map) {
+        unset_watcher(proc_map, watcherp);
+      }
       free_watcher(watcherp);
     }
   }
   all_watchers_unlock_write();
+
+  if (proc_map) {
+    vm_map_deallocate(proc_map);
+  }
 }
 
 bool process_has_hooks(uint64_t unique_pid)
