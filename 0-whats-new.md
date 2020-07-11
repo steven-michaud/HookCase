@@ -155,7 +155,7 @@ prevented interpose hooks from working outside the shared cache of
 system modules.
 
 * Version 2.0
-[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L10840)
+[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L10845)
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0
