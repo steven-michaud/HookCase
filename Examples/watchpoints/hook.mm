@@ -1162,8 +1162,7 @@ Hooked_IOAccelContextSubmitDataBuffersExt2(CFTypeRef context, unsigned int arg1,
   kern_return_t retval =
     IOAccelContextSubmitDataBuffersExt2_caller(context, arg1, arg2, arg3, arg4, arg5);
 
-  unsigned long sideband_buffer = get_sideband_buffer(context);
-  if (!sideband_buffer) {
+  if (!watchpoint) {
     unsigned long sideband_buffer_addr = 0;
     unsigned long sideband_buffer_size = 0;
     IOAccelContextGetSidebandBuffer_ptr(context, &sideband_buffer_addr,
