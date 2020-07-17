@@ -5,7 +5,9 @@ support. Together they merit a bump in the version number. The most
 significant of them are:
 
 [Remove all watchers on process exit](https://github.com/steven-michaud/HookCase/commit/d2d82e3020f6cefb2a475589fe3cfc44107a3be3)
+
 [Make watchpoint example work with multiple graphics cards at once](https://github.com/steven-michaud/HookCase/commit/a6001614115270219860ffd811555a55fa36091b)
+
 [Check if a watchpoint has already been set or unset](https://github.com/steven-michaud/HookCase/commit/4d205078f97e5277294c799811a66b3adba13e88)
 
 # What's New in Version 4.1
