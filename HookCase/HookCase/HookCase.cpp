@@ -10398,12 +10398,16 @@ void config_watcher(x86_saved_state_t *intr_state)
           }
 
           if (!bad_watcherp_info_addr) {
-            retval = proc_copyout(proc_map, &watcherp->info,
-                                  watcherp->info_addr, sizeof(watcher_info_t));
-            if (retval) {
-              all_watchers_lock_write();
-              bzero(&watcherp->info, sizeof(watcher_info_t));
-              all_watchers_unlock_write();
+            if (watcherp->info.hit) {
+              retval = proc_copyout(proc_map, &watcherp->info,
+                                    watcherp->info_addr, sizeof(watcher_info_t));
+              if (retval) {
+                all_watchers_lock_write();
+                bzero(&watcherp->info, sizeof(watcher_info_t));
+                all_watchers_unlock_write();
+              }
+            } else {
+              retval = true;
             }
           } else {
             retval = false;
