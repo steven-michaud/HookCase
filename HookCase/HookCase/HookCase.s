@@ -399,11 +399,14 @@ Entry(setup_continues)
    jz      9f
    clac
 
-   /* Set the Task Switch bit in CR0 to keep floating point happy */
-9: mov     %cr0, %rax
+9: /* Set the Task Switch bit in CR0 to keep floating point happy */
+/* We don't seem to need this, and it can cause trouble in hooked
+ * functions that have floating point parameters.
+ */
+/* mov     %cr0, %rax
    or      $(CR0_TS), %eax
    mov     %rax, %cr0
-
+*/
    mov     EXT(g_iotier_override_offset)(%rip), %rax
    add     %gs:CPU_ACTIVE_THREAD, %rax
    movl    $(-1), (%rax)
@@ -420,10 +423,13 @@ Entry(teardown)
 
    /* Restore the floating point state */
 /* As best I can tell we don't really need this. */
-/* push    %r15
+/* lea     EXT(fp_load)(%rip), %rax
+   mov     (%rax), %rax
+   mov     %gs:CPU_ACTIVE_THREAD, %rdi
+   push    %r15
    mov     %rsp, %r15
    and     $0xFFFFFFFFFFFFFFF0, %rsp
-   call    EXT(restore_fp)
+   call    *%rax
    mov     %r15, %rsp
    pop     %r15
 */

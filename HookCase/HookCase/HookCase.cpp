@@ -4057,12 +4057,19 @@ typedef struct thread_fake_mavericks_debug
   int iotier_override;  // Offset 0x570
 } thread_fake_mavericks_debug_t;
 
-uint64_t g_iotier_override_offset = (uint64_t) -1;
+typedef void (*fp_load_t)(thread_t active_thread);
+extern "C" fp_load_t fp_load = NULL;
 
-void initialize_thread_offsets()
+uint64_t g_iotier_override_offset = -1L;
+
+bool initialize_thread_offsets()
 {
-  if (!find_kernel_private_functions()) {
-    return;
+  if (!fp_load) {
+    fp_load = (fp_load_t)
+      kernel_dlsym("_fp_load");
+    if (!fp_load) {
+      return false;
+    }
   }
 
   if (macOS_Catalina()) {
@@ -4153,6 +4160,11 @@ void initialize_thread_offsets()
         offsetof(struct thread_fake_mavericks_debug, iotier_override);
     }
   }
+  if (g_iotier_override_offset == -1L) {
+    return false;
+  }
+
+  return true;
 }
 
 // From the xnu kernel's osfmk/kern/thread.h
@@ -12067,7 +12079,9 @@ kern_return_t HookCase_start(kmod_info_t * ki, void *d)
     kprintf("HookCase: Unknown kernel type\n");
     return KERN_FAILURE;
   }
-  initialize_thread_offsets();
+  if (!initialize_thread_offsets()) {
+    return KERN_FAILURE;
+  }
   initialize_use_invpcid();
   initialize_cpu_data_offsets();
   if (!install_intr_handlers()) {
