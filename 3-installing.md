@@ -47,13 +47,15 @@ libraries.
 
 3. Quit Terminal and reboot your computer.
 
-Now copy `HookCase.kext` to the `/usr/local/sbin/` directory.  One way
-to do this is with the following command:
+Now copy `HookCase.kext` to the `/usr/local/sbin/` directory.  You may
+need to create this directory.  Make sure it's owned by `root:wheel`.
 
 `sudo cp -R HookCase.kext /usr/local/sbin`
 
-To load `HookCase.kext` into the kernel, do the following on the
-command line:
+## On macOS 10.15 and below:
+
+On macOS 10.15 (Catalina) and below, you need only a single command to
+load `HookCase.kext` into the kernel:
 
 `sudo kextutil /usr/local/sbin/HookCase.kext`
 
@@ -73,10 +75,72 @@ To unload `HookCase.kext` from the kernel, run the following command:
 
 `sudo kextunload -b org.smichaud.HookCase`
 
+## On macOS 11 and above:
+
+Things are more complicated on macOS 11 (Big Sur) and above.  As of
+this version of macOS, third party kernel extensions must be loaded
+into the "auxiliary kext collection" before they can be loaded into
+the kernel.  Along the way you'll need to explicitly give permission
+for `HookCase.kext` to be loaded, then reboot your computer.  macOS 11
+also uses a new set of command line utilties to load and unload kernel
+extensions.
+
+1. Run the following command at a Terminal prompt:
+
+`sudo kmutil load -p /usr/local/sbin/HookCase.kext`
+
+2. After a few seconds, a "System Extension Updated" dialog will
+appear telling you that the HookCase system extension has been
+updated.  Click on the "Open Security Preferences" button.
+
+3. In the "Security & Privacy" preference panel, first "click the lock
+to make changes", then click on the "Allow" button next to HookCase.
+Another dialog will appear telling you that "a restart is required
+before new system extensions can be used".  The default choice is "Not
+Now", and it's best to choose that.  Wierdness can happen if you
+restart immediately.  I usually close all open applications and then
+restart.
+
+4. After your computer has restarted, open a Terminal prompt and once
+again enter the following command.  It should immediately load
+`HookCase.kext` into the kernel.
+
+`sudo kmutil load -p /usr/local/sbin/HookCase.kext`
+
+Run `kextstat` to see that it did load.
+
+Run one of the following commands to unload `HookCase.kext` from the
+kernel:
+
+`sudo kmutil unload -p /usr/local/sbin/HookCase.kext`
+
+`sudo kumtil unload -b org.smichaud.HookCase`
+
+`HookCase.kext` will not be loaded automatically when you once again
+restart your computer.  You will need to load it (and unload it)
+manually as per step 4.
+
+## Increasing the kernel stack size
+
+For some reason, HookCase 5.0 and above sometimes require that you
+increase the kernel stack size.  I've seen kernel stack underflows
+hooking methods in 32-bit applications (like TextWrangler) on older
+versions of macOS (which still support them).  The symptom of a kernel
+stack underflow is a double-fault kernel panic with CR2 set to an
+address on the stack.  One way to increase the kernel stack size is as
+follows.  `kernel_stack_pages` default to `4`.  You will need to
+disable SIP at least temporarily to make changes to your "kernel boot
+args".
+
+1. `sudo nvram boot-args="kernel_stack_pages=6"`
+
+2. Reboot your computer.
+
+## Using the "development" and "debug" kernels
+
 HookCase supports the release, development and debug kernels.  But if
 you use it with the debug kernel, we recommend increasing the kernel
-stack size.  One way to do this is as follows.  `kernel_stack_pages`
-defaults to 4.
+stack size.  One way to do this is as follows.
 
 1. Copy `kernel.debug` (from the appropriate Kernel Debug Kit) to
    `/System/Library/Kernels`.
@@ -85,6 +149,3 @@ defaults to 4.
 
 2. Reboot your computer.
 
-Without this change, you sometimes get kernel panics using the debug
-kernel.  These are usually double-faults with `CR2` set to an address
-on the stack (indicating a stack underflow).

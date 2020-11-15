@@ -104,6 +104,7 @@ bool CanUseCF()
 #define MAC_OS_X_VERSION_10_13_HEX 0x00000AD0
 #define MAC_OS_X_VERSION_10_14_HEX 0x00000AE0
 #define MAC_OS_X_VERSION_10_15_HEX 0x00000AF0
+#define MAC_OS_X_VERSION_10_16_HEX 0x00000B00
 
 char gOSVersionString[PATH_MAX] = {0};
 
@@ -187,6 +188,11 @@ bool macOS_Mojave()
 bool macOS_Catalina()
 {
   return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_15_HEX);
+}
+
+bool macOS_BigSur()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_16_HEX);
 }
 
 class nsAutoreleasePool {
@@ -510,9 +516,74 @@ void GetModuleHeaderAndSlide(const char *moduleName,
         strncpy(moduleName_local, moduleName, sizeof(moduleName_local));
       }
       close(fd);
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 110000
     } else {
       strncpy(moduleName_local, moduleName, sizeof(moduleName_local));
     }
+#else // __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 110000
+    // On macOS 11 (Big Sur), open() generally doesn't work on moduleName,
+    // because it generally isn't in the file system (only in the dyld shared
+    // cache). As best I can tell, there's no general workaround for this
+    // design flaw. But because all (or almost all) frameworks have a
+    // 'Resources' soft link in the same directory where there used to be a
+    // soft link to the framework binary, we can hack together a workaround
+    // for frameworks.
+    } else {
+      char holder[PATH_MAX];
+      strncpy(holder, moduleName, sizeof(holder));
+      size_t fixed_to = 0;
+      bool done = false;
+
+      while (!done) {
+        char proxy_path[PATH_MAX];
+        strncpy(proxy_path, holder, sizeof(proxy_path));
+        const char *subpath_tag = ".framework/";
+        char *subpath_ptr =
+          strnstr(proxy_path + fixed_to,
+                  subpath_tag, sizeof(proxy_path) - fixed_to);
+
+        if (subpath_ptr) {
+          subpath_ptr += strlen(subpath_tag);
+          char subpath[PATH_MAX];
+          strncpy(subpath, subpath_ptr, sizeof(subpath));
+          subpath_ptr[0] = 0;
+
+          const char *proxy_name = "Resources";
+          size_t proxy_name_len = strlen(proxy_name);
+          strncat(proxy_path, proxy_name,
+                  sizeof(proxy_path) - strlen(proxy_path) - 1);
+
+          fd = open(proxy_path, O_RDONLY);
+          if (fd > 0) {
+            if (fcntl(fd, F_GETPATH, holder) != -1) {
+              fixed_to = strlen(holder) - proxy_name_len;
+              holder[fixed_to] = 0;
+              strncat(holder, subpath, sizeof(holder) - fixed_to);
+
+              const char *frameworks_tag = "Frameworks";
+              if (strncmp(holder + fixed_to, frameworks_tag,
+                          strlen(frameworks_tag)) != 0)
+              {
+                strncpy(moduleName_local, holder, sizeof(moduleName_local));
+                done = true;
+              }
+            } else {
+              done = true;
+            }
+            close(fd);
+          } else {
+            done = true;
+          }
+        } else {
+          done = true;
+        }
+      }
+
+      if (!moduleName_local[0]) {
+        strncpy(moduleName_local, moduleName, sizeof(moduleName_local));
+      }
+    }
+#endif // __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 110000
   }
 
   for (uint32_t i = 0; i < _dyld_image_count(); ++i) {
@@ -1137,10 +1208,17 @@ EventRef EventFromCGSEventRecord(CGSEventRecord *eventRecord)
 extern "C" CGSError CGSGetNextEventRecordInternal(CGSConnectionID cid,
                                                   CGSEventRecord *eventRecord);
 
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101100
 FASTI386 CGSError (*CGSGetNextEventRecordInternal_caller)(CGSConnectionID, CGSEventRecord *) = NULL;
 
 static FASTI386 CGSError Hooked_CGSGetNextEventRecordInternal(CGSConnectionID cid,
                                                               CGSEventRecord *eventRecord)
+#else
+CGSError (*CGSGetNextEventRecordInternal_caller)(CGSConnectionID, CGSEventRecord *) = NULL;
+
+static CGSError Hooked_CGSGetNextEventRecordInternal(CGSConnectionID cid,
+                                                     CGSEventRecord *eventRecord)
+#endif
 {
   CGSError retval = CGSGetNextEventRecordInternal_caller(cid, eventRecord);
   if ((retval == kCGSErrorSuccess) && eventRecord->type &&
@@ -1169,6 +1247,42 @@ static FASTI386 CGSError Hooked_CGSGetNextEventRecordInternal(CGSConnectionID ci
   }
   return retval;
 }
+
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 110000
+
+extern "C" CGSEventRecord *SLSGetNextEventRecordInternal();
+
+FASTI386 CGSEventRecord *(*SLSGetNextEventRecordInternal_caller)() = NULL;
+
+static FASTI386 CGSEventRecord *Hooked_SLSGetNextEventRecordInternal()
+{
+  CGSEventRecord *retval = SLSGetNextEventRecordInternal_caller();
+  if (retval && retval->type && (retval->type != kCGEventMouseMoved)) {
+    OSType evClass = 0;
+    UInt32 kind = 0;
+    CFStringRef description = NULL;
+    EventRef event = EventFromCGSEventRecord(retval);
+    if (event) {
+      evClass = GetEventClass(event);
+      kind = GetEventKind(event);
+      description = CopyEventDescription(event, true);
+      ReleaseEvent(event);
+    }
+    char *evClassString = GetFourCharCode(evClass);
+    LogWithFormat(true, "HookEvents: SLSGetNextEventRecordInternal(): event %@ (class %s, kind %i)",
+                  description, evClassString, kind);
+#ifdef LOG_NSEVENTTHREAD_STACKS
+    PrintStackTrace();
+#endif
+    if (description) {
+      CFRelease(description);
+    }
+    free(evClassString);
+  }
+  return retval;
+}
+
+#else // __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 110000
 
 extern "C" CGSError SLSGetNextEventRecordInternal(CGSConnectionID cid,
                                                   CGSEventRecord *eventRecord);
@@ -1205,6 +1319,8 @@ static FASTI386 CGSError Hooked_SLSGetNextEventRecordInternal(CGSConnectionID ci
   }
   return retval;
 }
+
+#endif // __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 110000
 
 // This pulls high-level and low-level events from the main event queue for
 // all apps (Cocoa and Carbon).
@@ -1268,6 +1384,13 @@ static FASTI386 OSStatus Hooked_ReceiveNextEventCommon(ItemCount inNumTypes,
 // The definition of _DPSNextEvent() changed considerably in Sierra, so we
 // compile different versions of its hook, depending on which version of OS X
 // we're compiling on.
+extern "C" CGSEventRecord _DPSNextEvent_Mavericks(CGSConnectionID cid,   // in
+                                                  unsigned long mask,    // in, unsigned long
+                                                  NSDate *expiration,    // in
+                                                  NSString *mode,        // in
+                                                  BOOL dequeue,          // in
+                                                  EventRef *eventCopy);  // out if not null
+
 extern "C" CGSEventRecord _DPSNextEvent_ElCapitan(CGSConnectionID cid,  // in
                                                   NSEventMask mask,     // in, long long
                                                   NSDate *expiration,   // in
@@ -1283,7 +1406,67 @@ extern "C" CGEventRef _DPSNextEvent_Sierra(CGSConnectionID cid,         // in
                                            BOOL unknown,                // in
                                            EventRef *eventCopy);        // out if not null
 
-#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101200
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ <= 101000
+
+CGSEventRecord (*_DPSNextEvent_caller)(CGSConnectionID cid,
+                                       unsigned long mask,
+                                       NSDate *expiration,
+                                       NSString *mode,
+                                       BOOL dequeue,
+                                       EventRef *eventCopy) = NULL;
+
+static CGSEventRecord Hooked__DPSNextEvent(CGSConnectionID cid,
+                                           unsigned long mask,
+                                           NSDate *expiration,
+                                           NSString *mode,
+                                           BOOL dequeue,
+                                           EventRef *eventCopy)
+{
+  EventRef holder = NULL;
+  if (!eventCopy) {
+    eventCopy = &holder;
+  }
+
+  CGSEventRecord retval = _DPSNextEvent_caller(cid, mask, expiration,
+                                               mode, dequeue, eventCopy);
+
+  NSEvent *cocoaEvent = NULL;
+  if (retval.type) {
+    cocoaEvent = (NSEvent *)
+      objc_msgSend([NSEvent alloc], @selector(_initWithCGSEvent:eventRef:),
+                   retval, *eventCopy);
+  }
+  if (cocoaEvent) {
+    NSEventType cocoaType = [cocoaEvent type];
+    NSEventType subtype = 0;
+    NSInteger data1 = 0;
+    NSInteger data2 = 0;
+    if (cocoaType == NSApplicationDefined) {
+      subtype = [cocoaEvent subtype];
+      data1 = [cocoaEvent data1];
+      data2 = [cocoaEvent data2];
+    }
+    if ((cocoaType != NSMouseMoved) &&
+        // Firefox uses lots of NSApplicationDefined events with data1 and
+        // data2 set to 0, and subtype set to 0 or 1 (kEventSubtypeTrace).
+        ((cocoaType != NSApplicationDefined) ||
+          ((subtype != 0) && (subtype != 1)) ||
+          (data1 != 0) ||
+          (data2 != 0)))
+    {
+      LogWithFormat(true, "HookEvents: _DPSNextEvent(): event %@", cocoaEvent);
+    }
+    RetainEvent(*eventCopy);
+    [cocoaEvent release];
+  }
+
+  if (holder) {
+    ReleaseEvent(holder);
+  }
+  return retval;
+}
+
+#elif __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101200
 
 CGEventRef (*_DPSNextEvent_caller)(CGSConnectionID cid, NSEventMask mask,
                                    NSDate *expiration, NSString *mode,

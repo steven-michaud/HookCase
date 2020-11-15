@@ -64,7 +64,7 @@ on the same method, or try to step through code that contains a patch
 hook.
 
 Apple's support for `DYLD_INSERT_LIBRARIES` is implemented in
-[`/usr/lib/dyld`](https://opensource.apple.com/source/dyld/dyld-655.1.1/).
+[`/usr/lib/dyld`](https://opensource.apple.com/source/dyld/dyld-750.6/).
 A (shared) copy of this module gets loaded into the image of every new
 process before it starts running.  `dyld`'s `man` page calls it the
 "dynamic link editor", and it's what runs first (starting from
@@ -88,5 +88,5 @@ allow the original `dyld::InitializeMainExecutable()` method to run
 (which, among other things, runs the process's C++ initializers).
 
 For more information, the best place to start is the
-[long series of comments](HookCase/HookCase/HookCase.cpp#L6626)
+[long series of comments](HookCase/HookCase/HookCase.cpp#L6921)
 in `HookCase.cpp` before the definition of `C_64_REDZONE_LEN`.

@@ -1,7 +1,7 @@
 # Building
 
 HookCase requires a compatible version of OS X -- OS X 10.9
-(Mavericks) through macOS 10.15 (Mojave).  Building it also requires a
+(Mavericks) through macOS 11 (Big Sur).  Building it also requires a
 relatively recent version of XCode.  I recommend building on the
 version of OS X where you'll be using HookCase, and using the most
 recent version of XCode available for that version.  But the version

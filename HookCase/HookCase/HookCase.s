@@ -211,7 +211,8 @@ Entry(setup_continues)
 
    lea     EXT(kernel_trampoline)(%rip), %rax
    mov     %rax, R64_TRAPFN(%r15)
-   mov     %gs:CPU_NUMBER, %ax
+   mov     EXT(g_cpu_number_offset)(%rip), %rax
+   mov     %gs:(%rax), %ax
    mov     %ax, R64_CPU(%r15)
    jmp     EXT(kernel_trampoline)
 
@@ -224,7 +225,8 @@ Entry(setup_continues)
 1: swapgs
 
    push    %rax
-   mov     %gs:CPU_NUMBER, %ax
+   mov     EXT(g_cpu_number_offset)(%rip), %rax
+   mov     %gs:(%rax), %ax
    mov     %ax, ISF64_CPU+8(%rsp)
 
    /* Make room on the stack for the rest of the interrupt stack frame,
@@ -267,9 +269,10 @@ Entry(setup_continues)
    mov     %r15, R64_R15(%rsp)
    mov     %rsp, %r15
    movl    $(SS_64), SS_FLAVOR(%r15)
-   mov     %gs:CPU_KERNEL_STACK, %rsp /* Switch to kernel stack */
-
    mov     %rax, R64_RAX(%r15)
+   mov     EXT(g_cpu_kernel_stack_offset)(%rip), %rax
+   mov     %gs:(%rax), %rsp      /* Switch to kernel stack */
+
    mov     %rbx, R64_RBX(%r15)
    mov     %rcx, R64_RCX(%r15)
    mov     %rdx, R64_RDX(%r15)
@@ -299,9 +302,10 @@ Entry(setup_continues)
 3: sub     $(ISS64_OFFSET), %rsp
    mov     %rsp, %r15
    movl    $(SS_32), SS_FLAVOR(%r15)
-   mov     %gs:CPU_KERNEL_STACK, %rsp /* Switch to kernel stack */
-
    mov     %eax, R32_EAX(%r15)
+   mov     EXT(g_cpu_kernel_stack_offset)(%rip), %rax
+   mov     %gs:(%rax), %rsp      /* Switch to kernel stack */
+
    mov     %ebx, R32_EBX(%r15)
    mov     %ecx, R32_ECX(%r15)
    mov     %edx, R32_EDX(%r15)
@@ -408,7 +412,8 @@ Entry(setup_continues)
    mov     %rax, %cr0
 */
    mov     EXT(g_iotier_override_offset)(%rip), %rax
-   add     %gs:CPU_ACTIVE_THREAD, %rax
+   mov     EXT(g_cpu_active_thread_offset)(%rip), %rcx
+   add     %gs:(%rcx), %rax
    movl    $(-1), (%rax)
 
    /* R15 == x86_saved_state_t */
@@ -418,14 +423,16 @@ Entry(setup_continues)
 /* R15 == x86_saved_state_t */
 Entry(teardown)
    mov     EXT(g_iotier_override_offset)(%rip), %rax
-   add     %gs:CPU_ACTIVE_THREAD, %rax
+   mov     EXT(g_cpu_active_thread_offset)(%rip), %rcx
+   add     %gs:(%rcx), %rax
    movl    $(-1), (%rax)
 
    /* Restore the floating point state */
 /* As best I can tell we don't really need this. */
 /* lea     EXT(fp_load)(%rip), %rax
    mov     (%rax), %rax
-   mov     %gs:CPU_ACTIVE_THREAD, %rdi
+   mov     EXT(g_cpu_active_thread_offset)(%rip), %rcx
+   mov     %gs:(%rcx), %rdi
    push    %r15
    mov     %rsp, %r15
    and     $0xFFFFFFFFFFFFFFF0, %rsp
@@ -434,7 +441,7 @@ Entry(teardown)
    pop     %r15
 */
    /* Switch back to the user CR3, if appropriate */
-   mov     EXT(g_cpu_task_cr3_minus_offset)(%rip), %rax
+   mov     EXT(g_cpu_task_cr3_offset)(%rip), %rax
    mov     %gs:(%rax), %rcx
    mov     %rcx, %gs:CPU_ACTIVE_CR3
    mov     EXT(g_no_shared_cr3_ptr)(%rip), %rax

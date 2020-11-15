@@ -20,6 +20,13 @@ partition that is by default mounted read-only. The effect of the
 `sudo mount -uw /` command is temporary, and only lasts until you
 reboot your computer.
 
+The [secinit](examples-secinit.md) and [Kernel logging](examples-kernel-logging.md)
+examples currently don't work at all on macOS 11 (Big Sur).  System
+files are in a separate partition, as on macOS 10.15.  But in addition
+to the previous protections, this partition is now a
+["Signed System Volume"](https://developer.apple.com/news/?id=3xpv8r2m)
+I don't yet know of a safe, easily undoable workaround for this.
+
 * [Dynamic patch hooks](examples-dynamic-hooking.md)
 * [Watchpoints](examples-watchpoints.md)
 * [xpcproxy trampoline](examples-xpcproxy.md)

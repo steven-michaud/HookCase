@@ -129,8 +129,8 @@
 #define TASK_MAP_64BIT 1
 #else
 typedef enum {
-  TASK_MAP_32BIT,   /* 32-bit user, compatibility mode */ 
-  TASK_MAP_64BIT,   /* 64-bit user thread, shared space */ 
+  TASK_MAP_32BIT = 0,   /* 32-bit user, compatibility mode */
+  TASK_MAP_64BIT = 1,   /* 64-bit user thread, shared space */
 } task_map_t;
 #endif
 
@@ -288,101 +288,272 @@ typedef struct {
 
 /* Derived from the xnu kernel's osfmk/i386/cpu_data.h (start) */
 
+// Before KPTI
 typedef struct cpu_data_fake
 {
-  uint32_t pad1[6];
+  void *cpu_this;                     // Pointer to myself (offset 0x0)
+  thread_t cpu_active_thread;         // Offset 0x8
+  thread_t cpu_nthread;               // Offset 0x10
   volatile int cpu_preemption_level;  // Offset 0x18
   int cpu_number;                     // Logical CPU (offset 0x1c)
   x86_saved_state_t *cpu_int_state;   // Interrupt state (offset 0x20)
   /* A stack's "top" is where it grows or shrinks with each push or pop */
-  vm_offset_t cpu_active_stack;       // Kernel stack base
-  vm_offset_t cpu_kernel_stack;       // Kernel stack top
+  vm_offset_t cpu_active_stack;       // Kernel stack base (offset 0x28)
+  vm_offset_t cpu_kernel_stack;       // Kernel stack top (offset 0x30)
   vm_offset_t cpu_int_stack_top;      // Offset 0x38
-  int cpu_interrupt_level;            // Offset 0x40
-  uint32_t pad2[47];
-  union {
+  uint64_t pad1[24];
+  volatile addr64_t cpu_active_cr3 __attribute((aligned(64))); // Offset 0x100
+  union {                             // Offset 0x108
+    volatile uint32_t cpu_tlb_invalid;
     struct {
-      volatile addr64_t cpu_active_cr3 __attribute((aligned(64))); // Offset 0x100
-      union {                             // Offset 0x108
-        volatile uint32_t cpu_tlb_invalid;
-        struct {
-          volatile uint16_t cpu_tlb_invalid_local;
-          volatile uint16_t cpu_tlb_invalid_global;
-        };
-      };
-      // MDS bug fix not present, 10.14.4 and prior
-      volatile task_map_t cpu_task_map;   // Offset 0x10c
-      // User-mode (per-task) CR3 with kernel mapped in
-      volatile addr64_t cpu_task_cr3;     // Offset 0x110
-      union {
-        // KPTI not supported
-        struct {
-          addr64_t cpu_kernel_cr3;          // Offset 0x118
-        };
-        // KPTI enabled, 10.13.2 and above
-        struct {
-          union {
-            // 10.13.2 and 10.13.3 (Apple goofed here, but fixed the mistake
-            // in 10.13.4)
-            struct {
-              // User-mode (per-task) CR3 with kernel unmapped.
-              volatile addr64_t cpu_user_cr3_goofed;  // Offset 0x118
-              addr64_t cpu_kernel_cr3_goofed;         // Offset 0x120
-            };
-            // 10.13.4 and above
-            struct {
-              addr64_t cpu_kernel_cr3_kpti;           // Offset 0x118
-              // User-mode (per-task) CR3 with kernel unmapped
-              volatile addr64_t cpu_user_cr3;         // Offset 0x120, cpu_ucr3
-            };
-          };
-          boolean_t cpu_pagezero_mapped;              // Offset 0x128
-          addr64_t cpu_uber_isf;                      // Offset 0x130
-          uint64_t cpu_uber_tmp;                      // Offset 0x138
-          addr64_t cpu_uber_user_gs_base;             // Offset 0x140
-          addr64_t cpu_excstack;                      // Offset 0x148, cd_estack
-        };
-        // KPTI enabled, backported to 10.12.6 and 10.11.6
-        struct {
-          addr64_t cpu_kernel_cr3_kpti_bp;            // Offset 0x118
-          // User-mode (per-task) CR3 with kernel unmapped
-          volatile addr64_t cpu_user_cr3_bp;          // Offset 0x120
-          uint64_t pad3[5];
-          addr64_t cpu_excstack_bp;                   // Offset 0x150
-        };
-      };
-    };
-    // MDS bug fix present and KDPI supported, 10.14.5 and above?
-    // https://www.intel.com/content/www/us/en/architecture-and-technology/mds.html
-    struct {
-      uint64_t pad4[2];
-      __uint128_t cpu_invpcid_target;         // Offset 0x110
-      volatile task_map_t cpu_task_map_mds;   // Offset 0x120
-      uint64_t cpu_task_cr3_minus;            // Offset 0x128
-      addr64_t cpu_kernel_cr3_mds;            // Offset 0x130
-      // User-mode (per-task) CR3 with kernel unmapped
-      volatile addr64_t cpu_user_cr3_mds;     // Offset 0x138, cpu_ucr3
-      // User-mode (per-task) CR3 with kernel mapped in
-      volatile addr64_t cpu_task_cr3_mds;     // Offset 0x140
-      boolean_t cpu_pagezero_mapped_mds;      // Offset 0x148
-      addr64_t cpu_uber_isf_mds;              // Offset 0x150
-      uint64_t cpu_uber_tmp_mds;              // Offset 0x158
-      addr64_t cpu_uber_user_gs_base_mds;     // Offset 0x160
-      addr64_t cpu_excstack_mds;              // Offset 0x168, cd_estack
+      volatile uint16_t cpu_tlb_invalid_local;
+      volatile uint16_t cpu_tlb_invalid_global;
     };
   };
+  volatile task_map_t cpu_task_map;   // Offset 0x10c
+  volatile addr64_t cpu_task_cr3;     // Offset 0x110
+  addr64_t cpu_kernel_cr3;            // Offset 0x118
+  addr64_t cpu_uber_isf;              // Offset 0x120
+  uint64_t cpu_uber_tmp;              // Offset 0x128
+  addr64_t cpu_uber_user_gs_base;     // Offset 0x130
 } cpu_data_fake_t;
 
-#define CPU_DATA_GET_FUNC_BODY(member,type)    \
-  type ret;                                    \
-  __asm__ volatile ("mov %%gs:%P1,%0"          \
-    : "=r" (ret)                               \
-    : "i" (offsetof(cpu_data_fake_t,member))); \
+// With KPTI support as backported to OS X 10.11 and 10.12
+typedef struct cpu_data_fake_kpti_elcapitan_sierra
+{
+  void *cpu_this;                     // Pointer to myself (offset 0x0)
+  thread_t cpu_active_thread;         // Offset 0x8
+  thread_t cpu_nthread;               // Offset 0x10
+  volatile int cpu_preemption_level;  // Offset 0x18
+  int cpu_number;                     // Logical CPU (offset 0x1c)
+  x86_saved_state_t *cpu_int_state;   // Interrupt state (offset 0x20)
+  /* A stack's "top" is where it grows or shrinks with each push or pop */
+  vm_offset_t cpu_active_stack;       // Kernel stack base (offset 0x28)
+  vm_offset_t cpu_kernel_stack;       // Kernel stack top (offset 0x30)
+  vm_offset_t cpu_int_stack_top;      // Offset 0x38
+  uint64_t pad1[24];
+  volatile addr64_t cpu_active_cr3 __attribute((aligned(64))); // Offset 0x100
+  union {                             // Offset 0x108
+    volatile uint32_t cpu_tlb_invalid;
+    struct {
+      volatile uint16_t cpu_tlb_invalid_local;
+      volatile uint16_t cpu_tlb_invalid_global;
+    };
+  };
+  volatile task_map_t cpu_task_map;   // Offset 0x10c
+  volatile addr64_t cpu_task_cr3;     // Offset 0x110
+  addr64_t cpu_kernel_cr3;            // Offset 0x118
+  // User-mode (per-task) CR3 with kernel unmapped
+  volatile addr64_t cpu_user_cr3;     // Offset 0x120, cpu_ucr3
+  boolean_t cpu_pagezero_mapped;      // Offset 0x128
+  addr64_t cpu_uber_isf;              // Offset 0x130
+  uint64_t cpu_uber_tmp;              // Offset 0x138
+  addr64_t cpu_uber_user_gs_base;     // Offset 0x140
+  uint64_t pad2[1];
+  addr64_t cpu_excstack;              // Offset 0x150, cd_estack
+} cpu_data_fake_kpti_elcapitan_sierra_t;
+
+// With KPTI support as implemented in OS X 10.13.2 and 10.13.3.
+// 'cpu_kernel_cr3' and 'cpu_user_cr3' were inadvertently swapped.
+typedef struct cpu_data_fake_kpti_highsierra
+{
+  void *cpu_this;                     // Pointer to myself (offset 0x0)
+  thread_t cpu_active_thread;         // Offset 0x8
+  thread_t cpu_nthread;               // Offset 0x10
+  volatile int cpu_preemption_level;  // Offset 0x18
+  int cpu_number;                     // Logical CPU (offset 0x1c)
+  x86_saved_state_t *cpu_int_state;   // Interrupt state (offset 0x20)
+  /* A stack's "top" is where it grows or shrinks with each push or pop */
+  vm_offset_t cpu_active_stack;       // Kernel stack base (offset 0x28)
+  vm_offset_t cpu_kernel_stack;       // Kernel stack top (offset 0x30)
+  vm_offset_t cpu_int_stack_top;      // Offset 0x38
+  uint64_t pad1[24];
+  volatile addr64_t cpu_active_cr3 __attribute((aligned(64))); // Offset 0x100
+  union {                             // Offset 0x108
+    volatile uint32_t cpu_tlb_invalid;
+    struct {
+      volatile uint16_t cpu_tlb_invalid_local;
+      volatile uint16_t cpu_tlb_invalid_global;
+    };
+  };
+  volatile task_map_t cpu_task_map;   // Offset 0x10c
+  volatile addr64_t cpu_task_cr3;     // Offset 0x110
+  // User-mode (per-task) CR3 with kernel unmapped
+  volatile addr64_t cpu_user_cr3;     // Offset 0x118, cpu_ucr3
+  addr64_t cpu_kernel_cr3;            // Offset 0x120
+  boolean_t cpu_pagezero_mapped;      // Offset 0x128
+  addr64_t cpu_uber_isf;              // Offset 0x130
+  uint64_t cpu_uber_tmp;              // Offset 0x138
+  addr64_t cpu_uber_user_gs_base;     // Offset 0x140
+  addr64_t cpu_excstack;              // Offset 0x148, cd_estack
+} cpu_data_fake_kpti_highsierra_t;
+
+// With KPTI support as implemented in OS X 10.13.4 through 10.14.4.
+// 'cpu_kernel_cr3' and 'cpu_user_cr3' were swapped back.
+typedef struct cpu_data_fake_highsierra_mojave
+{
+  void *cpu_this;                     // Pointer to myself (offset 0x0)
+  thread_t cpu_active_thread;         // Offset 0x8
+  thread_t cpu_nthread;               // Offset 0x10
+  volatile int cpu_preemption_level;  // Offset 0x18
+  int cpu_number;                     // Logical CPU (offset 0x1c)
+  x86_saved_state_t *cpu_int_state;   // Interrupt state (offset 0x20)
+  /* A stack's "top" is where it grows or shrinks with each push or pop */
+  vm_offset_t cpu_active_stack;       // Kernel stack base (offset 0x28)
+  vm_offset_t cpu_kernel_stack;       // Kernel stack top (offset 0x30)
+  vm_offset_t cpu_int_stack_top;      // Offset 0x38
+  uint64_t pad1[24];
+  volatile addr64_t cpu_active_cr3 __attribute((aligned(64))); // Offset 0x100
+  union {                             // Offset 0x108
+    volatile uint32_t cpu_tlb_invalid;
+    struct {
+      volatile uint16_t cpu_tlb_invalid_local;
+      volatile uint16_t cpu_tlb_invalid_global;
+    };
+  };
+  volatile task_map_t cpu_task_map;   // Offset 0x10c
+  volatile addr64_t cpu_task_cr3;     // Offset 0x110
+  addr64_t cpu_kernel_cr3;            // Offset 0x118
+  // User-mode (per-task) CR3 with kernel unmapped
+  volatile addr64_t cpu_user_cr3;     // Offset 0x120, cpu_ucr3
+  boolean_t cpu_pagezero_mapped;      // Offset 0x128
+  addr64_t cpu_uber_isf;              // Offset 0x130
+  uint64_t cpu_uber_tmp;              // Offset 0x138
+  addr64_t cpu_uber_user_gs_base;     // Offset 0x140
+  addr64_t cpu_excstack;              // Offset 0x148, cd_estack
+} cpu_data_fake_highsierra_mojave_t;
+
+// With KPTI support as implemented in macOS Mojave 10.14.5 and up through
+// Catalina 10.15.3.
+typedef struct cpu_data_fake_mojave_catalina
+{
+  void *cpu_this;                       // Pointer to myself (offset 0x0)
+  thread_t cpu_active_thread;           // Offset 0x8
+  thread_t cpu_nthread;                 // Offset 0x10
+  volatile int cpu_preemption_level;    // Offset 0x18
+  int cpu_number;                       // Logical CPU (offset 0x1c)
+  x86_saved_state_t *cpu_int_state;     // Interrupt state (offset 0x20)
+  /* A stack's "top" is where it grows or shrinks with each push or pop */
+  vm_offset_t cpu_active_stack;         // Kernel stack base (offset 0x28)
+  vm_offset_t cpu_kernel_stack;         // Kernel stack top (offset 0x30)
+  vm_offset_t cpu_int_stack_top;        // Offset 0x38
+  uint64_t pad1[24];
+  volatile addr64_t cpu_active_cr3 __attribute((aligned(64))); // Offset 0x100
+  union {                               // Offset 0x108
+    volatile uint32_t cpu_tlb_invalid;
+    struct {
+      volatile uint16_t cpu_tlb_invalid_local;
+      volatile uint16_t cpu_tlb_invalid_global;
+    };
+  };
+  __uint128_t cpu_invpcid_target;       // Offset 0x110, cpu_ip_desc
+  volatile task_map_t cpu_task_map;     // Offset 0x120
+  volatile uint64_t cpu_task_cr3;       // Offset 0x128
+  addr64_t cpu_kernel_cr3;              // Offset 0x130
+  // User-mode (per-task) CR3 with kernel unmapped
+  volatile addr64_t cpu_user_cr3;       // Offset 0x138, cpu_ucr3
+  // User-mode (per-task) CR3 with kernel mapped in
+  volatile addr64_t cpu_shadowtask_cr3; // Offset 0x140
+  boolean_t cpu_pagezero_mapped;        // Offset 0x148
+  addr64_t cpu_uber_isf;                // Offset 0x150
+  uint64_t cpu_uber_tmp;                // Offset 0x158
+  addr64_t cpu_uber_user_gs_base;       // Offset 0x160
+  addr64_t cpu_excstack;                // Offset 0x168, cd_estack
+} cpu_data_fake_mojave_catalina_t;
+
+// With KPTI support as implemented on macOS Catalina 10.15.4 and up.
+// 'cpu_preemption_level' was moved, so the offset of 'cpu_number' changed.
+typedef struct cpu_data_fake_catalina
+{
+  void *cpu_this;                       // Pointer to myself (offset 0x0)
+  thread_t cpu_active_thread;           // Offset 0x8
+  thread_t cpu_nthread;                 // Offset 0x10
+  int cpu_number;                       // Logical CPU (offset 0x18)
+  x86_saved_state_t *cpu_int_state;     // Interrupt state (offset 0x20)
+  /* A stack's "top" is where it grows or shrinks with each push or pop */
+  vm_offset_t cpu_active_stack;         // Kernel stack base (offset 0x28)
+  vm_offset_t cpu_kernel_stack;         // Kernel stack top (offset 0x30)
+  vm_offset_t cpu_int_stack_top;        // Offset 0x38
+  uint64_t pad1[24];
+  volatile addr64_t cpu_active_cr3 __attribute((aligned(64))); // Offset 0x100
+  union {                               // Offset 0x108
+    volatile uint32_t cpu_tlb_invalid;
+    struct {
+      volatile uint16_t cpu_tlb_invalid_local;
+      volatile uint16_t cpu_tlb_invalid_global;
+    };
+  };
+  __uint128_t cpu_invpcid_target;       // Offset 0x110, cpu_ip_desc
+  volatile task_map_t cpu_task_map;     // Offset 0x120
+  volatile uint64_t cpu_task_cr3;       // Offset 0x128
+  addr64_t cpu_kernel_cr3;              // Offset 0x130
+  // User-mode (per-task) CR3 with kernel unmapped
+  volatile addr64_t cpu_user_cr3;       // Offset 0x138, cpu_ucr3
+  // User-mode (per-task) CR3 with kernel mapped in
+  volatile addr64_t cpu_shadowtask_cr3; // Offset 0x140
+  boolean_t cpu_pagezero_mapped;        // Offset 0x148
+  addr64_t cpu_uber_isf;                // Offset 0x150
+  uint64_t cpu_uber_tmp;                // Offset 0x158
+  addr64_t cpu_uber_user_gs_base;       // Offset 0x160
+  addr64_t cpu_excstack;                // Offset 0x168, cd_estack
+} cpu_data_fake_catalina_t;
+
+// With KPTI support as implemented on macOS 11 Big Sur (aka 10.16).
+typedef struct cpu_data_fake_bigsur
+{
+  void *cpu_this;                       // Pointer to myself (offset 0x0)
+  uint64_t pad1[1];
+  thread_t cpu_active_thread;           // Offset 0x10
+  thread_t cpu_nthread;                 // Offset 0x18
+  int cpu_number;                       // Logical CPU (offset 0x20)
+  x86_saved_state_t *cpu_int_state;     // Interrupt state (offset 0x28)
+  /* A stack's "top" is where it grows or shrinks with each push or pop */
+  vm_offset_t cpu_active_stack;         // Kernel stack base (offset 0x30)
+  vm_offset_t cpu_kernel_stack;         // Kernel stack top (offset 0x38)
+  vm_offset_t cpu_int_stack_top;        // Offset 0x40
+  uint64_t pad2[23];
+  volatile addr64_t cpu_active_cr3 __attribute((aligned(64))); // Offset 0x100
+  union {                               // Offset 0x108
+    volatile uint32_t cpu_tlb_invalid;
+    struct {
+      volatile uint16_t cpu_tlb_invalid_local;
+      volatile uint16_t cpu_tlb_invalid_global;
+    };
+  };
+  __uint128_t cpu_invpcid_target;       // Offset 0x110, cpu_ip_desc
+  volatile task_map_t cpu_task_map;     // Offset 0x120
+  volatile uint64_t cpu_task_cr3;       // Offset 0x128
+  addr64_t cpu_kernel_cr3;              // Offset 0x130
+  // User-mode (per-task) CR3 with kernel unmapped
+  volatile addr64_t cpu_user_cr3;       // Offset 0x138, cpu_ucr3
+  // User-mode (per-task) CR3 with kernel mapped in
+  volatile addr64_t cpu_shadowtask_cr3; // Offset 0x140
+  boolean_t cpu_pagezero_mapped;        // Offset 0x148
+  addr64_t cpu_uber_isf;                // Offset 0x150
+  uint64_t cpu_uber_tmp;                // Offset 0x158
+  addr64_t cpu_uber_user_gs_base;       // Offset 0x160
+  addr64_t cpu_excstack;                // Offset 0x168, cd_estack
+} cpu_data_fake_bigsur_t;
+
+#define CPU_DATA_GET_FUNC_BODY(object,member,type) \
+  type ret;                                        \
+  __asm__ volatile ("mov %%gs:%P1,%0"              \
+    : "=r" (ret)                                   \
+    : "i" (offsetof(object,member)));              \
   return ret;
+
+bool macOS_Catalina_5_or_greater();
+bool macOS_BigSur();
 
 static inline int get_cpu_number(void)
 {
-  CPU_DATA_GET_FUNC_BODY(cpu_number,int)
+  if (macOS_BigSur()) {
+    CPU_DATA_GET_FUNC_BODY(cpu_data_fake_bigsur_t,cpu_number,int)
+  } else if (macOS_Catalina_5_or_greater()) {
+    CPU_DATA_GET_FUNC_BODY(cpu_data_fake_catalina_t,cpu_number,int)
+  } else {
+    CPU_DATA_GET_FUNC_BODY(cpu_data_fake_t,cpu_number,int)
+  }
 }
 
 /* Derived from the xnu kernel's osfmk/i386/cpu_data.h (end) */

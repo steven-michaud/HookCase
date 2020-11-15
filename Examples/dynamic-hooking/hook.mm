@@ -104,6 +104,7 @@ bool CanUseCF()
 #define MAC_OS_X_VERSION_10_13_HEX 0x00000AD0
 #define MAC_OS_X_VERSION_10_14_HEX 0x00000AE0
 #define MAC_OS_X_VERSION_10_15_HEX 0x00000AF0
+#define MAC_OS_X_VERSION_10_16_HEX 0x00000B00
 
 char gOSVersionString[PATH_MAX] = {0};
 
@@ -187,6 +188,11 @@ bool macOS_Mojave()
 bool macOS_Catalina()
 {
   return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_15_HEX);
+}
+
+bool macOS_BigSur()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_16_HEX);
 }
 
 class nsAutoreleasePool {
@@ -510,9 +516,74 @@ void GetModuleHeaderAndSlide(const char *moduleName,
         strncpy(moduleName_local, moduleName, sizeof(moduleName_local));
       }
       close(fd);
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 110000
     } else {
       strncpy(moduleName_local, moduleName, sizeof(moduleName_local));
     }
+#else // __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 110000
+    // On macOS 11 (Big Sur), open() generally doesn't work on moduleName,
+    // because it generally isn't in the file system (only in the dyld shared
+    // cache). As best I can tell, there's no general workaround for this
+    // design flaw. But because all (or almost all) frameworks have a
+    // 'Resources' soft link in the same directory where there used to be a
+    // soft link to the framework binary, we can hack together a workaround
+    // for frameworks.
+    } else {
+      char holder[PATH_MAX];
+      strncpy(holder, moduleName, sizeof(holder));
+      size_t fixed_to = 0;
+      bool done = false;
+
+      while (!done) {
+        char proxy_path[PATH_MAX];
+        strncpy(proxy_path, holder, sizeof(proxy_path));
+        const char *subpath_tag = ".framework/";
+        char *subpath_ptr =
+          strnstr(proxy_path + fixed_to,
+                  subpath_tag, sizeof(proxy_path) - fixed_to);
+
+        if (subpath_ptr) {
+          subpath_ptr += strlen(subpath_tag);
+          char subpath[PATH_MAX];
+          strncpy(subpath, subpath_ptr, sizeof(subpath));
+          subpath_ptr[0] = 0;
+
+          const char *proxy_name = "Resources";
+          size_t proxy_name_len = strlen(proxy_name);
+          strncat(proxy_path, proxy_name,
+                  sizeof(proxy_path) - strlen(proxy_path) - 1);
+
+          fd = open(proxy_path, O_RDONLY);
+          if (fd > 0) {
+            if (fcntl(fd, F_GETPATH, holder) != -1) {
+              fixed_to = strlen(holder) - proxy_name_len;
+              holder[fixed_to] = 0;
+              strncat(holder, subpath, sizeof(holder) - fixed_to);
+
+              const char *frameworks_tag = "Frameworks";
+              if (strncmp(holder + fixed_to, frameworks_tag,
+                          strlen(frameworks_tag)) != 0)
+              {
+                strncpy(moduleName_local, holder, sizeof(moduleName_local));
+                done = true;
+              }
+            } else {
+              done = true;
+            }
+            close(fd);
+          } else {
+            done = true;
+          }
+        } else {
+          done = true;
+        }
+      }
+
+      if (!moduleName_local[0]) {
+        strncpy(moduleName_local, moduleName, sizeof(moduleName_local));
+      }
+    }
+#endif // __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 110000
   }
 
   for (uint32_t i = 0; i < _dyld_image_count(); ++i) {
