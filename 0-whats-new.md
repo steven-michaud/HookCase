@@ -2,6 +2,11 @@
 
 HookCase now supports macOS 11 (Big Sur).
 
+Note that, on macOS 11, HookCase now requires the `keepsyms=1` boot
+arg. To set this you'll need to turn off SIP at least temporarily.
+
+`sudo nvram boot-args="keepsyms=1"`
+
 # What's New in Version 4.1.1
 
 This version of HookCase contains several tweaks to its watchpoint

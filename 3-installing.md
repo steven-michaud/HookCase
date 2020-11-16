@@ -78,22 +78,28 @@ To unload `HookCase.kext` from the kernel, run the following command:
 ## On macOS 11 and above:
 
 Things are more complicated on macOS 11 (Big Sur) and above.  As of
-this version of macOS, third party kernel extensions must be loaded
-into the "auxiliary kext collection" before they can be loaded into
-the kernel.  Along the way you'll need to explicitly give permission
-for `HookCase.kext` to be loaded, then reboot your computer.  macOS 11
-also uses a new set of command line utilties to load and unload kernel
-extensions.
+this version of macOS, HookCase requires the `keepsyms=1` boot arg.
+And third party kernel extensions must be loaded into the "auxiliary
+kext collection" before they can be loaded into the kernel.  Along the
+way you'll need to explicitly give permission for `HookCase.kext` to
+be loaded, then reboot your computer.  macOS 11 also uses a new set of
+command line utilties to load and unload kernel extensions.
 
-1. Run the following command at a Terminal prompt:
+1. Change your boot args as follows. To do this, you will need to
+disable SIP at least temporarily. Reboot your computer to make the
+change take effect.
+
+`sudo nvram boot-args="keepsyms=1"`
+
+2. Run the following command at a Terminal prompt:
 
 `sudo kmutil load -p /usr/local/sbin/HookCase.kext`
 
-2. After a few seconds, a "System Extension Updated" dialog will
+3. After a few seconds, a "System Extension Updated" dialog will
 appear telling you that the HookCase system extension has been
 updated.  Click on the "Open Security Preferences" button.
 
-3. In the "Security & Privacy" preference panel, first "click the lock
+4. In the "Security & Privacy" preference panel, first "click the lock
 to make changes", then click on the "Allow" button next to HookCase.
 Another dialog will appear telling you that "a restart is required
 before new system extensions can be used".  The default choice is "Not
@@ -101,7 +107,7 @@ Now", and it's best to choose that.  Wierdness can happen if you
 restart immediately.  I usually close all open applications and then
 restart.
 
-4. After your computer has restarted, open a Terminal prompt and once
+5. After your computer has restarted, open a Terminal prompt and once
 again enter the following command.  It should immediately load
 `HookCase.kext` into the kernel.
 
@@ -132,7 +138,7 @@ follows.  `kernel_stack_pages` default to `4`.  You will need to
 disable SIP at least temporarily to make changes to your "kernel boot
 args".
 
-1. `sudo nvram boot-args="kernel_stack_pages=6"`
+1. `sudo nvram boot-args="keepsyms=1 kernel_stack_pages=6"`
 
 2. Reboot your computer.
 
