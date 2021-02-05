@@ -9725,7 +9725,8 @@ void set_patch_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
 void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
                                     module_info_t *module_info,
                                     hook_desc *interpose_hooks,
-                                    uint32_t num_interpose_hooks)
+                                    uint32_t num_interpose_hooks,
+                                    bool check_for_hook)
 {
   if (!proc || !proc_map || !module_info ||
       !interpose_hooks || !num_interpose_hooks)
@@ -9771,6 +9772,15 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
     }
 
     for (j = 0; j < num_interpose_hooks; ++j) {
+      // This loop can take so long, when called from on_add_image(), that our
+      // hook gets deleted partway through, leading to kernel panics in
+      // strncmp() or strlen() below.
+      if (check_for_hook) {
+        hook_t *hookp = find_hook_with_add_image_func(proc_uniqueid(proc));
+        if (!hookp) {
+          break;
+        }
+      }
       if (!interpose_hooks[j].hook_function ||
           !interpose_hooks[j].orig_function_name[0])
       {
@@ -9988,7 +9998,7 @@ void set_interpose_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
     module_info.libSystem_initialized = libSystem_initialized;
     module_info.proc = proc;
     set_interpose_hooks_for_module(proc, proc_map, &module_info,
-                                   interpose_hooks, num_interpose_hooks);
+                                   interpose_hooks, num_interpose_hooks, false);
   }
 
   vm_deallocate(kernel_map, (vm_map_offset_t) holder, info_array_size);
@@ -10522,7 +10532,7 @@ void on_add_image(x86_saved_state_t *intr_state)
   if (hookp->interpose_hooks) {
     set_interpose_hooks_for_module(proc, proc_map, &module_info,
                                    hookp->interpose_hooks,
-                                   hookp->num_interpose_hooks);
+                                   hookp->num_interpose_hooks, true);
   }
 
   thread_interrupt_level(old_state);
