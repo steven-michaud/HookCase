@@ -76,6 +76,10 @@ void basic_init()
   if (!sGlobalInitDone) {
     gMainThreadID = pthread_self();
     sGlobalInitDone = true;
+    // Needed for LogWithFormat() to work properly both before and after the
+    // CoreFoundation framework is initialized.
+    tzset();
+    tzsetwall();
   }
 }
 
