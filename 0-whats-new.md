@@ -1,3 +1,11 @@
+# What's New in Version 5.0.1
+
+This version of HookCase fixes a bug that caused intermittent kernel
+panics in `set_interpose_hooks_for_module()` (Issue #22). They seem to
+have been particularly likely to occur with hook libraries containing
+lots of interpose hooks, particularly ones that are invoked both
+before and after the CoreFoundation framework is initialized.
+
 # What's New in Version 5.0
 
 HookCase now supports macOS 11 (Big Sur).
