@@ -1,10 +1,12 @@
 # What's New in Version 5.0.1
 
 This version of HookCase fixes a bug that caused intermittent kernel
-panics in `set_interpose_hooks_for_module()` (Issue #22). They seem to
-have been particularly likely to occur with hook libraries containing
-lots of interpose hooks, particularly ones that are invoked both
-before and after the CoreFoundation framework is initialized.
+panics in `set_interpose_hooks_for_module()`
+([Issue #22](https://github.com/steven-michaud/HookCase/issues/22)).
+They seem to have been particularly likely to occur with hook
+libraries containing lots of interpose hooks, particularly ones that
+are invoked both before and after the CoreFoundation framework is
+initialized.
 
 # What's New in Version 5.0
 
@@ -33,8 +35,8 @@ This version of HookCase supports watchpoints. You can now set a
 watchpoint on a location in memory and gather information (including a
 stack trace) about the code that writes to that location.  For more
 information see
-[config_watcher() in the hook library template](HookLibraryTemplate/hook.mm#L864),
-[Hooked_watcher_example() in the hook library template](HookLibraryTemplate/hook.mm#L1003)
+[config_watcher() in the hook library template](HookLibraryTemplate/hook.mm#L868),
+[Hooked_watcher_example() in the hook library template](HookLibraryTemplate/hook.mm#L1007)
 and [the watchpoints example](examples-watchpoints.md).
 
 # What's New in Version 4.0.5
@@ -97,7 +99,7 @@ HookCase now supports dynamically adding patch hooks for raw function
 pointers. This is useful in hooks for methods that use callbacks --
 for example CFMachPortCreate() and CFRunLoopObserverCreate(). For more
 information see
-[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L947)
+[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L951)
 and [the dynamic patch hooks example](examples-dynamic-hooking.md).
 
 # What's New in Version 3.2.1
@@ -177,14 +179,14 @@ instead of `int 0x22`, as follows:
 at a particular address in a given module.  This means that HookCase
 can now hook methods that aren't in their module's symbol table.  For
 more information see
-[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L986).
+[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L990).
 
-* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L9792) that
+* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L9802) that
 prevented interpose hooks from working outside the shared cache of
 system modules.
 
 * Version 2.0
-[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L11286)
+[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L11296)
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0
