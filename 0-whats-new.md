@@ -1,3 +1,13 @@
+# What's New in Version 5.0.2
+
+This version of HookCase fixes a bug that caused some interpose hooks
+to be skipped on macOS 11 (Big Sur)
+([Issue #24](https://github.com/steven-michaud/HookCase/issues/24)).
+HookCase uses a structure called the lazy pointer table to implement
+interpose hooks. In the past it was always located in the `__DATA`
+segment. But in Big Sur it's sometimes located in the `__DATA_CONST`
+segment. HookCase now looks for it in both places.
+
 # What's New in Version 5.0.1
 
 This version of HookCase fixes a bug that caused intermittent kernel
@@ -181,12 +191,12 @@ can now hook methods that aren't in their module's symbol table.  For
 more information see
 [Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L990).
 
-* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L9802) that
+* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L9782) that
 prevented interpose hooks from working outside the shared cache of
 system modules.
 
 * Version 2.0
-[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L11296)
+[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L11273)
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0
