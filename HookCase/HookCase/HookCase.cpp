@@ -6007,6 +6007,8 @@ bool copyin_symbol_table(module_info_t *module_info,
 
   vm_offset_t data_sections_offset = 0;
   uint32_t num_data_sections = 0;
+  vm_offset_t data_const_sections_offset = 0;
+  uint32_t num_data_const_sections = 0;
   vm_offset_t lazy_ptr_table_offset = 0;
   vm_size_t lazy_ptr_table_size = 0;
   uint32_t lazy_ptr_indirect_symbol_index = 0;
@@ -6018,6 +6020,7 @@ bool copyin_symbol_table(module_info_t *module_info,
   bool found_dysymtab_segment = false;
 
   bool found_data_segment = false;
+  bool found_data_const_segment = false;
   bool found_lazy_ptr_table = false;
 
   vm_offset_t module_size = mh_size + cmds_size;
@@ -6026,7 +6029,7 @@ bool copyin_symbol_table(module_info_t *module_info,
   const struct load_command *load_command =
     (struct load_command *) cmds_local;
   vm_offset_t linkedit_fileoff_increment = 0;
-  uint32_t i;
+  uint32_t i, j;
   for (i = 1; i <= num_commands; ++i) {
     uint32_t cmd = load_command->cmd;
     switch (cmd) {
@@ -6079,11 +6082,20 @@ bool copyin_symbol_table(module_info_t *module_info,
           }
         }
         const char *data_segname = "__DATA";
+        // As of macOS Big Sur, the lazy pointers table is at least sometimes
+        // in the __DATA_CONST segment.
+        const char *data_const_segname = "__DATA_CONST";
         const char *linkedit_segname = "__LINKEDIT";
         if (!strncmp(segname, data_segname, strlen(data_segname) + 1)) {
           data_sections_offset = sections_offset;
           num_data_sections = nsects;
           found_data_segment = true;
+        } else if (!strncmp(segname, data_const_segname,
+                            strlen(data_const_segname) + 1))
+        {
+          data_const_sections_offset = sections_offset;
+          num_data_const_sections = nsects;
+          found_data_const_segment = true;
         } else if (!strncmp(segname, linkedit_segname,
                    strlen(linkedit_segname) + 1))
         {
@@ -6133,43 +6145,63 @@ bool copyin_symbol_table(module_info_t *module_info,
       ((vm_offset_t)load_command + load_command->cmdsize);
   }
 
-  if (found_data_segment && found_indirect_symbol_table &&
-      (symbol_type == symbol_type_undef))
+  if ((found_data_segment || found_data_const_segment) &&
+      found_indirect_symbol_table && (symbol_type == symbol_type_undef))
   {
-    vm_offset_t section_offset = data_sections_offset;
-    for (i = 1; i <= num_data_sections; ++i) {
-      uint64_t addr;
-      uint64_t size;
-      bool expected_lazy_align;
-      uint8_t type;
-      uint32_t indirect_symbol_index;
-      if (is_64bit) {
-        struct section_64 *section = (struct section_64 *) section_offset;
-        addr = section->addr;
-        size = section->size;
-        expected_lazy_align = (section->align == 3);
-        type = (section->flags & SECTION_TYPE);
-        indirect_symbol_index = section->reserved1;
+    // Look first in the __DATA segment for the lazy pointers table. Then if
+    // it's not found, look in the __DATA_CONST segment.
+    for (i = 1; i <= 2; ++i) {
+      vm_offset_t section_offset;
+      uint32_t num_sections;
+      if (i == 1) {
+        if (!found_data_segment) {
+          continue;
+        }
+        section_offset = data_sections_offset;
+        num_sections = num_data_sections;
       } else {
-        struct section *section = (struct section *) section_offset;
-        addr = section->addr;
-        size = section->size;
-        expected_lazy_align = (section->align == 2);
-        type = (section->flags & SECTION_TYPE);
-        indirect_symbol_index = section->reserved1;
+        if (!found_data_const_segment) {
+          continue;
+        }
+        section_offset = data_const_sections_offset;
+        num_sections = num_data_const_sections;
       }
 
-      if ((type == S_LAZY_SYMBOL_POINTERS) && size && expected_lazy_align) {
-        lazy_ptr_table_offset = addr + slide;
-        lazy_ptr_table_size = size;
-        lazy_ptr_indirect_symbol_index = indirect_symbol_index;
-        found_lazy_ptr_table = true;
-      }
+      for (j = 1; j <= num_sections; ++j) {
+        uint64_t addr;
+        uint64_t size;
+        bool expected_lazy_align;
+        uint8_t type;
+        uint32_t indirect_symbol_index;
+        if (is_64bit) {
+          struct section_64 *section = (struct section_64 *) section_offset;
+          addr = section->addr;
+          size = section->size;
+          expected_lazy_align = (section->align == 3);
+          type = (section->flags & SECTION_TYPE);
+          indirect_symbol_index = section->reserved1;
+        } else {
+          struct section *section = (struct section *) section_offset;
+          addr = section->addr;
+          size = section->size;
+          expected_lazy_align = (section->align == 2);
+          type = (section->flags & SECTION_TYPE);
+          indirect_symbol_index = section->reserved1;
+        }
 
-      if (is_64bit) {
-        section_offset += sizeof(struct section_64);
-      } else {
-        section_offset += sizeof(struct section);
+        if ((type == S_LAZY_SYMBOL_POINTERS) && size && expected_lazy_align) {
+          lazy_ptr_table_offset = addr + slide;
+          lazy_ptr_table_size = size;
+          lazy_ptr_indirect_symbol_index = indirect_symbol_index;
+          found_lazy_ptr_table = true;
+          break;
+        }
+
+        if (is_64bit) {
+          section_offset += sizeof(struct section_64);
+        } else {
+          section_offset += sizeof(struct section);
+        }
       }
     }
   }
