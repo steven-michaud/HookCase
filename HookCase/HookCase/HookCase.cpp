@@ -1,6 +1,6 @@
 // The MIT License (MIT)
 //
-// Copyright (c) 2020 Steven Michaud
+// Copyright (c) 2021 Steven Michaud
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -5917,9 +5917,6 @@ typedef struct _symbol_table {
   vm_address_t lazy_ptr_table;
   vm_size_t lazy_ptr_table_size;
   user_addr_t lazy_ptr_table_addr;
-  vm_address_t stubs_table;
-  vm_size_t stubs_table_size;
-  user_addr_t stubs_table_addr;
   vm_offset_t slide;
   vm_offset_t module_size;
   vm_offset_t pagezero_size;
@@ -6013,9 +6010,6 @@ bool copyin_symbol_table(module_info_t *module_info,
   vm_offset_t lazy_ptr_table_offset = 0;
   vm_size_t lazy_ptr_table_size = 0;
   uint32_t lazy_ptr_indirect_symbol_index = 0;
-  vm_offset_t stubs_table_offset = 0;
-  vm_size_t stubs_table_size = 0;
-  uint32_t stubs_indirect_symbol_index = 0;
 
   bool found_symbol_table = false;
   bool found_indirect_symbol_table = false;
@@ -6025,7 +6019,6 @@ bool copyin_symbol_table(module_info_t *module_info,
 
   bool found_data_segment = false;
   bool found_lazy_ptr_table = false;
-  bool found_stubs_table = false;
 
   vm_offset_t module_size = mh_size + cmds_size;
   vm_offset_t pagezero_size = 0;
@@ -6150,8 +6143,6 @@ bool copyin_symbol_table(module_info_t *module_info,
       bool expected_lazy_align;
       uint8_t type;
       uint32_t indirect_symbol_index;
-      bool is_self_modifying = false;
-      uint32_t stubs_table_item_size = 0;
       if (is_64bit) {
         struct section_64 *section = (struct section_64 *) section_offset;
         addr = section->addr;
@@ -6166,9 +6157,6 @@ bool copyin_symbol_table(module_info_t *module_info,
         expected_lazy_align = (section->align == 2);
         type = (section->flags & SECTION_TYPE);
         indirect_symbol_index = section->reserved1;
-        is_self_modifying =
-          ((section->flags & S_ATTR_SELF_MODIFYING_CODE) != 0);
-        stubs_table_item_size = section->reserved2;
       }
 
       if ((type == S_LAZY_SYMBOL_POINTERS) && size && expected_lazy_align) {
@@ -6176,17 +6164,6 @@ bool copyin_symbol_table(module_info_t *module_info,
         lazy_ptr_table_size = size;
         lazy_ptr_indirect_symbol_index = indirect_symbol_index;
         found_lazy_ptr_table = true;
-      }
-
-      if (!is_64bit) {
-        if ((type == S_SYMBOL_STUBS) && is_self_modifying &&
-            (stubs_table_item_size == 5) && size)
-        {
-          stubs_table_offset = addr + slide;
-          stubs_table_size = size;
-          stubs_indirect_symbol_index = indirect_symbol_index;
-          found_stubs_table = true;
-        }
       }
 
       if (is_64bit) {
@@ -6204,24 +6181,12 @@ bool copyin_symbol_table(module_info_t *module_info,
     return false;
   }
   if (symbol_type == symbol_type_undef) {
-    if (is_64bit) {
-      if (!found_lazy_ptr_table) {
-        vm_map_deallocate(proc_map);
-        return false;
-      }
-    } else {
-      if (!found_lazy_ptr_table && !found_stubs_table) {
-        vm_map_deallocate(proc_map);
-        return false;
-      }
+    if (!found_lazy_ptr_table) {
+      vm_map_deallocate(proc_map);
+      return false;
     }
-    if (found_lazy_ptr_table) {
-      interesting_symbol_index += lazy_ptr_indirect_symbol_index;
-      interesting_symbol_count -= lazy_ptr_indirect_symbol_index;
-    } else {
-      interesting_symbol_index += stubs_indirect_symbol_index;
-      interesting_symbol_count -= stubs_indirect_symbol_index;
-    }
+    interesting_symbol_index += lazy_ptr_indirect_symbol_index;
+    interesting_symbol_count -= lazy_ptr_indirect_symbol_index;
   }
 
   vm_size_t nlist_size;
@@ -6249,7 +6214,6 @@ bool copyin_symbol_table(module_info_t *module_info,
   }
   vm_map_offset_t indirect_symbol_table_local = 0;
   vm_map_offset_t lazy_ptr_table_local = 0;
-  vm_map_offset_t stubs_table_local = 0;
   if (symbol_type == symbol_type_undef) {
     if (!proc_mapin(proc_map, indirect_symbol_table_offset,
                     &indirect_symbol_table_local, indirect_symbol_table_size))
@@ -6262,17 +6226,6 @@ bool copyin_symbol_table(module_info_t *module_info,
     if (found_lazy_ptr_table) {
       if (!proc_mapin(proc_map, lazy_ptr_table_offset, &lazy_ptr_table_local,
                       lazy_ptr_table_size))
-      {
-        vm_deallocate(kernel_map, symbol_table_local, symbol_table_size);
-        vm_deallocate(kernel_map, string_table_local, string_table_size);
-        vm_deallocate(kernel_map, indirect_symbol_table_local,
-                      indirect_symbol_table_size);
-        vm_map_deallocate(proc_map);
-        return false;
-      }
-    } else {
-      if (!proc_mapin(proc_map, stubs_table_offset, &stubs_table_local,
-                      stubs_table_size))
       {
         vm_deallocate(kernel_map, symbol_table_local, symbol_table_size);
         vm_deallocate(kernel_map, string_table_local, string_table_size);
@@ -6296,9 +6249,6 @@ bool copyin_symbol_table(module_info_t *module_info,
   symbol_table->lazy_ptr_table = (vm_address_t) lazy_ptr_table_local;
   symbol_table->lazy_ptr_table_size = lazy_ptr_table_size;
   symbol_table->lazy_ptr_table_addr = lazy_ptr_table_offset;
-  symbol_table->stubs_table = (vm_address_t) stubs_table_local;
-  symbol_table->stubs_table_size = stubs_table_size;
-  symbol_table->stubs_table_addr = stubs_table_offset;
   symbol_table->slide = slide;
   symbol_table->module_size = module_size;
   symbol_table->pagezero_size = pagezero_size;
@@ -6330,10 +6280,6 @@ void free_symbol_table(symbol_table_t *symbol_table)
   if (symbol_table->lazy_ptr_table) {
     vm_deallocate(kernel_map, symbol_table->lazy_ptr_table,
                   symbol_table->lazy_ptr_table_size);
-  }
-  if (symbol_table->stubs_table) {
-    vm_deallocate(kernel_map, symbol_table->stubs_table,
-                  symbol_table->stubs_table_size);
   }
 }
 
@@ -9722,6 +9668,8 @@ void set_patch_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
   }
 }
 
+//#define DEBUG_LAZY_POINTERS 1
+
 void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
                                     module_info_t *module_info,
                                     hook_desc *interpose_hooks,
@@ -9801,12 +9749,28 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
               target_index * sizeof(old_lazy_ptr);
             // Don't change 'old_lazy_ptr' if it's already been changed --
             // presumably via DYLD_INSERT_LIBRARIES.  But note that it won't
-            // be NULL if it's not yet been initialized -- it will point to a
+            // be NULL if it's not yet been initialized.  It will point to a
             // local method for lazily setting it to the correct (external)
-            // value.
+            // value -- a small block in the __stub_helper section of the
+            // __TEXT, containing a PUSH instruction and a JMP instruction.
+            // We assume that if a module is in the dyld shared cache it
+            // doesn't contain any uninitialized lazy pointers.
             bool uninitialized = (!symbol_table.is_in_shared_cache &&
-                                 (old_lazy_ptr > module_begin) &&
-                                 (old_lazy_ptr < module_end));
+                                  (old_lazy_ptr > module_begin) &&
+                                  (old_lazy_ptr < module_end));
+#ifdef DEBUG_LAZY_POINTERS
+            if ((old_lazy_ptr != interpose_hooks[j].orig_function) &&
+                !symbol_table.is_in_shared_cache)
+            {
+              pid_t pid = proc_pid(proc);
+              char procname[PATH_MAX];
+              proc_name(pid, procname, sizeof(procname));
+              vm_offset_t slide = symbol_table.slide;
+              printf("HookCase(%s[%d]): set_interpose_hooks_for_module(): module %s, new_lazy_ptr 0x%llx, old_lazy_ptr 0x%llx, module_begin 0x%llx, module_end 0x%llx, uninitialized %d\n",
+                     procname, pid, module_info->path, new_lazy_ptr - slide, old_lazy_ptr - slide,
+                     module_begin - slide, module_end - slide, uninitialized);
+            }
+#endif
             if (!interpose_hooks[j].orig_function || uninitialized ||
                 (old_lazy_ptr == interpose_hooks[j].orig_function))
             {
@@ -9822,53 +9786,34 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
               target_index * sizeof(old_lazy_ptr);
             // Don't change 'old_lazy_ptr' if it's already been changed --
             // presumably via DYLD_INSERT_LIBRARIES.  But note that it won't
-            // be NULL if it's not yet been initialized -- it will point to a
+            // be NULL if it's not yet been initialized.  It will point to a
             // local method for lazily setting it to the correct (external)
-            // value.
+            // value -- a small block in the __stub_helper section of the
+            // __TEXT, containing a PUSH instruction and a JMP instruction.
+            // We assume that if a module is in the dyld shared cache it
+            // doesn't contain any uninitialized lazy pointers.
             bool uninitialized = (!symbol_table.is_in_shared_cache &&
-                                 (old_lazy_ptr > module_begin) &&
-                                 (old_lazy_ptr < module_end));
+                                  (old_lazy_ptr > module_begin) &&
+                                  (old_lazy_ptr < module_end));
+#ifdef DEBUG_LAZY_POINTERS
+            if ((old_lazy_ptr != interpose_hooks[j].orig_function) &&
+                !symbol_table.is_in_shared_cache)
+            {
+              pid_t pid = proc_pid(proc);
+              char procname[PATH_MAX];
+              proc_name(pid, procname, sizeof(procname));
+              vm_offset_t slide = symbol_table.slide;
+              printf("HookCase(%s[%d]): set_interpose_hooks_for_module(): module %s, new_lazy_ptr 0x%x, old_lazy_ptr 0x%x, module_begin 0x%llx, module_end 0x%llx, uninitialized %d\n",
+                     procname, pid, module_info->path, new_lazy_ptr - (uint32_t) slide,
+                     old_lazy_ptr - (uint32_t) slide, module_begin - slide, module_end - slide, uninitialized);
+            }
+#endif
             if (!interpose_hooks[j].orig_function || uninitialized ||
                 (old_lazy_ptr == (uint32_t) interpose_hooks[j].orig_function))
             {
               proc_copyout(proc_map, &new_lazy_ptr, old_lazy_ptr_offset,
                            sizeof(new_lazy_ptr));
             }
-          }
-        } else {
-          unsigned char old_entry[5];
-          memcpy(old_entry, (void *)
-                 (symbol_table.stubs_table + target_index * sizeof(old_entry)),
-                 sizeof(old_entry));
-          user_addr_t old_entry_offset = symbol_table.stubs_table_addr +
-            target_index * sizeof(old_entry);
-
-          int32_t eip = (int32_t) symbol_table.stubs_table_addr +
-            (target_index + 1) * sizeof(old_entry);
-          int32_t *displacementAddr = (int32_t *) (old_entry + 1);
-          int32_t old_function = *displacementAddr + eip;
-
-          unsigned char new_entry[5];
-          unsigned char *opcodeAddr = (unsigned char *) new_entry;
-          displacementAddr = (int32_t *) (opcodeAddr + 1);
-          int32_t new_displacement =
-            (int32_t) (interpose_hooks[j].hook_function) - eip;
-          *displacementAddr = new_displacement;
-          *opcodeAddr = 0xE9;
-
-          // Don't change 'old_function' if it's already been changed --
-          // presumably via DYLD_INSERT_LIBRARIES.  But note that it won't
-          // be NULL if it's not yet been initialized -- it will point to a
-          // local method for lazily setting it to the correct (external)
-          // value.
-          bool uninitialized = (!symbol_table.is_in_shared_cache &&
-                                (old_function > module_begin) &&
-                                (old_function < module_end));
-          if (!interpose_hooks[j].orig_function || uninitialized ||
-              (old_function == (uint32_t) interpose_hooks[j].orig_function))
-          {
-            proc_copyout(proc_map, new_entry, old_entry_offset,
-                         sizeof(new_entry));
           }
         }
       }
