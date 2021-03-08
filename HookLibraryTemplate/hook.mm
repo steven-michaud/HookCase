@@ -245,6 +245,50 @@ static void GetThreadName(char *name, size_t size)
   pthread_getname_np(pthread_self(), name, size);
 }
 
+// It's sometimes useful to find out whether a hook is currently running
+// (on the current thread), or if it's been re-entered (and how many times
+// it's been re-entered). The following macro offers a safe, comprehensive
+// way to do this.
+
+#define GET_SET_IN_FUNCS(name)                       \
+pthread_key_t s_in_##name;                           \
+int32_t s_in_##name##_initialized = 0;               \
+bool get_in_##name()                                 \
+{                                                    \
+  if (!s_in_##name##_initialized) {                  \
+    OSAtomicIncrement32(&s_in_##name##_initialized); \
+    pthread_key_create(&s_in_##name, NULL);          \
+  }                                                  \
+  long value = (long)                                \
+    pthread_getspecific(s_in_##name);                \
+  return (value > 0);                                \
+}                                                    \
+long get_in_##name##_count()                         \
+{                                                    \
+  if (!s_in_##name##_initialized) {                  \
+    OSAtomicIncrement32(&s_in_##name##_initialized); \
+    pthread_key_create(&s_in_##name, NULL);          \
+  }                                                  \
+  return (long) pthread_getspecific(s_in_##name);    \
+}                                                    \
+void set_in_##name(bool flag)                        \
+{                                                    \
+  if (!s_in_##name##_initialized) {                  \
+    OSAtomicIncrement32(&s_in_##name##_initialized); \
+    pthread_key_create(&s_in_##name, NULL);          \
+  }                                                  \
+  long value = (long)                                \
+    pthread_getspecific(s_in_##name);                \
+  if (flag) {                                        \
+    ++value;                                         \
+  } else {                                           \
+    --value;                                         \
+  }                                                  \
+  pthread_setspecific(s_in_##name, (void *) value);  \
+}
+
+GET_SET_IN_FUNCS(LogWithFormatV)
+
 // Though Macs haven't included a serial port for ages, macOS and OSX still
 // support them.  Many kinds of VM software allow you to add a serial port to
 // their virtual machines.  When you do this, /dev/tty.serial1 and
@@ -270,26 +314,32 @@ static void LogWithFormatV(bool decorate, const char *format, va_list args)
     return;
   }
 
+  set_in_LogWithFormatV(true);
+
   char *message;
+  long message_length;
   if (CanUseCF()) {
     CFStringRef formatCFSTR =
       CFStringCreateWithCString(kCFAllocatorDefault, format,
-                                kCFStringEncodingUTF8);
+                                kCFStringEncodingMacRoman);
     CFStringRef messageCFSTR =
       CFStringCreateWithFormatAndArguments(kCFAllocatorDefault, NULL,
                                            formatCFSTR, args);
     CFRelease(formatCFSTR);
-    int length =
+    message_length =
       CFStringGetMaximumSizeForEncoding(CFStringGetLength(messageCFSTR),
-                                        kCFStringEncodingUTF8);
-    message = (char *) calloc(length + 1, 1);
-    CFStringGetCString(messageCFSTR, message, length, kCFStringEncodingUTF8);
+                                        kCFStringEncodingMacRoman);
+    message = (char *) calloc(message_length + 1, 1);
+    CFStringGetBytes(messageCFSTR, CFRangeMake(0, message_length),
+                     kCFStringEncodingMacRoman, '?', true,
+                     (unsigned char *) message, message_length, NULL);
     CFRelease(messageCFSTR);
   } else {
     vasprintf(&message, format, args);
+    message_length = strlen(message);
   }
 
-  char *finished = (char *) calloc(strlen(message) + 1024, 1);
+  char *finished = (char *) calloc(message_length + 1024, 1);
   char timestamp[30] = {0};
   if (CanUseCF()) {
     const time_t currentTime = time(NULL);
@@ -377,6 +427,7 @@ static void LogWithFormatV(bool decorate, const char *format, va_list args)
 #endif
 
   free(finished);
+  set_in_LogWithFormatV(false);
 }
 
 static void LogWithFormat(bool decorate, const char *format, ...)
@@ -385,6 +436,70 @@ static void LogWithFormat(bool decorate, const char *format, ...)
   va_start(args, format);
   LogWithFormatV(decorate, format, args);
   va_end(args);
+}
+
+// The hook for __CFGetConverter() works around a bug or design flaw in the
+// CoreFoundation framework's CFStringCreateWithFormatAndArguments() function,
+// called from LogWithFormatV(): It always uses the string encoding associated
+// with the "preferred language" setting (misleadingly called the "system
+// encoding").
+//
+// For languages that use Latin scripts the "system encoding" is
+// kCFStringEncodingMacRoman, which is appropriate for use in
+// LogWithFormatV(): It can handle strings that combine characters from many
+// different encodings (like Roman letters and Chinese characters). It's also
+// the encoding used by macOS itself at the most basic level (the
+// LC_C_LOCALE). But if your "preferred language" doesn't use a Latin script
+// (for example Chinese or Japanese) the "system encoding" is one specifically
+// associated with that language. It generally doesn't allow you to combine
+// characters from different encoding systems in a single string. If you try,
+// it replaces unrecognized characters with "?", or sometimes refuses to
+// process it at all. This happens in CFStringCreateWithFormatAndArguments()
+// when, for example, your "preferred language" is Russian, Greek,
+// "Traditional Chinese" or "Simplified Chinese", and one of the arguments is
+// a string that combines Roman letters and Chinese characters.
+//
+// Many CoreFoundation string functions allow you to specify the string
+// encoding -- for example CFStringCreateWithCString() and CFStringGetBytes().
+// CFStringCreateWithFormatAndArguments() really should, too. But for as long
+// as it doesn't, we can use the following hook to force it to use
+// kCFStringEncodingMacRoman when called from LogWithFormatV().
+
+//#define DEBUG_GET_CONVERTER 1
+
+#ifdef DEBUG_GET_CONVERTER
+GET_SET_IN_FUNCS(__CFGetConverter)
+#endif
+
+void *(*__CFGetConverter_caller)(uint32_t encoding) = NULL;
+
+void *Hooked___CFGetConverter(uint32_t encoding)
+{
+#ifdef DEBUG_GET_CONVERTER
+  set_in___CFGetConverter(true);
+#endif
+
+  if (get_in_LogWithFormatV()) {
+    encoding = kCFStringEncodingMacRoman;
+  }
+
+  void *retval = __CFGetConverter_caller(encoding);
+
+#ifdef DEBUG_GET_CONVERTER
+  // The call to LogWithFormat() below can cause this function to be re-entered.
+  if (get_in___CFGetConverter_count() == 1) {
+    if (get_in_LogWithFormatV()) {
+      LogWithFormat(true, "Hook.mm: __CFGetConverter(): encoding %u, returning %p",
+                    encoding, retval);
+      //PrintStackTrace();
+    }
+  }
+#endif
+
+#ifdef DEBUG_GET_CONVERTER
+  set_in___CFGetConverter(false);
+#endif
+  return retval;
 }
 
 extern "C" void hooklib_LogWithFormatV(bool decorate, const char *format, va_list args)
@@ -1116,6 +1231,7 @@ __attribute__((used)) static const hook_desc user_hooks[]
 {
   INTERPOSE_FUNCTION(NSPushAutoreleasePool),
   PATCH_FUNCTION(__CFInitialize, /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation),
+  PATCH_FUNCTION(__CFGetConverter, /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation),
 };
 
 // What follows are declarations of the CoreSymbolication APIs that we use to
