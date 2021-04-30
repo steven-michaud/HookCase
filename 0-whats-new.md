@@ -172,7 +172,7 @@ HookCase now supports macOS Mojave (10.14).
 
 But Mojave's Debug kernel is currently very flaky -- lots of panics,
 with and without HookCase.  So support for the Debug kernel
-[has been disabled](HookCase/HookCase/HookCase.cpp#L387), at least
+[has been disabled](HookCase/HookCase/HookCase.cpp#L397), at least
 temporarily.
 
 # What's New in Version 2.1
@@ -202,12 +202,12 @@ can now hook methods that aren't in their module's symbol table.  For
 more information see
 [Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L1105).
 
-* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L9782) that
+* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L9870) that
 prevented interpose hooks from working outside the shared cache of
 system modules.
 
 * Version 2.0
-[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L11273)
+[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L11361)
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0
