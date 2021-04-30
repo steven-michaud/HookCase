@@ -1,3 +1,14 @@
+# What's New in Version 5.0.3
+
+This release deals with changes in macOS 11.3 that broke HookCase. The
+11.3 update changed two kernel structures whose fields HookCase needs
+to access directly. Major changes were made to `struct task`, and
+`struct thread` seems to have been completely redesigned. This kind of
+change normally only takes place in a new major release, so HookCase
+wasn't "expecting" it. HookCase now does separate version checks for
+macOS 11 and macOS 11.3. This fixes
+[Issue #27](https://github.com/steven-michaud/HookCase/issues/27).
+
 # What's New in Version 5.0.2
 
 This version of HookCase fixes a bug that caused some interpose hooks

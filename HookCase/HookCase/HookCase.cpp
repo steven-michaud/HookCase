@@ -322,6 +322,16 @@ bool macOS_BigSur()
   return ((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_10_16_HEX);
 }
 
+bool macOS_BigSur_less_than_3()
+{
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_10_16_HEX)) {
+    return false;
+  }
+  // The output of "uname -r" for macOS 11.3 is actually "20.4.0", and
+  // for 11.2.3 is "20.3.0".
+  return ((OSX_Version() & 0xFF) < 0x40);
+}
+
 bool OSX_Version_Unsupported()
 {
   return (((OSX_Version() & 0xFF00) < MAC_OS_X_VERSION_10_9_HEX) ||
@@ -3879,6 +3889,19 @@ typedef struct thread_fake_bigsur
   void *ifps;           // Offset 0x460
 } thread_fake_bigsur_t;
 
+typedef struct thread_fake_bigsur_3
+{
+  uint32_t pad1[24];
+  integer_t options;    // Offset 0x60
+  uint32_t pad2[15];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0xa0
+  uint32_t pad3[228];
+  int iotier_override;  // Offset 0x438
+  uint32_t pad4[155];
+  vm_map_t map;         // Offset 0x6a8
+} thread_fake_bigsur_3_t;
+
 typedef struct thread_fake_bigsur_development
 {
   uint32_t pad1[26];
@@ -3891,6 +3914,19 @@ typedef struct thread_fake_bigsur_development
   // Actually a member of thread_t's 'machine' member.
   void *ifps;           // Offset 0x4a0
 } thread_fake_bigsur_development_t;
+
+typedef struct thread_fake_bigsur_development_3
+{
+  uint32_t pad1[26];
+  integer_t options;    // Offset 0x68
+  uint32_t pad2[15];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0xa8
+  uint32_t pad3[246];
+  int iotier_override;  // Offset 0x488
+  uint32_t pad4[163];
+  vm_map_t map;         // Offset 0x718
+} thread_fake_bigsur_development_3_t;
 
 typedef struct thread_fake_catalina
 {
@@ -4240,13 +4276,21 @@ bool initialize_thread_offsets()
     }
   }
 
-  if (macOS_BigSur()) {
+  if (macOS_BigSur_less_than_3()) {
     if (kernel_type_is_release()) {
       g_iotier_override_offset =
         offsetof(struct thread_fake_bigsur, iotier_override);
     } else if (kernel_type_is_development()) {
       g_iotier_override_offset =
         offsetof(struct thread_fake_bigsur_development, iotier_override);
+    }
+  } else if (macOS_BigSur()) {
+    if (kernel_type_is_release()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_bigsur_3, iotier_override);
+    } else if (kernel_type_is_development()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_bigsur_development_3, iotier_override);
     }
   } else if (macOS_Catalina()) {
     if (kernel_type_is_release()) {
@@ -4359,7 +4403,6 @@ wait_interrupt_t thread_interrupt_level(wait_interrupt_t new_level)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-
     if (macOS_BigSur()) {
       if (kernel_type_is_release()) {
         offset_in_struct = offsetof(struct thread_fake_bigsur, options);
@@ -5533,6 +5576,17 @@ typedef struct _task_fake_bigsur {
   mach_vm_size_t all_image_info_size;    // Offset 0x410
 } *task_fake_bigsur_t;
 
+typedef struct _task_fake_bigsur_3 {
+  lck_mtx_t lock;       // Size 0x10
+  uint64_t pad1[8];
+  queue_head_t threads; // Size 0x10, offset 0x50
+  uint64_t pad2[117];
+  volatile uint32_t t_flags; /* Offset 0x408, general-purpose task flags protected by task_lock (TL) */
+  uint32_t pad3[3];
+  mach_vm_address_t all_image_info_addr; // Offset 0x418
+  mach_vm_size_t all_image_info_size;    // Offset 0x420
+} *task_fake_bigsur_3_t;
+
 typedef struct _task_fake_bigsur_development {
   lck_mtx_t lock;       // Size 0x10
   uint64_t pad1[10];
@@ -5543,6 +5597,17 @@ typedef struct _task_fake_bigsur_development {
   mach_vm_address_t all_image_info_addr; // Offset 0x410
   mach_vm_size_t all_image_info_size;    // Offset 0x418
 } *task_fake_bigsur_development_t;
+
+typedef struct _task_fake_bigsur_development_3 {
+  lck_mtx_t lock;       // Size 0x10
+  uint64_t pad1[9];
+  queue_head_t threads; // Size 0x10, offset 0x58
+  uint64_t pad2[117];
+  volatile uint32_t t_flags; /* Offset 0x410, general-purpose task flags protected by task_lock (TL) */
+  uint32_t pad3[3];
+  mach_vm_address_t all_image_info_addr; // Offset 0x420
+  mach_vm_size_t all_image_info_size;    // Offset 0x428
+} *task_fake_bigsur_development_3_t;
 
 void task_lock(task_t task)
 {
@@ -5570,13 +5635,21 @@ mach_vm_address_t task_all_image_info_addr(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_BigSur()) {
+    if (macOS_BigSur_less_than_3()) {
       if (kernel_type_is_release()) {
         offset_in_struct =
           offsetof(struct _task_fake_bigsur, all_image_info_addr);
       } else if (kernel_type_is_development()) {
         offset_in_struct =
           offsetof(struct _task_fake_bigsur_development, all_image_info_addr);
+      }
+    } else if (macOS_BigSur()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_bigsur_3, all_image_info_addr);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_bigsur_development_3, all_image_info_addr);
       }
     } else if (macOS_Catalina()) {
       if (kernel_type_is_release()) {
@@ -5633,13 +5706,21 @@ mach_vm_size_t task_all_image_info_size(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_BigSur()) {
+    if (macOS_BigSur_less_than_3()) {
       if (kernel_type_is_release()) {
         offset_in_struct =
           offsetof(struct _task_fake_bigsur, all_image_info_size);
       } else if (kernel_type_is_development()) {
         offset_in_struct =
           offsetof(struct _task_fake_bigsur_development, all_image_info_size);
+      }
+    } else if (macOS_BigSur()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_bigsur_3, all_image_info_size);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_bigsur_development_3, all_image_info_size);
       }
     } else if (macOS_Catalina()) {
       if (kernel_type_is_release()) {
@@ -5696,12 +5777,19 @@ uint32_t task_flags(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_BigSur()) {
+    if (macOS_BigSur_less_than_3()) {
       if (kernel_type_is_release()) {
         offset_in_struct = offsetof(struct _task_fake_bigsur, t_flags);
       } else if (kernel_type_is_development()) {
         offset_in_struct =
           offsetof(struct _task_fake_bigsur_development, t_flags);
+      }
+    } else if (macOS_BigSur()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct = offsetof(struct _task_fake_bigsur_3, t_flags);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_bigsur_development_3, t_flags);
       }
     } else if (macOS_Catalina()) {
       if (kernel_type_is_release()) {
