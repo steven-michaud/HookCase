@@ -8179,7 +8179,7 @@ bool set_watcher(vm_map_t proc_map, user_addr_t watchpoint,
   watcherp->orig_prot = info.protection;
   watcherp->unique_pid = unique_pid;
   watcherp->info_addr = info_addr; // May be 0
-  OSIncrementAtomic(&watcherp->set);
+  OSCompareAndSwap(watcherp->set, 1, &watcherp->set);
   if (have_old_watcher) {
     all_watchers_unlock_write();
   } else {
@@ -8223,7 +8223,7 @@ bool unset_watcher(vm_map_t proc_map, watcher_t *watcherp)
     printf("HookCase(%s[%d]): unset_watcher(): vm_map_protect() failed (\'0x%x\') at \'0x%lx\' with protection \'0x%x\'\n",
            procname, pid, rv, watcherp->range_start, new_prot);
   } else {
-    OSDecrementAtomic(&watcherp->set);
+    OSCompareAndSwap(watcherp->set, 0, &watcherp->set);
   }
 
   return (rv == KERN_SUCCESS);
@@ -11593,6 +11593,9 @@ bool hook_mac_vnode_check_open()
                        (vm_offset_t)mac_vnode_check_open_caller);
 }
 
+#define pal_sti() __asm__ volatile ("sti")
+#define pal_cli() __asm__ volatile ("cli")
+
 typedef void (*user_trap_t)(x86_saved_state_t *state);
 
 user_trap_t user_trap = NULL;
@@ -11614,16 +11617,17 @@ void user_trap_hook(x86_saved_state_t *intr_state, kern_hook_t *hookp)
     cr2 = (user_addr_t) state->ss_32.cr2;
   }
 
+  // Make sure interrupts are enabled for the code we run here to
+  // support watchpoints. Otherwise we can get into trouble -- see
+  // https://github.com/steven-michaud/HookCase/issues/26.
+  pal_sti();
+
   // Check to see if our fault was triggered by hitting a watchpoint. If so,
   // unset the watchpoint and store information on the code that hit it. For
   // reasons that aren't completely clear, when we unset a watchpoint we
   // must still fall through to the original user_trap() method. Returning
   // early produces very bad results.
-  if ((type == T_PAGE_FAULT) &&
-      (code & (T_PF_WRITE | T_PF_USER)))
-  {
-    wait_interrupt_t old_state = thread_interrupt_level(THREAD_UNINT);
-
+  if (type == T_PAGE_FAULT) {
     proc_t proc = current_proc();
     uint64_t unique_pid = 0;
     if (proc) {
@@ -11654,9 +11658,11 @@ void user_trap_hook(x86_saved_state_t *intr_state, kern_hook_t *hookp)
         unset_watcher(proc_map, watcherp);
       }
     }
-
-    thread_interrupt_level(old_state);
   }
+
+  // Interrupts were disabled when we entered this function. So now we disable
+  // them again.
+  pal_cli();
 
   user_trap_t caller = (user_trap_t) hookp->caller_addr;
   caller(state); // Might not return
@@ -12522,6 +12528,11 @@ void remove_intr_handler(int intr_num)
   }
 }
 
+// Uncomment this to disable watchpoint support. HookCase 5.0.4 made changes
+// to resolve https://github.com/steven-michaud/HookCase/issues/26. But the
+// watchpoint code is complex, and might still cause trouble.
+//#define DISABLE_WATCHPOINTS 1
+
 bool install_intr_handlers()
 {
   if (!find_kernel_private_functions()) {
@@ -12584,9 +12595,11 @@ bool install_intr_handlers()
       return false;
     }
   }
+#ifndef DISABLE_WATCHPOINTS
   if (!hook_user_trap()) {
     return false;
   }
+#endif
   return hook_thread_bootstrap_return();
 }
 

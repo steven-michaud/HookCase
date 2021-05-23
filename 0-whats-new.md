@@ -1,3 +1,16 @@
+# What's New in Version 5.0.4
+
+This version of HookCase fixes a bug that caused intermittent
+instability, though not kernel panics. I fixed it by tweaking the
+[code at the heart of HookCase's watchpoint support](HookCase/HookCase/HookCase.cpp#L11620).
+See [Issue #26](https://github.com/steven-michaud/HookCase/issues/26)
+for more information.
+
+HookCase's watchpoint code is quite complex. So if you see any sort of
+instability short of kernel panics, especially if it resembles what's
+reported at Issue #26, you should try
+[disabling watchpoint support](HookCase/HookCase/HookCase.cpp#L12531)
+
 # What's New in Version 5.0.3
 
 This release deals with changes in macOS 11.3 that broke HookCase. The
