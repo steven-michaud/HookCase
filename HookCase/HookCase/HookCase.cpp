@@ -332,6 +332,16 @@ bool macOS_BigSur_less_than_3()
   return ((OSX_Version() & 0xFF) < 0x40);
 }
 
+bool macOS_BigSur_4_or_greater()
+{
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_10_16_HEX)) {
+    return false;
+  }
+  // The output of "uname -r" for macOS 11.4 is actually "20.5.0", and
+  // for 11.3 is "20.4.0".
+  return ((OSX_Version() & 0xFF) >= 0x50);
+}
+
 bool OSX_Version_Unsupported()
 {
   return (((OSX_Version() & 0xFF00) < MAC_OS_X_VERSION_10_9_HEX) ||
@@ -3902,6 +3912,19 @@ typedef struct thread_fake_bigsur_3
   vm_map_t map;         // Offset 0x6a8
 } thread_fake_bigsur_3_t;
 
+typedef struct thread_fake_bigsur_4
+{
+  uint32_t pad1[24];
+  integer_t options;    // Offset 0x60
+  uint32_t pad2[15];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0xa0
+  uint32_t pad3[230];
+  int iotier_override;  // Offset 0x440
+  uint32_t pad4[155];
+  vm_map_t map;         // Offset 0x6b0
+} thread_fake_bigsur_4_t;
+
 typedef struct thread_fake_bigsur_development
 {
   uint32_t pad1[26];
@@ -3927,6 +3950,19 @@ typedef struct thread_fake_bigsur_development_3
   uint32_t pad4[163];
   vm_map_t map;         // Offset 0x718
 } thread_fake_bigsur_development_3_t;
+
+typedef struct thread_fake_bigsur_development_4
+{
+  uint32_t pad1[26];
+  integer_t options;    // Offset 0x68
+  uint32_t pad2[15];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0xa8
+  uint32_t pad3[248];
+  int iotier_override;  // Offset 0x490
+  uint32_t pad4[163];
+  vm_map_t map;         // Offset 0x720
+} thread_fake_bigsur_development_4_t;
 
 typedef struct thread_fake_catalina
 {
@@ -4276,7 +4312,15 @@ bool initialize_thread_offsets()
     }
   }
 
-  if (macOS_BigSur_less_than_3()) {
+  if (macOS_BigSur_4_or_greater()) {
+    if (kernel_type_is_release()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_bigsur_4, iotier_override);
+    } else if (kernel_type_is_development()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_bigsur_development_4, iotier_override);
+    }
+  } else if (macOS_BigSur_less_than_3()) {
     if (kernel_type_is_release()) {
       g_iotier_override_offset =
         offsetof(struct thread_fake_bigsur, iotier_override);

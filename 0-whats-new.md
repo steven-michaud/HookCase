@@ -1,3 +1,14 @@
+# What's New in Version 5.0.5
+
+macOS 11.4 broke HookCase, just like macOS 11.3 did. macOS 11.4 made
+further changes to `struct thread`, of a kind that normally only takes
+place in a new major release. These changes caused a kernel panic
+every time you tried to load a hook library into an application. The
+problem is fixed by HookCase 5.0.5. `struct thread` is one of several
+kernel structures that HookCase needs to access directly. For more
+information see
+[Issue #28](https://github.com/steven-michaud/HookCase/issues/28).
+
 # What's New in Version 5.0.4
 
 This version of HookCase fixes a bug that caused intermittent
@@ -215,12 +226,12 @@ can now hook methods that aren't in their module's symbol table.  For
 more information see
 [Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L1105).
 
-* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L9870) that
+* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L9914) that
 prevented interpose hooks from working outside the shared cache of
 system modules.
 
 * Version 2.0
-[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L11361)
+[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L11405)
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0
