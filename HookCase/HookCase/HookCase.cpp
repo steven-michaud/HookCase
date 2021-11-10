@@ -126,6 +126,8 @@
 #include <sys/vnode.h>
 #include <kern/host.h>
 #include <mach-o/loader.h>
+// This definition is missing from loader.h on some macOS versions
+#define S_INIT_FUNC_OFFSETS 0x16
 #include <mach-o/nlist.h>
 #include <libkern/OSAtomic.h>
 #include <i386/cpuid.h>
@@ -170,7 +172,8 @@ extern "C" void *get_bsdtask_info(task_t);
 #define MAC_OS_X_VERSION_10_13_HEX 0x00001100
 #define MAC_OS_X_VERSION_10_14_HEX 0x00001200
 #define MAC_OS_X_VERSION_10_15_HEX 0x00001300
-#define MAC_OS_X_VERSION_10_16_HEX 0x00001400
+#define MAC_OS_X_VERSION_11_HEX    0x00001400
+#define MAC_OS_X_VERSION_12_HEX    0x00001500
 
 char *gOSVersionString = NULL;
 size_t gOSVersionStringLength = 0;
@@ -319,12 +322,12 @@ bool macOS_Catalina_less_than_5()
 
 bool macOS_BigSur()
 {
-  return ((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_10_16_HEX);
+  return ((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_11_HEX);
 }
 
 bool macOS_BigSur_less_than_3()
 {
-  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_10_16_HEX)) {
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_11_HEX)) {
     return false;
   }
   // The output of "uname -r" for macOS 11.3 is actually "20.4.0", and
@@ -334,7 +337,7 @@ bool macOS_BigSur_less_than_3()
 
 bool macOS_BigSur_4_or_greater()
 {
-  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_10_16_HEX)) {
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_11_HEX)) {
     return false;
   }
   // The output of "uname -r" for macOS 11.4 is actually "20.5.0", and
@@ -342,10 +345,15 @@ bool macOS_BigSur_4_or_greater()
   return ((OSX_Version() & 0xFF) >= 0x50);
 }
 
+bool macOS_Monterey()
+{
+  return ((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_12_HEX);
+}
+
 bool OSX_Version_Unsupported()
 {
   return (((OSX_Version() & 0xFF00) < MAC_OS_X_VERSION_10_9_HEX) ||
-          ((OSX_Version() & 0xFF00) > MAC_OS_X_VERSION_10_16_HEX));
+          ((OSX_Version() & 0xFF00) > MAC_OS_X_VERSION_12_HEX));
 }
 
 // When using the debug kernel, set "kernel_stack_pages=6" in the boot args
@@ -493,10 +501,11 @@ bool find_kernel_header()
         continue;
       }
       struct mach_header_64 *header = (struct mach_header_64 *) addr;
-      // On macOS 11 (Big Sur) the boot kernel collection gets loaded where
-      // the kernel header should be. The actual kernel header is somewhere
-      // below.
-      if (macOS_BigSur()) {
+      // On macOS 11 (Big Sur) and macOS 12 (Monterey) the boot kernel
+      // collection gets loaded where the kernel header should be. The actual
+      // kernel header is somewhere below (if the "keepsyms" kernel boot arg
+      // has been set).
+      if (macOS_BigSur() || macOS_Monterey()) {
         if ((header->magic == MH_MAGIC_64) &&
             (header->cputype == CPU_TYPE_X86_64) &&
             (header->cpusubtype == CPU_SUBTYPE_I386_ALL) &&
@@ -837,7 +846,7 @@ bool find_sysent_table()
   struct section_64 *data_sections = NULL;
   const char *data_segment_name;
   const char *const_section_name;
-  if (macOS_Catalina() || macOS_BigSur()) {
+  if (macOS_Catalina() || macOS_BigSur() || macOS_Monterey()) {
     data_segment_name = "__DATA_CONST";
     const_section_name = "__const";
   } else if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave()) {
@@ -1217,7 +1226,7 @@ bool find_kernel_private_functions()
   }
 
   if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
-      macOS_Catalina() || macOS_BigSur())
+      macOS_Catalina() || macOS_BigSur() || macOS_Monterey())
   {
     if (!g_vm_pages) {
       g_vm_pages = (vm_page_t *)
@@ -1480,7 +1489,8 @@ bool find_kernel_private_functions()
     }
   }
   if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra() ||
-      macOS_Mojave() || macOS_Catalina() || macOS_BigSur())
+      macOS_Mojave() || macOS_Catalina() || macOS_BigSur() ||
+      macOS_Monterey())
   {
     if (!task_coalition_ids) {
       task_coalition_ids = (task_coalition_ids_t)
@@ -1512,7 +1522,7 @@ bool find_kernel_private_functions()
     }
   }
   if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
-      macOS_Catalina() || macOS_BigSur())
+      macOS_Catalina() || macOS_BigSur() || macOS_Monterey())
   {
     if (!vm_object_unlock_ptr) {
       vm_object_unlock_ptr = (vm_object_unlock_t)
@@ -1696,13 +1706,41 @@ typedef struct _vm_map_fake_catalina_dev_debug {
   unsigned int timestamp; // Offset 0xfc
 } *vm_map_fake_catalina_dev_debug_t;
 
+typedef struct _vm_map_fake_monterey {
+  lck_rw_t lock;
+  struct vm_map_links links; // Actually 1st member of "struct vm_map_header hdr"
+#define hdr links
+  uint64_t pad1[3];
+  pmap_t pmap;            // Offset 0x48
+  vm_map_size_t size;     // Offset 0x50
+  uint64_t pad2[2];
+  vm_map_size_t user_wire_limit; // Offset 0x68
+  vm_map_size_t user_wire_size;  // Offset 0x70
+  uint32_t pad3[34];
+  unsigned int timestamp; // Offset 0x100
+} *vm_map_fake_monterey_t;
+
+typedef struct _vm_map_fake_monterey_dev {
+  lck_rw_t lock;
+  struct vm_map_links links; // Actually 1st member of "struct vm_map_header hdr"
+#define hdr links
+  uint64_t pad1[3];
+  pmap_t pmap;            // Offset 0x48
+  vm_map_size_t size;     // Offset 0x50
+  uint64_t pad2[2];
+  vm_map_size_t user_wire_limit; // Offset 0x68
+  vm_map_size_t user_wire_size;  // Offset 0x70
+  uint32_t pad3[37];
+  unsigned int timestamp; // Offset 0x10c
+} *vm_map_fake_monterey_dev_t;
+
 pmap_t vm_map_pmap(vm_map_t map)
 {
   if (!map) {
     return NULL;
   }
   if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
-      macOS_Catalina() || macOS_BigSur())
+      macOS_Catalina() || macOS_BigSur() || macOS_Monterey())
   {
     vm_map_fake_sierra_t m = (vm_map_fake_sierra_t) map;
     return m->pmap;
@@ -1718,7 +1756,16 @@ unsigned int vm_map_timestamp(vm_map_t map)
     return 0;
   }
   unsigned int retval = 0;
-  if (macOS_Catalina() || macOS_BigSur()) {
+  if (macOS_Monterey()) {
+    if (kernel_type_is_release()) {
+      vm_map_fake_monterey_t map_local = (vm_map_fake_monterey_t) map;
+      retval = map_local->timestamp;
+    } else if (kernel_type_is_development()) {
+      vm_map_fake_monterey_dev_t map_local =
+        (vm_map_fake_monterey_dev_t) map;
+      retval = map_local->timestamp;
+    }
+  } else if (macOS_Catalina() || macOS_BigSur()) {
     if (kernel_type_is_release()) {
       vm_map_fake_catalina_t map_local = (vm_map_fake_catalina_t) map;
       retval = map_local->timestamp;
@@ -1769,7 +1816,10 @@ vm_map_size_t vm_map_user_wire_limit(vm_map_t map)
     return 0;
   }
   vm_map_size_t retval;
-  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
+  if (macOS_Monterey()) {
+    vm_map_fake_monterey_t m = (vm_map_fake_monterey_t) map;
+    retval = m->user_wire_limit;
+  } else if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
       macOS_Catalina() || macOS_BigSur())
   {
     vm_map_fake_sierra_t m = (vm_map_fake_sierra_t) map;
@@ -1787,7 +1837,10 @@ vm_map_size_t vm_map_user_wire_size(vm_map_t map)
     return 0;
   }
   vm_map_size_t retval;
-  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
+  if (macOS_Monterey()) {
+    vm_map_fake_monterey_t m = (vm_map_fake_monterey_t) map;
+    retval = m->user_wire_size;
+  } else if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
       macOS_Catalina() || macOS_BigSur())
   {
     vm_map_fake_sierra_t m = (vm_map_fake_sierra_t) map;
@@ -1804,7 +1857,10 @@ void vm_map_set_user_wire_size(vm_map_t map, vm_map_size_t new_size)
   if (!map) {
     return;
   }
-  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
+  if (macOS_Monterey()) {
+    vm_map_fake_monterey_t m = (vm_map_fake_monterey_t) map;
+    m->user_wire_size = new_size;
+  } else if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
       macOS_Catalina() || macOS_BigSur())
   {
     vm_map_fake_sierra_t m = (vm_map_fake_sierra_t) map;
@@ -1905,13 +1961,58 @@ typedef struct _vm_map_entry_fake_elcapitan {
   //uint64_t pad2[33];                // Only present in debug versions
 } *vm_map_entry_fake_elcapitan_t;
 
+typedef struct _vm_map_entry_fake_monterey {
+  struct vm_map_links links;
+#define vme_prev  links.prev
+#define vme_next  links.next
+#define vme_start links.start
+#define vme_end   links.end
+  uint64_t pad1[3];
+  union vm_map_object vme_object;   /* object I point to, offset 0x38 */
+  vm_object_offset_t vme_offset;    /* offset into object */
+  unsigned int                      // Offset 0x48
+  /* boolean_t */ is_shared:1,      /* region is shared */
+  /* boolean_t */ is_sub_map:1,     /* Is "object" a submap? */
+  /* boolean_t */ in_transition:1,  /* Entry being changed */
+  /* boolean_t */ needs_wakeup:1,   /* Waiters on in_transition */
+  /* vm_behavior_t */ behavior:2,   /* user paging behavior hint */
+  /* behavior is not defined for submap type */
+  /* boolean_t */ needs_copy:1,     /* object need to be copied? */
+  /* Only in task maps: */
+  /* vm_prot_t */ protection:4,     /* protection code */
+  /* vm_prot_t */ max_protection:4, /* maximum protection */
+  /* vm_inherit_t */ inheritance:2, /* inheritance */
+  /* boolean_t */ use_pmap:1,       /* use_pmap is overloaded:
+                                     * if "is_sub_map":
+                                     *  use a nested pmap?
+                                     * else (i.e. if object):
+                                     *  use pmap accounting
+                                     *  for footprint?
+                                     */
+  /* boolean_t */ no_cache:1,       /* should new pages be cached? */
+  /* boolean_t */ permanent:1,      /* mapping can not be removed */
+  /* boolean_t */ superpage_size:1, /* use superpages of a certain size */
+  /* boolean_t */ map_aligned:1,    /* align to map's page size */
+  /* boolean_t */ zero_wired_pages:1, /* zero out the wired pages of
+                                       * this entry it is being deleted
+                                       * without unwiring them */
+  /* boolean_t */ used_for_jit:1,
+  __pad:8;
+  unsigned short wired_count;
+  unsigned short user_wired_count;
+} *vm_map_entry_fake_monterey_t;
+
 bool vm_map_entry_get_superpage_size(vm_map_entry_t entry)
 {
   if (!entry) {
     return false;
   }
   bool retval = false;
-  if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra() ||
+  if (macOS_Monterey()) {
+    vm_map_entry_fake_monterey_t entry_local =
+      (vm_map_entry_fake_monterey_t) entry;
+    retval = entry_local->superpage_size;
+  } else if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra() ||
       macOS_Mojave() || macOS_Catalina() || macOS_BigSur())
   {
     vm_map_entry_fake_elcapitan_t entry_local =
@@ -1983,7 +2084,18 @@ void vm_map_lock_write_to_read(vm_map_t map)
   if (!map) {
     return;
   }
-  if (macOS_Catalina() || macOS_BigSur()) {
+  if (macOS_Monterey()) {
+    if (kernel_type_is_release()) {
+      vm_map_fake_monterey_t map_local = (vm_map_fake_monterey_t) map;
+      ++map_local->timestamp;
+      lck_rw_lock_exclusive_to_shared(&(map_local->lock));
+    } else if (kernel_type_is_development()) {
+      vm_map_fake_monterey_dev_t map_local =
+        (vm_map_fake_monterey_dev_t) map;
+      ++map_local->timestamp;
+      lck_rw_lock_exclusive_to_shared(&(map_local->lock));
+    }
+  } else if (macOS_Catalina() || macOS_BigSur()) {
     if (kernel_type_is_release()) {
       vm_map_fake_catalina_t map_local = (vm_map_fake_catalina_t) map;
       ++map_local->timestamp;
@@ -2020,7 +2132,18 @@ void vm_map_unlock(vm_map_t map)
   if (!map) {
     return;
   }
-  if (macOS_Catalina() || macOS_BigSur()) {
+  if (macOS_Monterey()) {
+    if (kernel_type_is_release()) {
+      vm_map_fake_monterey_t map_local = (vm_map_fake_monterey_t) map;
+      ++map_local->timestamp;
+      lck_rw_done(&(map_local->lock));
+    } else if (kernel_type_is_development()) {
+      vm_map_fake_monterey_dev_t map_local =
+        (vm_map_fake_monterey_dev_t) map;
+      ++map_local->timestamp;
+      lck_rw_done(&(map_local->lock));
+    }
+  } else if (macOS_Catalina() || macOS_BigSur()) {
     if (kernel_type_is_release()) {
       vm_map_fake_catalina_t map_local = (vm_map_fake_catalina_t) map;
       ++map_local->timestamp;
@@ -2526,7 +2649,7 @@ typedef struct vm_page_fake_bigsur {
 vm_page_packed_t vm_page_pack_ptr(uintptr_t p)
 {
   if (!p || (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave() &&
-             !macOS_Catalina() && !macOS_BigSur()))
+             !macOS_Catalina() && !macOS_BigSur() && !macOS_Monterey()))
   {
     return 0;
   }
@@ -2567,7 +2690,7 @@ vm_page_packed_t vm_page_pack_ptr(uintptr_t p)
 uintptr_t vm_page_unpack_ptr(uintptr_t p)
 {
   if (!p || (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave() &&
-             !macOS_Catalina() && !macOS_BigSur()))
+             !macOS_Catalina() && !macOS_BigSur() && !macOS_Monterey()))
   {
     return 0;
   }
@@ -2604,7 +2727,7 @@ ppnum_t page_phys_page(vm_page_t page)
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
     if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
-        macOS_Catalina() || macOS_BigSur())
+        macOS_Catalina() || macOS_BigSur() || macOS_Monterey())
     {
       offset_in_struct = offsetof(struct vm_page_fake_sierra, phys_page);
     } else if (OSX_ElCapitan()) {
@@ -2636,7 +2759,7 @@ bool page_is_wpmapped(vm_page_t page)
   }
   bool retval = false;
   if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
-      macOS_Catalina() || macOS_BigSur())
+      macOS_Catalina() || macOS_BigSur() || macOS_Monterey())
   {
     vm_page_fake_sierra_t page_local = (vm_page_fake_sierra_t) page;
     retval = page_local->wpmapped;
@@ -2659,7 +2782,7 @@ void page_set_wpmapped(vm_page_t page, bool flag)
     return;
   }
   if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
-      macOS_Catalina() || macOS_BigSur())
+      macOS_Catalina() || macOS_BigSur() || macOS_Monterey())
   {
     vm_page_fake_sierra_t page_local = (vm_page_fake_sierra_t) page;
     page_local->wpmapped = flag;
@@ -2681,7 +2804,7 @@ unsigned char page_is_cs_validated(vm_page_t page)
     return false;
   }
   unsigned char retval = 0;
-  if (macOS_BigSur()) {
+  if (macOS_BigSur() || macOS_Monterey()) {
     vm_page_fake_bigsur_t page_local = (vm_page_fake_bigsur_t) page;
     retval = page_local->cs_validated;
   } else if (macOS_HighSierra() || macOS_Mojave() || macOS_Catalina()) {
@@ -2708,7 +2831,7 @@ void page_set_cs_validated(vm_page_t page, unsigned char value)
   if (!page) {
     return;
   }
-  if (macOS_BigSur()) {
+  if (macOS_BigSur() || macOS_Monterey()) {
     vm_page_fake_bigsur_t page_local = (vm_page_fake_bigsur_t) page;
     page_local->cs_validated = value;
   } else if (macOS_HighSierra() || macOS_Mojave() || macOS_Catalina()) {
@@ -2735,7 +2858,7 @@ unsigned char page_is_cs_tainted(vm_page_t page)
     return false;
   }
   unsigned char retval = 0;
-  if (macOS_BigSur()) {
+  if (macOS_BigSur() || macOS_Monterey()) {
     vm_page_fake_bigsur_t page_local = (vm_page_fake_bigsur_t) page;
     retval = page_local->cs_tainted;
   } else if (macOS_HighSierra() || macOS_Mojave() || macOS_Catalina()) {
@@ -2762,7 +2885,7 @@ void page_set_cs_tainted(vm_page_t page, unsigned char value)
   if (!page) {
     return;
   }
-  if (macOS_BigSur()) {
+  if (macOS_BigSur() || macOS_Monterey()) {
     vm_page_fake_bigsur_t page_local = (vm_page_fake_bigsur_t) page;
     page_local->cs_tainted = value;
   } else if (macOS_HighSierra() || macOS_Mojave() || macOS_Catalina()) {
@@ -2789,7 +2912,7 @@ unsigned char page_is_cs_nx(vm_page_t page)
     return false;
   }
   unsigned char retval = 0;
-  if (macOS_BigSur()) {
+  if (macOS_BigSur() || macOS_Monterey()) {
     vm_page_fake_bigsur_t page_local = (vm_page_fake_bigsur_t) page;
     retval = page_local->cs_nx;
   } else if (macOS_HighSierra() || macOS_Mojave() || macOS_Catalina()) {
@@ -2813,7 +2936,7 @@ void page_set_cs_nx(vm_page_t page, unsigned char value)
   if (!page) {
     return;
   }
-  if (macOS_BigSur()) {
+  if (macOS_BigSur() || macOS_Monterey()) {
     vm_page_fake_bigsur_t page_local = (vm_page_fake_bigsur_t) page;
     page_local->cs_nx = value;
   } else if (macOS_HighSierra() || macOS_Mojave() || macOS_Catalina()) {
@@ -2835,7 +2958,9 @@ bool page_is_slid(vm_page_t page)
 {
   // As best I can tell, the notion of slid pages is absent in macOS Mojave
   // and above.
-  if (!page || macOS_Mojave() || macOS_Catalina() || macOS_BigSur()) {
+  if (!page || macOS_Mojave() || macOS_Catalina() || macOS_BigSur() ||
+      macOS_Monterey())
+  {
     return false;
   }
   bool retval = false;
@@ -2862,7 +2987,9 @@ void page_set_slid(vm_page_t page, bool flag)
 {
   // As best I can tell, the notion of slid pages is absent in macOS Mojave
   // and above.
-  if (!page || macOS_Mojave() || macOS_Catalina() || macOS_BigSur()) {
+  if (!page || macOS_Mojave() || macOS_Catalina() || macOS_BigSur() ||
+      macOS_Monterey())
+  {
     return;
   }
   if (macOS_HighSierra()) {
@@ -2892,7 +3019,7 @@ vm_object_t page_object(vm_page_t page)
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
     if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
-        macOS_Catalina() || macOS_BigSur())
+        macOS_Catalina() || macOS_BigSur() || macOS_Monterey())
     {
       offset_in_struct = offsetof(struct vm_page_fake_sierra, vm_page_object);
     } else if (OSX_ElCapitan()) {
@@ -2907,7 +3034,7 @@ vm_object_t page_object(vm_page_t page)
   vm_object_t retval = NULL;
   if (offset_in_struct != -1) {
     if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
-        macOS_Catalina() || macOS_BigSur())
+        macOS_Catalina() || macOS_BigSur() || macOS_Monterey())
     {
       vm_page_object_t packed =
         *((vm_page_object_t *)((vm_map_offset_t)page + offset_in_struct));
@@ -2929,7 +3056,7 @@ vm_object_offset_t page_object_offset(vm_page_t page)
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
     if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
-        macOS_Catalina() || macOS_BigSur())
+        macOS_Catalina() || macOS_BigSur() || macOS_Monterey())
     {
       offset_in_struct = offsetof(struct vm_page_fake_sierra, offset);
     } else if (OSX_ElCapitan()) {
@@ -3376,7 +3503,7 @@ bool object_is_code_signed(vm_object_t object)
         (vm_object_fake_highsierra_dev_debug_t) object;
       retval = object_local->code_signed;
     }
-  } else if (macOS_Catalina() || macOS_BigSur()) {
+  } else if (macOS_Catalina() || macOS_BigSur() || macOS_Monterey()) {
     if (kernel_type_is_release()) {
       vm_object_fake_catalina_t object_local =
         (vm_object_fake_catalina_t) object;
@@ -3443,7 +3570,7 @@ void object_set_code_signed(vm_object_t object, bool flag)
         (vm_object_fake_highsierra_dev_debug_t) object;
       object_local->code_signed = flag;
     }
-  } else if (macOS_Catalina() || macOS_BigSur()) {
+  } else if (macOS_Catalina() || macOS_BigSur() || macOS_Monterey()) {
     if (kernel_type_is_release()) {
       vm_object_fake_catalina_t object_local =
         (vm_object_fake_catalina_t) object;
@@ -3474,7 +3601,9 @@ bool object_is_slid(vm_object_t object)
 {
   // As best I can tell, the notion of slid objects is absent in macOS Mojave
   // and above.
-  if (!object || macOS_Mojave() || macOS_Catalina() || macOS_BigSur()) {
+  if (!object || macOS_Mojave() || macOS_Catalina() || macOS_BigSur() ||
+      macOS_Monterey())
+  {
     return false;
   }
   bool retval = false;
@@ -3535,7 +3664,7 @@ vm_object_t object_get_shadow(vm_object_t object)
   }
   vm_object_t retval = NULL;
   if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
-      macOS_Catalina() || macOS_BigSur())
+      macOS_Catalina() || macOS_BigSur() || macOS_Monterey())
   {
     if (kernel_type_is_release()) {
       vm_object_fake_sierra_t object_local =
@@ -3562,7 +3691,7 @@ vm_object_offset_t object_get_shadow_offset(vm_object_t object)
     return 0;
   }
   vm_object_offset_t retval = 0;
-  if (macOS_Catalina() || macOS_BigSur()) {
+  if (macOS_Catalina() || macOS_BigSur() || macOS_Monterey()) {
     if (kernel_type_is_release()) {
       vm_object_fake_catalina_t object_local =
         (vm_object_fake_catalina_t) object;
@@ -3601,7 +3730,7 @@ vm_object_offset_t object_get_shadow_offset(vm_object_t object)
 void vm_object_unlock(vm_object_t object)
 {
   if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
-      macOS_Catalina() || macOS_BigSur())
+      macOS_Catalina() || macOS_BigSur() || macOS_Monterey())
   {
     vm_object_unlock_ptr(object);
     return;
@@ -3734,12 +3863,54 @@ typedef struct _proc_fake_bigsur {
   u_short p_acflag;       // Offset 0x38c
 } *proc_fake_bigsur_t;
 
+typedef struct _proc_fake_monterey {
+  uint32_t pad1[4];
+  task_t task;            // Offset 0x10
+  uint32_t pad2[12];
+  uint64_t p_uniqueid;    // Offset 0x48
+  uint32_t pad3[6];
+  pid_t p_pid;            // Offset 0x68
+  uint32_t pad4[99];
+  unsigned int p_flag;    // P_* flags (offset 0x1fc)
+  unsigned int p_lflag;
+  uint32_t pad5[73];
+  // On Monterey, p_argc and p_argslen are swapped (judging by their contents).
+  // And p_argc is always zero. I won't know why until Apple releases source
+  // code for Monterey's xnu kernel.
+  int32_t p_argc;         // Offset 0x328
+  uint32_t p_argslen;     // Length of "string area" at beginning of user stack (offset 0x32c)
+  user_addr_t user_stack; // Where user stack was allocated (offset 0x330)
+  uint32_t pad6[53];
+  u_short p_acflag;       // Offset 0x40c
+} *proc_fake_monterey_t;
+
+typedef struct _proc_fake_monterey_dev {
+  uint32_t pad1[4];
+  task_t task;            // Offset 0x10
+  uint32_t pad2[12];
+  uint64_t p_uniqueid;    // Offset 0x48
+  uint32_t pad3[6];
+  pid_t p_pid;            // Offset 0x68
+  uint32_t pad4[103];
+  unsigned int p_flag;    // P_* flags (offset 0x20c)
+  unsigned int p_lflag;
+  uint32_t pad5[73];
+  // On Monterey, p_argc and p_argslen are swapped (judging by their contents).
+  // And p_argc is always zero. I won't know why until Apple releases source
+  // code for Monterey's xnu kernel.
+  int32_t p_argc;         // Offset 0x338
+  uint32_t p_argslen;     // Length of "string area" at beginning of user stack (offset 0x33c)
+  user_addr_t user_stack; // Where user stack was allocated (offset 0x340)
+  uint32_t pad6[53];
+  u_short p_acflag;       // Offset 0x41c
+} *proc_fake_monterey_dev_t;
+
 static uint64_t proc_uniqueid(proc_t proc)
 {
   if (!proc) {
     return 0;
   }
-  if (macOS_Catalina() || macOS_BigSur()) {
+  if (macOS_Catalina() || macOS_BigSur() || macOS_Monterey()) {
     proc_fake_catalina_t p = (proc_fake_catalina_t) proc;
     return p->p_uniqueid;
   }
@@ -3756,7 +3927,9 @@ static task_t proc_task(proc_t proc)
   if (!proc) {
     return NULL;
   }
-  if (macOS_Mojave() || macOS_Catalina() || macOS_BigSur()) {
+  if (macOS_Mojave() || macOS_Catalina() || macOS_BigSur() ||
+      macOS_Monterey())
+  {
     proc_fake_mojave_t p = (proc_fake_mojave_t) proc;
     return p->task;
   }
@@ -3764,12 +3937,19 @@ static task_t proc_task(proc_t proc)
   return p->task;
 }
 
+bool is_64bit_task(task_t task);
+
 static bool IS_64BIT_PROCESS(proc_t proc)
 {
   if (!proc) {
     return false;
   }
-  if (macOS_BigSur()) {
+
+  if (macOS_Monterey()) {
+    // Either the P_LP64 flag is no longer supported on Monterey, or it's
+    // initialized very late.
+    return is_64bit_task(proc_task(proc));
+  } else if (macOS_BigSur()) {
     proc_fake_bigsur_t p = (proc_fake_bigsur_t) proc;
     return (p && (p->p_flag & P_LP64));
   } else if (macOS_Catalina()) {
@@ -3793,7 +3973,15 @@ u_short get_acflag(proc_t proc)
   if (!proc) {
     return 0;
   }
-  if (macOS_BigSur()) {
+  if (macOS_Monterey()) {
+    if (kernel_type_is_release()) {
+      proc_fake_monterey_t p = (proc_fake_monterey_t) proc;
+      return p->p_acflag;
+    } else if (kernel_type_is_development()) {
+      proc_fake_monterey_dev_t p = (proc_fake_monterey_dev_t) proc;
+      return p->p_acflag;
+    }
+  } else if (macOS_BigSur()) {
     proc_fake_bigsur_t p = (proc_fake_bigsur_t) proc;
     return p->p_acflag;
   } else if (macOS_Catalina()) {
@@ -3822,7 +4010,15 @@ unsigned int get_lflag(proc_t proc)
   if (!proc) {
     return 0;
   }
-  if (macOS_BigSur()) {
+  if (macOS_Monterey()) {
+    if (kernel_type_is_release()) {
+      proc_fake_monterey_t p = (proc_fake_monterey_t) proc;
+      return p->p_lflag;
+    } else if (kernel_type_is_development()) {
+      proc_fake_monterey_dev_t p = (proc_fake_monterey_dev_t) proc;
+      return p->p_lflag;
+    }
+  } else if (macOS_BigSur()) {
     proc_fake_bigsur_t p = (proc_fake_bigsur_t) proc;
     return p->p_lflag;
   } else if (macOS_Catalina()) {
@@ -3846,7 +4042,15 @@ unsigned int get_flag(proc_t proc)
   if (!proc) {
     return 0;
   }
-  if (macOS_BigSur()) {
+  if (macOS_Monterey()) {
+    if (kernel_type_is_release()) {
+      proc_fake_monterey_t p = (proc_fake_monterey_t) proc;
+      return p->p_flag;
+    } else if (kernel_type_is_development()) {
+      proc_fake_monterey_dev_t p = (proc_fake_monterey_dev_t) proc;
+      return p->p_flag;
+    }
+  } else if (macOS_BigSur()) {
     proc_fake_bigsur_t p = (proc_fake_bigsur_t) proc;
     return p->p_flag;
   } else if (macOS_Catalina()) {
@@ -3885,6 +4089,32 @@ typedef enum {
 // "struct thread" is defined in osfmk/kern/thread.h.  "struct machine_thread"
 // is defined in osfmk/i386/thread.h.  For the offset of iotier_override, look
 // at the machine code for set_thread_iotier_override().
+
+typedef struct thread_fake_monterey
+{
+  uint32_t pad1[24];
+  integer_t options;    // Offset 0x60
+  uint32_t pad2[15];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0xa0
+  uint32_t pad3[231];
+  int iotier_override;  // Offset 0x444
+  uint32_t pad4[154];
+  vm_map_t map;         // Offset 0x6b0
+} thread_fake_monterey_t;
+
+typedef struct thread_fake_monterey_dev
+{
+  uint32_t pad1[26];
+  integer_t options;    // Offset 0x68
+  uint32_t pad2[15];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0xa8
+  uint32_t pad3[249];
+  int iotier_override;  // Offset 0x494
+  uint32_t pad4[172];
+  vm_map_t map;         // Offset 0x748
+} thread_fake_monterey_dev_t;
 
 typedef struct thread_fake_bigsur
 {
@@ -4312,7 +4542,15 @@ bool initialize_thread_offsets()
     }
   }
 
-  if (macOS_BigSur_4_or_greater()) {
+  if (macOS_Monterey()) {
+    if (kernel_type_is_release()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_monterey, iotier_override);
+    } else if (kernel_type_is_development()) {
+      g_iotier_override_offset =
+        offsetof(struct thread_fake_monterey_dev, iotier_override);
+    }
+  } else if (macOS_BigSur_4_or_greater()) {
     if (kernel_type_is_release()) {
       g_iotier_override_offset =
         offsetof(struct thread_fake_bigsur_4, iotier_override);
@@ -4447,7 +4685,7 @@ wait_interrupt_t thread_interrupt_level(wait_interrupt_t new_level)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_BigSur()) {
+    if (macOS_BigSur() || macOS_Monterey()) {
       if (kernel_type_is_release()) {
         offset_in_struct = offsetof(struct thread_fake_bigsur, options);
       } else if (kernel_type_is_development()) {
@@ -4543,6 +4781,12 @@ wait_interrupt_t thread_interrupt_level(wait_interrupt_t new_level)
 // Possible value for uu_flag.
 #define UT_NOTCANCELPT 0x00000004  /* not a cancelation point */
 
+typedef struct uthread_fake_monterey
+{
+  uint64_t pad[32];
+  int uu_flag;        // Offset 0x100
+} *uthread_fake_monterey_t;
+
 typedef struct uthread_fake_catalina
 {
   uint64_t pad[33];
@@ -4593,7 +4837,9 @@ int get_uu_flag(uthread_t uthread)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Catalina() || macOS_BigSur()) {
+    if (macOS_Monterey()) {
+      offset_in_struct = offsetof(struct uthread_fake_monterey, uu_flag);
+    } else if (macOS_Catalina() || macOS_BigSur()) {
       offset_in_struct = offsetof(struct uthread_fake_catalina, uu_flag);
     } else if (macOS_Mojave()) {
       offset_in_struct = offsetof(struct uthread_fake_mojave, uu_flag);
@@ -4698,7 +4944,9 @@ bool set_kernel_physmap_protection(vm_map_offset_t start, vm_map_offset_t end,
   // Though we don't access kernel_map here, holding a lock on it seems to
   // help prevent weirdness.  But on Mojave we hang, even if we use
   // vm_map_trylock() instead.
-  if (!macOS_Mojave() && !macOS_Catalina() && !macOS_BigSur()) {
+  if (!macOS_Mojave() && !macOS_Catalina() && !macOS_BigSur() &&
+      !macOS_Monterey())
+  {
     vm_map_lock(kernel_map);
   }
 
@@ -4731,7 +4979,9 @@ bool set_kernel_physmap_protection(vm_map_offset_t start, vm_map_offset_t end,
     }
   }
 
-  if (!macOS_Mojave() && !macOS_Catalina() && !macOS_BigSur()) {
+  if (!macOS_Mojave() && !macOS_Catalina() && !macOS_BigSur() &&
+      !macOS_Monterey())
+  {
     vm_map_unlock(kernel_map);
   }
 
@@ -5008,7 +5258,9 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
     // temporarily.  Doing so can upset macOS 10.14 (Mojave), if SIP is
     // only disabled for kernel extensions (and not for anything else).
     new_prot = VM_PROT_READ | VM_PROT_WRITE;
-    if (macOS_Mojave() || macOS_Catalina() || macOS_BigSur()) {
+    if (macOS_Mojave() || macOS_Catalina() || macOS_BigSur() ||
+        macOS_Monterey())
+    {
       // Though shared libraries are all "copy on write", Mojave and above
       // somehow need us to request this specifically, if SIP is only disabled
       // for kernel extensions.
@@ -5023,7 +5275,9 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
     // write to will be a private copy of it (generated via COW).  On Mojave
     // and above we need to do this for all private regions.
     if (info.share_mode == SM_PRIVATE) {
-      if (macOS_Mojave() || macOS_Catalina() || macOS_BigSur() || codesigned) {
+      if (macOS_Mojave() || macOS_Catalina() || macOS_BigSur() ||
+          macOS_Monterey() || codesigned)
+      {
         unsign_user_pages(proc_map, dest, dest + len);
       }
     }
@@ -5075,7 +5329,9 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
   // longer matches.  On macOS 10.14 (Mojave) and above we need to "sign"
   // every write-protected page we change, whether or not it's codesigned.
   if (prot_needs_restore) {
-    if (macOS_Mojave() || macOS_Catalina() || macOS_BigSur() || codesigned) {
+    if (macOS_Mojave() || macOS_Catalina() || macOS_BigSur() ||
+        macOS_Monterey() || codesigned)
+    {
       sign_user_pages(proc_map, dest, dest + len);
     }
   }
@@ -5121,7 +5377,9 @@ bool proc_mapout(vm_map_t proc_map, const void *source,
   }
   // On macOS 10.14 (Mojave) and above we need to "sign" every page we add
   // to proc_map.
-  if (macOS_Mojave() || macOS_Catalina() || macOS_BigSur()) {
+  if (macOS_Mojave() || macOS_Catalina() || macOS_BigSur() ||
+      macOS_Monterey())
+  {
     sign_user_pages(proc_map, out, out + len);
   }
   *target = out;
@@ -5251,7 +5509,8 @@ pid_t get_xpc_parent(pid_t possible_child)
 {
   if (!possible_child ||
       (!OSX_ElCapitan() && !macOS_Sierra() && !macOS_HighSierra() &&
-       !macOS_Mojave() && !macOS_Catalina() && !macOS_BigSur()))
+       !macOS_Mojave() && !macOS_Catalina() && !macOS_BigSur() &&
+       !macOS_Monterey()))
   {
     return 0;
   }
@@ -5364,7 +5623,23 @@ bool get_proc_info(int32_t pid, char **path,
   uint32_t p_argslen = 0;
   int32_t p_argc = 0;
   user_addr_t user_stack = 0;
-  if (macOS_BigSur()) {
+  if (macOS_Monterey()) {
+    if (kernel_type_is_release()) {
+      proc_fake_monterey_t p = (proc_fake_monterey_t) our_proc;
+      if (p) {
+        p_argslen = p->p_argslen;
+        p_argc = p->p_argc;
+        user_stack = p->user_stack;
+      }
+    } else if (kernel_type_is_development()) {
+      proc_fake_monterey_dev_t p = (proc_fake_monterey_dev_t) our_proc;
+      if (p) {
+        p_argslen = p->p_argslen;
+        p_argc = p->p_argc;
+        user_stack = p->user_stack;
+      }
+    }
+  } else if (macOS_BigSur()) {
     proc_fake_bigsur_t p = (proc_fake_bigsur_t) our_proc;
     if (p) {
       p_argslen = p->p_argslen;
@@ -5434,6 +5709,11 @@ bool get_proc_info(int32_t pid, char **path,
   holder_past_end[-1] = 0;
   holder_past_end[-2] = 0;
 
+  // On Monterey, for some reason p_argc is always 0. So we must guess its
+  // value by checking when the argument strings stop and the environment
+  // strings start.
+  int args_count = 0;
+  bool stop_args_count = false;
   int args_env_count = 0;
   int i; char *item;
   for (i = 0, item = holder; item < holder_past_end; ++i) {
@@ -5441,14 +5721,31 @@ bool get_proc_info(int32_t pid, char **path,
       args_env_count = i;
       break;
     }
+
     if (i == 0) {
       const char *path_header = "executable_path=";
       size_t path_header_len = strlen(path_header);
       if (!strncmp(item, path_header, path_header_len)) {
         item += path_header_len;
       }
+      ++args_count;
       *path = item;
+    // Stop counting argument strings when we first encounter a string that
+    // conforms to the environment string syntax. This means that an argument
+    // string may be falsely counted as an environment string, but for the
+    // moment (on Monterey) there's nothing we can do about it.
+    } else if (!stop_args_count) {
+      char item_holder[PATH_MAX];
+      strncpy(item_holder, item, sizeof(item_holder));
+      char *value = item_holder;
+      char *key = strsep(&value, "=");
+      if (key && value && value[0]) {
+        stop_args_count = true;
+      } else {
+        ++args_count;
+      }
     }
+
     item += strlen(item) + 1;
     // The process path (the first 'item') is padded (at the end) with
     // multiple NULLs.  Presumably a fixed amount of storage has been set
@@ -5459,7 +5756,10 @@ bool get_proc_info(int32_t pid, char **path,
       }
     }
   }
-  int args_count = p_argc + 1; // Including the process path
+
+  if (!macOS_Monterey()) {
+    args_count = p_argc + 1; // Including the process path
+  }
   int env_count = args_env_count - args_count;
   // Though it's very unlikely, we might have a process path and no environment.
   if (env_count <= 0) {
@@ -5511,9 +5811,11 @@ typedef struct _task_fake_mavericks {
   lck_mtx_t lock;       // Size 0x10
   uint64_t pad1[6];
   queue_head_t threads; // Size 0x10, offset 0x40
-  uint64_t pad2[86];
+  uint64_t pad2[84];
+  void *bsd_info;       // Offset 0x2f0
+  uint64_t pad3[1];
   volatile uint32_t t_flags; /* Offset 0x300, general-purpose task flags protected by task_lock (TL) */
-  uint32_t pad3[1];
+  uint32_t pad4[1];
   mach_vm_address_t all_image_info_addr; // Offset 0x308
   mach_vm_size_t all_image_info_size;    // Offset 0x310
 } *task_fake_mavericks_t;
@@ -5522,9 +5824,11 @@ typedef struct _task_fake_yosemite {
   lck_mtx_t lock;       // Size 0x10
   uint64_t pad1[7];
   queue_head_t threads; // Size 0x10, offset 0x48
-  uint64_t pad2[87];
+  uint64_t pad2[85];
+  void *bsd_info;       // Offset 0x300
+  uint64_t pad3[1];
   volatile uint32_t t_flags; /* Offset 0x310, general-purpose task flags protected by task_lock (TL) */
-  uint32_t pad3[1];
+  uint32_t pad4[1];
   mach_vm_address_t all_image_info_addr; // Offset 0x318
   mach_vm_size_t all_image_info_size;    // Offset 0x320
 } *task_fake_yosemite_t;
@@ -5533,9 +5837,11 @@ typedef struct _task_fake_elcapitan {
   lck_mtx_t lock;       // Size 0x10
   uint64_t pad1[7];
   queue_head_t threads; // Size 0x10, offset 0x48
-  uint64_t pad2[91];
+  uint64_t pad2[88];
+  void *bsd_info;       // Offset 0x318
+  uint64_t pad3[2];
   volatile uint32_t t_flags; /* Offset 0x330, general-purpose task flags protected by task_lock (TL) */
-  uint32_t pad3[1];
+  uint32_t pad4[1];
   mach_vm_address_t all_image_info_addr; // Offset 0x338
   mach_vm_size_t all_image_info_size;    // Offset 0x340
 } *task_fake_elcapitan_t;
@@ -5544,9 +5850,11 @@ typedef struct _task_fake_sierra {
   lck_mtx_t lock;       // Size 0x10
   uint64_t pad1[7];
   queue_head_t threads; // Size 0x10, offset 0x48
-  uint64_t pad2[108];
+  uint64_t pad2[101];
+  void *bsd_info;       // Offset 0x380
+  uint64_t pad3[6];
   volatile uint32_t t_flags; /* Offset 0x3b8, general-purpose task flags protected by task_lock (TL) */
-  uint32_t pad3[1];
+  uint32_t pad4[1];
   mach_vm_address_t all_image_info_addr; // Offset 0x3c0
   mach_vm_size_t all_image_info_size;    // Offset 0x3c8
 } *task_fake_sierra_t;
@@ -5555,9 +5863,11 @@ typedef struct _task_fake_highsierra {
   lck_mtx_t lock;       // Size 0x10
   uint64_t pad1[7];
   queue_head_t threads; // Size 0x10, offset 0x48
-  uint64_t pad2[110];
+  uint64_t pad2[103];
+  void *bsd_info;       // Offset 0x390
+  uint64_t pad3[6];
   volatile uint32_t t_flags; /* Offset 0x3c8, general-purpose task flags protected by task_lock (TL) */
-  uint32_t pad3[1];
+  uint32_t pad4[1];
   mach_vm_address_t all_image_info_addr; // Offset 0x3d0
   mach_vm_size_t all_image_info_size;    // Offset 0x3d8
 } *task_fake_highsierra_t;
@@ -5568,9 +5878,11 @@ typedef struct _task_fake_mojave {
   lck_mtx_t lock;       // Size 0x10
   uint64_t pad1[6];
   queue_head_t threads; // Size 0x10, offset 0x40
-  uint64_t pad2[109];
+  uint64_t pad2[102];
+  void *bsd_info;       // Offset 0x380
+  uint64_t pad3[6];
   volatile uint32_t t_flags; /* Offset 0x3b8, general-purpose task flags protected by task_lock (TL) */
-  uint32_t pad3[1];
+  uint32_t pad4[1];
   mach_vm_address_t all_image_info_addr; // Offset 0x3c0
   mach_vm_size_t all_image_info_size;    // Offset 0x3c8
 } *task_fake_mojave_t;
@@ -5580,9 +5892,11 @@ typedef struct _task_fake_mojave_dev_debug {
   lck_mtx_t lock;       // Size 0x10
   uint64_t pad1[8];
   queue_head_t threads; // Size 0x10, offset 0x50
-  uint64_t pad2[109];
+  uint64_t pad2[102];
+  void *bsd_info;       // Offset 0x390
+  uint64_t pad3[6];
   volatile uint32_t t_flags; /* Offset 0x3c8, general-purpose task flags protected by task_lock (TL) */
-  uint32_t pad3[1];
+  uint32_t pad4[1];
   mach_vm_address_t all_image_info_addr; // Offset 0x3d0
   mach_vm_size_t all_image_info_size;    // Offset 0x3d8
 } *task_fake_mojave_dev_debug_t;
@@ -5591,9 +5905,11 @@ typedef struct _task_fake_catalina {
   lck_mtx_t lock;       // Size 0x10
   uint64_t pad1[9];
   queue_head_t threads; // Size 0x10, offset 0x58
-  uint64_t pad2[110];
+  uint64_t pad2[103];
+  void *bsd_info;       // Offset 0x3a0
+  uint64_t pad3[6];
   volatile uint32_t t_flags; /* Offset 0x3d8, general-purpose task flags protected by task_lock (TL) */
-  uint32_t pad3[3];
+  uint32_t pad4[3];
   mach_vm_address_t all_image_info_addr; // Offset 0x3e8
   mach_vm_size_t all_image_info_size;    // Offset 0x3f0
 } *task_fake_catalina_t;
@@ -5602,9 +5918,11 @@ typedef struct _task_fake_catalina_dev_debug {
   lck_mtx_t lock;       // Size 0x10
   uint64_t pad1[10];
   queue_head_t threads; // Size 0x10, offset 0x60
-  uint64_t pad2[110];
+  uint64_t pad2[103];
+  void *bsd_info;       // Offset 0x3a8
+  uint64_t pad3[6];
   volatile uint32_t t_flags; /* Offset 0x3e0, general-purpose task flags protected by task_lock (TL) */
-  uint32_t pad3[3];
+  uint32_t pad4[3];
   mach_vm_address_t all_image_info_addr; // Offset 0x3f0
   mach_vm_size_t all_image_info_size;    // Offset 0x3f8
 } *task_fake_catalina_dev_debug_t;
@@ -5613,9 +5931,11 @@ typedef struct _task_fake_bigsur {
   lck_mtx_t lock;       // Size 0x10
   uint64_t pad1[9];
   queue_head_t threads; // Size 0x10, offset 0x58
-  uint64_t pad2[114];
+  uint64_t pad2[105];
+  void *bsd_info;       // Offset 0x3b0
+  uint64_t pad3[8];
   volatile uint32_t t_flags; /* Offset 0x3f8, general-purpose task flags protected by task_lock (TL) */
-  uint32_t pad3[3];
+  uint32_t pad4[3];
   mach_vm_address_t all_image_info_addr; // Offset 0x408
   mach_vm_size_t all_image_info_size;    // Offset 0x410
 } *task_fake_bigsur_t;
@@ -5624,9 +5944,11 @@ typedef struct _task_fake_bigsur_3 {
   lck_mtx_t lock;       // Size 0x10
   uint64_t pad1[8];
   queue_head_t threads; // Size 0x10, offset 0x50
-  uint64_t pad2[117];
+  uint64_t pad2[108];
+  void *bsd_info;       // Offset 0x3c0
+  uint64_t pad3[8];
   volatile uint32_t t_flags; /* Offset 0x408, general-purpose task flags protected by task_lock (TL) */
-  uint32_t pad3[3];
+  uint32_t pad4[3];
   mach_vm_address_t all_image_info_addr; // Offset 0x418
   mach_vm_size_t all_image_info_size;    // Offset 0x420
 } *task_fake_bigsur_3_t;
@@ -5635,9 +5957,11 @@ typedef struct _task_fake_bigsur_development {
   lck_mtx_t lock;       // Size 0x10
   uint64_t pad1[10];
   queue_head_t threads; // Size 0x10, offset 0x60
-  uint64_t pad2[114];
+  uint64_t pad2[105];
+  void *bsd_info;       // Offset 0x3b8
+  uint64_t pad3[8];
   volatile uint32_t t_flags; /* Offset 0x400, general-purpose task flags protected by task_lock (TL) */
-  uint32_t pad3[3];
+  uint32_t pad4[3];
   mach_vm_address_t all_image_info_addr; // Offset 0x410
   mach_vm_size_t all_image_info_size;    // Offset 0x418
 } *task_fake_bigsur_development_t;
@@ -5646,12 +5970,40 @@ typedef struct _task_fake_bigsur_development_3 {
   lck_mtx_t lock;       // Size 0x10
   uint64_t pad1[9];
   queue_head_t threads; // Size 0x10, offset 0x58
-  uint64_t pad2[117];
+  uint64_t pad2[108];
+  void *bsd_info;       // Offset 0x3c8
+  uint64_t pad3[8];
   volatile uint32_t t_flags; /* Offset 0x410, general-purpose task flags protected by task_lock (TL) */
-  uint32_t pad3[3];
+  uint32_t pad4[3];
   mach_vm_address_t all_image_info_addr; // Offset 0x420
   mach_vm_size_t all_image_info_size;    // Offset 0x428
 } *task_fake_bigsur_development_3_t;
+
+typedef struct _task_fake_monterey {
+  lck_mtx_t lock;       // Size 0x10
+  uint64_t pad1[9];
+  queue_head_t threads; // Size 0x10, offset 0x58
+  uint64_t pad2[108];
+  void *bsd_info;       // Offset 0x3c8
+  uint64_t pad3[8];
+  volatile uint32_t t_flags; /* Offset 0x410, general-purpose task flags protected by task_lock (TL) */
+  uint32_t pad4[3];
+  mach_vm_address_t all_image_info_addr; // Offset 0x420
+  mach_vm_size_t all_image_info_size;    // Offset 0x428
+} *task_fake_monterey_t;
+
+typedef struct _task_fake_monterey_dev {
+  lck_mtx_t lock;       // Size 0x10
+  uint64_t pad1[12];
+  queue_head_t threads; // Size 0x10, offset 0x70
+  uint64_t pad2[109];
+  void *bsd_info;       // Offset 0x3e8
+  uint64_t pad3[8];
+  volatile uint32_t t_flags; /* Offset 0x430, general-purpose task flags protected by task_lock (TL) */
+  uint32_t pad4[3];
+  mach_vm_address_t all_image_info_addr; // Offset 0x440
+  mach_vm_size_t all_image_info_size;    // Offset 0x448
+} *task_fake_monterey_dev_t;
 
 void task_lock(task_t task)
 {
@@ -5679,7 +6031,15 @@ mach_vm_address_t task_all_image_info_addr(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_BigSur_less_than_3()) {
+    if (macOS_Monterey()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_monterey, all_image_info_addr);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_monterey_dev, all_image_info_addr);
+      }
+    } else if (macOS_BigSur_less_than_3()) {
       if (kernel_type_is_release()) {
         offset_in_struct =
           offsetof(struct _task_fake_bigsur, all_image_info_addr);
@@ -5750,7 +6110,15 @@ mach_vm_size_t task_all_image_info_size(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_BigSur_less_than_3()) {
+    if (macOS_Monterey()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_monterey, all_image_info_size);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_monterey_dev, all_image_info_size);
+      }
+    } else if (macOS_BigSur_less_than_3()) {
       if (kernel_type_is_release()) {
         offset_in_struct =
           offsetof(struct _task_fake_bigsur, all_image_info_size);
@@ -5821,7 +6189,14 @@ uint32_t task_flags(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_BigSur_less_than_3()) {
+    if (macOS_Monterey()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct = offsetof(struct _task_fake_monterey, t_flags);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_monterey_dev, t_flags);
+      }
+    } else if (macOS_BigSur_less_than_3()) {
       if (kernel_type_is_release()) {
         offset_in_struct = offsetof(struct _task_fake_bigsur, t_flags);
       } else if (kernel_type_is_development()) {
@@ -5884,6 +6259,87 @@ bool is_64bit_thread(thread_t thread)
     return false;
   }
   return ((task_flags(task) & TF_64B_ADDR) != 0);
+}
+
+bool is_64bit_task(task_t task)
+{
+  if (!task) {
+    return false;
+  }
+  return ((task_flags(task) & TF_64B_ADDR) != 0);
+}
+
+proc_t task_proc(task_t task)
+{
+  if (!task) {
+    return NULL;
+  }
+
+  static vm_map_offset_t offset_in_struct = -1;
+  if (offset_in_struct == -1) {
+    if (macOS_Monterey()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct = offsetof(struct _task_fake_monterey, bsd_info);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_monterey_dev, bsd_info);
+      }
+    } else if (macOS_BigSur_less_than_3()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct = offsetof(struct _task_fake_bigsur, bsd_info);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_bigsur_development, bsd_info);
+      }
+    } else if (macOS_BigSur()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct = offsetof(struct _task_fake_bigsur_3, bsd_info);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_bigsur_development_3, bsd_info);
+      }
+    } else if (macOS_Catalina()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct = offsetof(struct _task_fake_catalina, bsd_info);
+      } else if (kernel_type_is_development() ||
+                 kernel_type_is_debug())
+      {
+        offset_in_struct =
+          offsetof(struct _task_fake_catalina_dev_debug, bsd_info);
+      }
+    } else if (macOS_Mojave()) {
+      if (macOS_Mojave_less_than_2() || kernel_type_is_release()) {
+        offset_in_struct = offsetof(struct _task_fake_mojave, bsd_info);
+      } else if (kernel_type_is_development() ||
+                 kernel_type_is_debug())
+      {
+        offset_in_struct =
+          offsetof(struct _task_fake_mojave_dev_debug, bsd_info);
+      }
+    } else if (macOS_HighSierra()) {
+      offset_in_struct = offsetof(struct _task_fake_highsierra, bsd_info);
+    } else if (macOS_Sierra()) {
+      offset_in_struct = offsetof(struct _task_fake_sierra, bsd_info);
+    } else if (OSX_ElCapitan()) {
+      offset_in_struct = offsetof(struct _task_fake_elcapitan, bsd_info);
+    } else if (OSX_Yosemite()) {
+      offset_in_struct = offsetof(struct _task_fake_yosemite, bsd_info);
+    } else if (OSX_Mavericks()) {
+      offset_in_struct = offsetof(struct _task_fake_mavericks, bsd_info);
+    }
+  }
+
+  proc_t retval = NULL;
+  if (offset_in_struct != -1) {
+    retval = *((proc_t *)((vm_map_offset_t) task + offset_in_struct));
+  }
+
+  return retval;
+}
+
+proc_t current_proc_alt()
+{
+  return task_proc(current_task());
 }
 
 // From mach-o/dyld_images.h (begin)
@@ -6161,7 +6617,7 @@ bool copyin_symbol_table(module_info_t *module_info,
   const struct load_command *load_command =
     (struct load_command *) cmds_local;
   vm_offset_t linkedit_fileoff_increment = 0;
-  uint32_t i, j;
+  uint32_t i, j, k;
   for (i = 1; i <= num_commands; ++i) {
     uint32_t cmd = load_command->cmd;
     switch (cmd) {
@@ -6283,56 +6739,83 @@ bool copyin_symbol_table(module_info_t *module_info,
     // Look first in the __DATA segment for the lazy pointers table. Then if
     // it's not found, look in the __DATA_CONST segment.
     for (i = 1; i <= 2; ++i) {
-      vm_offset_t section_offset;
+      vm_offset_t section_begin;
       uint32_t num_sections;
       if (i == 1) {
         if (!found_data_segment) {
           continue;
         }
-        section_offset = data_sections_offset;
+        section_begin = data_sections_offset;
         num_sections = num_data_sections;
       } else {
         if (!found_data_const_segment) {
           continue;
         }
-        section_offset = data_const_sections_offset;
+        section_begin = data_const_sections_offset;
         num_sections = num_data_const_sections;
       }
 
-      for (j = 1; j <= num_sections; ++j) {
-        uint64_t addr;
-        uint64_t size;
-        bool expected_lazy_align;
-        uint8_t type;
-        uint32_t indirect_symbol_index;
-        if (is_64bit) {
-          struct section_64 *section = (struct section_64 *) section_offset;
-          addr = section->addr;
-          size = section->size;
-          expected_lazy_align = (section->align == 3);
-          type = (section->flags & SECTION_TYPE);
-          indirect_symbol_index = section->reserved1;
-        } else {
-          struct section *section = (struct section *) section_offset;
-          addr = section->addr;
-          size = section->size;
-          expected_lazy_align = (section->align == 2);
-          type = (section->flags & SECTION_TYPE);
-          indirect_symbol_index = section->reserved1;
+      // On macOS Monterey and above, most dylibs no longer have a "lazy"
+      // pointer table. When this happens, its place is taken by a single
+      // "non-lazy" pointer table (usually/always in the "__got" section). So
+      // first look for a lazy pointer table, then look for a non-lazy one. Do
+      // this even on earlier versions of macOS. It's likely that dylibs
+      // compiled on Monterey without a lazy pointer table will end up running
+      // there. A non-lazy pointer table's contents are already initialized,
+      // which supposedly speeds up an application's loading.
+      for (j = 1; j <= 2; ++j) {
+        vm_offset_t section_offset = section_begin;
+        uint8_t expected_section_type = S_LAZY_SYMBOL_POINTERS;
+        if (j == 2) {
+          expected_section_type = S_NON_LAZY_SYMBOL_POINTERS;
         }
 
-        if ((type == S_LAZY_SYMBOL_POINTERS) && size && expected_lazy_align) {
-          lazy_ptr_table_offset = addr + slide;
-          lazy_ptr_table_size = size;
-          lazy_ptr_indirect_symbol_index = indirect_symbol_index;
-          found_lazy_ptr_table = true;
+        for (k = 1; k <= num_sections; ++k) {
+          uint64_t addr;
+          uint64_t size;
+          uint64_t count;
+          bool expected_lazy_align;
+          uint8_t type;
+          uint32_t indirect_symbol_index;
+          if (is_64bit) {
+            struct section_64 *section = (struct section_64 *) section_offset;
+            addr = section->addr;
+            size = section->size;
+            count = size / sizeof(uint64_t);
+            expected_lazy_align = (section->align == 3);
+            type = (section->flags & SECTION_TYPE);
+            indirect_symbol_index = section->reserved1;
+          } else {
+            struct section *section = (struct section *) section_offset;
+            addr = section->addr;
+            size = section->size;
+            count = size / sizeof(uint32_t);
+            expected_lazy_align = (section->align == 2);
+            type = (section->flags & SECTION_TYPE);
+            indirect_symbol_index = section->reserved1;
+          }
+
+          if ((type == expected_section_type) && size && expected_lazy_align) {
+            // If there's more than one of the sections we're looking for, we
+            // want the last one, which should always be the right one.
+            if (count + indirect_symbol_index == interesting_symbol_count) {
+              lazy_ptr_table_offset = addr + slide;
+              lazy_ptr_table_size = size;
+              lazy_ptr_indirect_symbol_index = indirect_symbol_index;
+              found_lazy_ptr_table = true;
+              break;
+            }
+          }
+
+          if (is_64bit) {
+            section_offset += sizeof(struct section_64);
+          } else {
+            section_offset += sizeof(struct section);
+          }
+        }
+
+        if (found_lazy_ptr_table) {
           break;
-        }
-
-        if (is_64bit) {
-          section_offset += sizeof(struct section_64);
-        } else {
-          section_offset += sizeof(struct section);
         }
       }
     }
@@ -6447,6 +6930,7 @@ void free_symbol_table(symbol_table_t *symbol_table)
   }
 }
 
+// Don't let DYLD_SLIDE_SEARCH_INCREMENT be greater than PAGE_SIZE
 #define DYLD_SLIDE_SEARCH_INCREMENT   PAGE_SIZE
 #define DYLD_SLIDE_SEARCH_LIMIT       0x200000
 #define DYLD_SLIDE_SEARCH_COPYIN_SIZE (0x10 * PAGE_SIZE)
@@ -6539,11 +7023,15 @@ bool get_module_info(proc_t proc, const char *module_name,
     // need to look for the header (and compute its slide) ourselves.
     if (!libSystem_initialized) {
       dyld_image_load_address_good = false;
-      // On Catalina dyld_image_load_address is initialized to
+      // On Catalina and up dyld_image_load_address is initialized to
       // 0x0020000000000000!
-      if (dyld_image_load_address > VM_MAX_USER_PAGE_ADDRESS)
+      if (dyld_image_load_address > VM_MAX_USER_PAGE_ADDRESS) {
         dyld_image_load_address = 0;
-      // all_image_info_addr is always in dyld, and dyld's size is about 1MB.
+      }
+      // all_image_info_addr is always in dyld, and dyld's size is 1-3 MB.
+      // The dyld_all_image_infos are in their own section in dyld's DATA
+      // segment (__all_image_info), which seems always to be within the first
+      // MB. But decrement search_start by another MB, just to be sure.
       uint64_t search_start = (all_image_info_addr & 0xfffffffffff00000);
       if (search_start > 0x100000) {
         search_start -= 0x100000;
@@ -6555,19 +7043,40 @@ bool get_module_info(proc_t proc, const char *module_name,
       vm_map_offset_t buffer = 0;
       vm_offset_t dyld_slide = 0;
       vm_size_t copyin_size = DYLD_SLIDE_SEARCH_COPYIN_SIZE;
+      vm_size_t buffer_size = DYLD_SLIDE_SEARCH_COPYIN_SIZE;
       for (; dyld_slide < DYLD_SLIDE_SEARCH_LIMIT;
            dyld_slide += DYLD_SLIDE_SEARCH_INCREMENT)
       {
-        vm_offset_t buffer_offset =
-          (dyld_slide % DYLD_SLIDE_SEARCH_COPYIN_SIZE);
+        if ((dyld_slide % DYLD_SLIDE_SEARCH_COPYIN_SIZE) == 0) {
+          copyin_size = DYLD_SLIDE_SEARCH_COPYIN_SIZE;
+        }
 
-        if (!buffer_offset || (copyin_size == DYLD_SLIDE_SEARCH_INCREMENT)) {
-          if (buffer) {
-            vm_deallocate(kernel_map, buffer, copyin_size);
-            buffer = 0;
+        vm_offset_t buffer_offset = (dyld_slide % copyin_size);
+        bool needs_new_buffer = (!buffer || !buffer_offset);
+        // Skip the rest of 'buffer' if the space remaining might not contain
+        // a whole header structure.
+        if (buffer && !needs_new_buffer) {
+          vm_size_t space_remaining = copyin_size - buffer_offset;
+          vm_size_t mach_header_size;
+          if (is_64bit) {
+            mach_header_size = sizeof(struct mach_header_64);
+          } else {
+            mach_header_size = sizeof(struct mach_header);
           }
-          if (!buffer_offset) {
-            copyin_size = DYLD_SLIDE_SEARCH_COPYIN_SIZE;
+          if ((space_remaining <= mach_header_size) &&
+              ((space_remaining / DYLD_SLIDE_SEARCH_INCREMENT) ==
+                (mach_header_size / DYLD_SLIDE_SEARCH_INCREMENT)))
+          {
+            dyld_slide += space_remaining;
+            buffer_offset = 0;
+            needs_new_buffer = true;
+          }
+        }
+
+        if (needs_new_buffer) {
+          if (buffer) {
+            vm_deallocate(kernel_map, buffer, buffer_size);
+            buffer = 0;
           }
           vm_map_copy_t copy;
           kern_return_t rv =
@@ -6575,28 +7084,27 @@ bool get_module_info(proc_t proc, const char *module_name,
                           copyin_size, false, &copy);
           if (rv != KERN_SUCCESS) {
             vm_size_t old_copyin_size = copyin_size;
-            copyin_size = DYLD_SLIDE_SEARCH_INCREMENT;
+            copyin_size = PAGE_SIZE;
             if (copyin_size != old_copyin_size) {
               rv = vm_map_copyin(proc_map, dyld_image_load_address + dyld_slide,
                                  copyin_size, false, &copy);
             }
             if (rv != KERN_SUCCESS) {
+              dyld_slide += (copyin_size - DYLD_SLIDE_SEARCH_INCREMENT);
               continue;
             }
           }
           rv = vm_map_copyout(kernel_map, &buffer, copy);
           if (rv != KERN_SUCCESS) {
+            buffer = 0;
             vm_map_copy_discard(copy);
-            break;
+            dyld_slide += (copyin_size - DYLD_SLIDE_SEARCH_INCREMENT);
+            continue;
           }
+          buffer_size = copyin_size;
         }
 
-        addr64_t addr;
-        if (copyin_size == DYLD_SLIDE_SEARCH_COPYIN_SIZE) {
-          addr = buffer + buffer_offset;
-        } else {
-          addr = buffer;
-        }
+        vm_offset_t addr = buffer + buffer_offset;
         if (is_64bit) {
           struct mach_header_64 *header = (struct mach_header_64 *) addr;
           if ((header->magic != MH_MAGIC_64) ||
@@ -6616,7 +7124,7 @@ bool get_module_info(proc_t proc, const char *module_name,
             continue;
           }
         }
-        vm_deallocate(kernel_map, buffer, copyin_size);
+        vm_deallocate(kernel_map, buffer, buffer_size);
         dyld_image_load_address += dyld_slide;
         dyld_image_load_address_good = true;
         break;
@@ -6982,7 +7490,7 @@ void sign_user_pages_iterator(vm_map_t map, vm_map_entry_t entry,
 
     // Emulate vm_map_sign() from the xnu kernel's osfmk/vm/vm_map.c
     if (sign) {
-      if (macOS_BigSur()) {
+      if (macOS_BigSur() || macOS_Monterey()) {
         page_set_cs_validated(page, -1);
       } else {
         page_set_cs_validated(page, true);
@@ -7077,26 +7585,34 @@ void unsign_user_pages(vm_map_t map, vm_map_offset_t start,
 //
 // hook_state_landed
 //
-// We've hit the breakpoint a second time, and the call to dlopen() has
-// succeeded or failed.  If it succeeded we've looked for hook descriptions
-// in the hook library and have tried to set user hooks accordingly (in
-// process_hook_flying()).  We've also unset the hook that prevents calls to
-// C++ initializers.  If there was no more work to do (whether we succeeded or
-// failed), we'll have unset our breakpoint and deleted the cast hook.  In
-// that case we won't have reached this point.  But if there might be more
-// work to do in the future (on modules that haven't yet been loaded), we've
-// set up a call to _dyld_register_func_for_add_image(), and are waiting for
-// our breakpoint to be hit a third time (indicating the call has happened).
-// If it succeeds, on_add_image() will be called every time a new module is
-// loaded.
+// We've hit the breakpoint again, and the call to dlopen() has succeeded or
+// failed. If it succeeded we've looked (in process_hook_flying()) for hook
+// descriptions in the hook library and have tried to set user hooks
+// accordingly. We've also unset the hook that prevents calls to C++
+// initializers. If there was no more work to do, we've unset our breakpoint.
+// In that case we won't have reached this point, though our cast hook is
+// being kept alive for future reference. But if there might be more
+// breakpoints to set in modules that haven't yet been loaded, we've set up a
+// call to _dyld_register_func_for_add_image(), and are waiting for our
+// breakpoint to be hit again (indicating the call has happened). If it
+// succeeds, on_add_image() will be called every time a new module is loaded.
+//
+// On macOS Monterey and up we might also (in process_hook_landed()) have set
+// up a call to one of our hook library's initializer functions, and be
+// waiting for the call to finish (and for our breakpoint to be hit again). So
+// this state can be used multiple times on Monterey and up. (On Monterey we
+// need to explicitly set up calls to every one of our hook library's
+// initializer functions, if it has any.)
 //
 // hook_state_floating
 //
-// We've hit the breakpoint a third time, and the call to
-// _dyld_register_func_for_add_image() has happened (we don't know whether it
-// succeeded or failed).  In process_hook_landed() we've unset the breakpoint
-// we set in maybe_cast_hook().  Our cast hook is being kept alive for future
-// reference.
+// We've hit the breakpoint one last time, and the call to
+// _dyld_register_func_for_add_image() has happened. If it succeeded,
+// on_add_image() will be called every time a new module is loaded. On macOS
+// Monterey and up, calls have also been made to all of our hook library's
+// initializer functions (if it has any). In process_hook_landed() we've unset
+// the breakpoint we set in maybe_cast_hook(). Our cast hook is being kept
+// alive for future reference.
 
 // Every patch hook has two legal states it may be in at any given time
 //
@@ -7114,34 +7630,38 @@ void unsign_user_pages(vm_map_t map, vm_map_offset_t start,
 
 // In order to set hooks in a process, we need to find a method that runs at
 // an appropriate time as the process is being initialized, and hook that
-// method itself.  A process's binary is loaded by the parent process, via a
+// method itself. A process's binary is loaded by the parent process, via a
 // call (indirectly) to parse_machfile() in the xnu kernel's
-// bsd/kern/mach_loader.c.  Among other things, this loads a (shared) copy of
+// bsd/kern/mach_loader.c. Among other things, this loads a (shared) copy of
 // the /usr/lib/dyld module into the image of every new process (via a call to
-// load_dylinker()).  dyld's man page calls it the "dynamic link editor", and
+// load_dylinker()). dyld's man page calls it the "dynamic link editor", and
 // it's what runs first (starting from _dyld_start in dyld's
-// src/dyldStartup.s) as a new process starts up.  Not coincidentally, dyld is
+// src/dyldStartup.s) as a new process starts up. Not coincidentally, dyld is
 // what implements Apple's support for the DYLD_INSERT_LIBRARIES environment
-// variable.  dyld::initializeMainExecutable() is called (from _main()) after
+// variable. dyld::initializeMainExecutable() (or on macOS Monterey and above,
+// dyld4::APIs::runAllInitializersForMain()) is called (from _main()) after
 // all the automatically linked shared libraries (including those specified by
 // DYLD_INSERT_LIBRARIES) are loaded, but before any of those libraries' C++
 // initializers have run (which happens in dyld::initializeMainExecutable()
-// itself).  This seems an ideal place to intervene.
+// itself). This seems an ideal place to intervene.
 //
-// As of macOS 10.13, dyld has an alternate way of launching 64-bit executables
-// that bypasses dyld::initializeMainExecutable() -- dyld::launchWithClosure().
-// But dyld::launchWithClosure() fails over to dyld's "traditional" code path,
-// which does use dyld::initializeMainExecutable().  So, in a 64-bit process
-// where we might want to set hooks on macOS 10.13, we patch
-// dyld::launchWithClosure() to "return false" unconditionally.  Future
-// versions of HookCase.kext may need to know more about how this closure
-// subsystem works.
+// On macOS 10.13 through macOS 11, dyld has an alternate way of launching
+// 64-bit executables that bypasses dyld::initializeMainExecutable() --
+// dyld::launchWithClosure(). But dyld::launchWithClosure() fails over to
+// dyld's "traditional" code path, which does use
+// dyld::initializeMainExecutable(). So, in a 64-bit process where we might
+// want to set hooks on these versions of macOS, we patch
+// dyld::launchWithClosure() to "return false" unconditionally. As of macOS
+// 12 (Monterey), closure support happens differently, and never bypasses the
+// method used to initialize the main executable
+// (dyld4::APIs::runAllInitializersForMain()).
 //
 // maybe_cast_hook() is called just before the new process's execution begins
-// at _dyld_start.  There, if appropriate, we write an "int 0x30" breakpoint
-// to the beginning of dyld::initializeMainExecutable(), and wait for the
-// breakpoint to be hit.  When dealing with a 64-bit process on macOS 10.13,
-// we also patch dyld::launchWithClosure() to always "return false".
+// at _dyld_start. There, if appropriate, we write an "int 0x30" breakpoint to
+// the beginning of the method that initializes the main executable, and wait
+// for the breakpoint to be hit. When dealing with a 64-bit process on macOS
+// 10.13 through macOS 11, we also patch dyld::launchWithClosure() to always
+// "return false".
 //
 // Hitting the breakpoint (for the first time) triggers a call to
 // process_hook_cast().  There we set up a call to dlopen() to load our
@@ -7154,23 +7674,23 @@ void unsign_user_pages(vm_map_t map, vm_map_offset_t start,
 //   1) Change RSP/ESP to make room on the user stack
 //   2) Copy the value of HC_INSERT_LIBRARY to the user stack
 //   3) Set registers or stack locations to dlopen's 'path' and 'mode' args
-//   4) Set the stack's "return address" to dyld::initializeMainExecutable()
+//   4) Set the stack's "return address" to the breakpoint
 //   5) Set RIP/EIP to dlopen()
 //
 // Later, in process_hook_landed(), we may set up another call, to
-// _dyld_register_func_for_add_image().  This time we need user mode code for
-// this method's 'func' argument.  We allocate a page of kernel memory and
-// copy to it the appropriate machine code (which contains an "int 0x31"
-// instruction).  Then we remap that page into the user process and set the
-// 'func' argument accordingly.  We also set RIP/EIP to
-// _dyld_register_func_for_add_image() and the "return address" to
-// dyld::initializeMainExecutable().  Our int 0x31 handler calls
-// on_add_image().
+// _dyld_register_func_for_add_image(). This time we need user mode code for
+// this method's 'func' argument. We allocate a page of kernel memory and copy
+// to it the appropriate machine code (which contains an "int 0x31"
+// instruction). Then we remap that page into the user process and set the
+// 'func' argument accordingly. We also set RIP/EIP to
+// _dyld_register_func_for_add_image() and the "return address" to our
+// breakpoint (at the beginning of the method used to initialize the main
+// executable). Our int 0x31 handler calls on_add_image().
 //
 // When we're all done, we return the thread state to what it was before the
-// first call to dyld::initializeMainExecutable(), remove our breakpoint, set
-// RIP/EIP to dyld::initializeMainExecutable(), and allow that call to happen
-// as originally intended.
+// first call to the method that initializes the main executable, remove our
+// breakpoint, set RIP/EIP to the start of that method, and allow that call to
+// happen as originally intended.
 
 // HookCase.kext is compatible with DYLD_INSERT_LIBRARIES, and doesn't stomp
 // on any of the changes it may have been used to make.  HookCase.kext always
@@ -7249,12 +7769,17 @@ typedef struct _hook {
   user_addr_t call_orig_func_addr;      // Only used in patch hook
   IORecursiveLock *patch_hook_lock;     // Only used in patch hook
   x86_saved_state_t orig_intr_state;    // Only used in cast hook
+  user_addr_t *hooklib_initializers;    // Only used in cast hook
+  user_addr_t dyld_afterInitMain;       // Only used in cast hook
   user_addr_t dyld_runInitializers;     // Only used in cast hook
   user_addr_t add_image_func_addr;      // Only used in cast hook
   user_addr_t call_orig_func_block;     // Only used in cast hook
   hook_desc *patch_hooks;               // Only used in cast hook
   hook_desc *interpose_hooks;           // Only used in cast hook
   pid_t hooked_parent;                  // Only used in cast hook
+  uint32_t num_hooklib_initializers;    // Only used in cast hook
+  uint32_t hooklib_initializers_run;    // Only used in cast hook
+  uint16_t orig_dyld_afterInitMain;     // Only used in cast hook
   uint32_t orig_dyld_runInitializers;   // Only used in cast hook
   uint32_t num_call_orig_funcs;         // Only used in cast hook
   uint32_t num_patch_hooks;             // Only used in cast hook
@@ -7563,6 +8088,7 @@ void get_callstack(vm_map_t proc_map, x86_saved_state_t *intr_state,
 }
 
 bool g_locks_inited = false;
+bool g_locks_destroyed = false;
 
 lck_grp_attr_t *all_hooks_grp_attr = NULL;
 lck_grp_t *all_hooks_grp = NULL;
@@ -7586,7 +8112,9 @@ struct watcher_list g_all_watchers;
 
 bool check_init_locks()
 {
-  if (g_locks_inited) {
+  if (g_locks_destroyed) {
+    return false;
+  } else if (g_locks_inited) {
     return true;
   }
 
@@ -7768,6 +8296,10 @@ void free_hook(hook_t *hookp)
   hookp->state = hook_state_broken;
   if (hookp->patch_hook_lock) {
     IORecursiveLockFree(hookp->patch_hook_lock);
+  }
+  if (hookp->hooklib_initializers) {
+    IOFree(hookp->hooklib_initializers,
+           hookp->num_hooklib_initializers * sizeof(user_addr_t));
   }
   if (hookp->patch_hooks) {
     IOFree(hookp->patch_hooks,
@@ -8275,9 +8807,10 @@ bool unset_watcher(vm_map_t proc_map, watcher_t *watcherp)
 
 void destroy_locks()
 {
-  if (!g_locks_inited) {
+  if (g_locks_destroyed) {
     return;
   }
+  g_locks_destroyed = true;
 
   if (all_hooks_grp) {
     if (all_hooks_mlock) {
@@ -8318,8 +8851,6 @@ void destroy_locks()
     lck_grp_attr_free(all_watchers_grp_attr);
     all_watchers_grp_attr = NULL;
   }
-
-  g_locks_inited = false;
 }
 
 void destroy_all_hooks()
@@ -8341,6 +8872,19 @@ void destroy_all_hooks()
     free_hook(hookp);
   }
   all_hooks_unlock_write();
+}
+
+void unset_all_kern_hooks()
+{
+  if (!check_init_locks()) {
+    return;
+  }
+  all_kern_hooks_lock_write();
+  kern_hook_t *kern_hookp = NULL;
+  LIST_FOREACH(kern_hookp, &g_all_kern_hooks, list_entry) {
+    unset_kern_hook(kern_hookp);
+  }
+  all_kern_hooks_unlock_write();
 }
 
 void destroy_all_kern_hooks()
@@ -8631,12 +9175,18 @@ bool maybe_cast_hook(proc_t proc)
     strncpy(dylib_path, fixed_dylib_path, sizeof(dylib_path));
   }
 
-  // We start setting hooks just before dyld::initializeMainExecutable() runs.
+  // We start setting hooks just before dyld::initializeMainExecutable() (or
+  // dyld4::APIs::runAllInitializersForMain() on macOS Monterey and up) runs.
   // It's called (from _main()) after all the automatically linked shared
   // libraries are loaded, but before any of those libraries' C++ initializers
-  // have run (which happens in dyld::InitializeMainExecutable() itself).
+  // have run (which happens while the main executable is being initialized).
   // This seems an ideal place to intervene.
   user_addr_t initializeMainExecutable = 0;
+  // On macOS Monterey and up, we must explicitly call our hook library's
+  // initializers. This should happen after our main executable has been
+  // initialized. So we need to find another method to which we can shift our
+  // hook at the appropriate time.
+  user_addr_t dyld_afterInitMain = 0;
   user_addr_t dyld_runInitializers = 0;
   user_addr_t dyld_launchWithClosure = 0;
   user_addr_t DyldSharedCache_findClosure = 0;
@@ -8648,10 +9198,24 @@ bool maybe_cast_hook(proc_t proc)
     if (copyin_symbol_table(&module_info, &symbol_table,
                             symbol_type_defined))
     {
-      initializeMainExecutable =
-        find_symbol("__ZN4dyld24initializeMainExecutableEv", &symbol_table);
-      dyld_runInitializers =
-        find_symbol("__ZN4dyld15runInitializersEP11ImageLoader", &symbol_table);
+      if (macOS_Monterey()) {
+        initializeMainExecutable =
+          find_symbol("__ZN5dyld44APIs25runAllInitializersForMainEv",
+                      &symbol_table);
+        dyld_afterInitMain =
+          find_symbol("__ZN5dyld424notifyMonitoringDyldMainEv",
+                      &symbol_table);
+        dyld_runInitializers =
+          find_symbol("__ZNK5dyld46Loader38runInitializersBottomUpPlusUpwardLinksERNS_12RuntimeStateE",
+                      &symbol_table);
+      } else {
+        initializeMainExecutable =
+          find_symbol("__ZN4dyld24initializeMainExecutableEv",
+                      &symbol_table);
+        dyld_runInitializers =
+          find_symbol("__ZN4dyld15runInitializersEP11ImageLoader",
+                      &symbol_table);
+      }
       if (IS_64BIT_PROCESS(proc)) {
         if (macOS_BigSur()) {
           DyldSharedCache_findClosure =
@@ -8682,6 +9246,11 @@ bool maybe_cast_hook(proc_t proc)
   if (!initializeMainExecutable || !dyld_runInitializers) {
     return false;
   }
+  if (macOS_Monterey()) {
+    if (!dyld_afterInitMain) {
+      return false;
+    }
+  }
 
   uint64_t unique_pid = proc_uniqueid(proc);
 
@@ -8695,6 +9264,16 @@ bool maybe_cast_hook(proc_t proc)
   {
     vm_map_deallocate(proc_map);
     return false;
+  }
+
+  uint16_t orig_dyld_afterInitMain = 0;
+  if (macOS_Monterey()) {
+    if (!proc_copyin(proc_map, dyld_afterInitMain, &orig_dyld_afterInitMain,
+                     sizeof(orig_dyld_afterInitMain)))
+    {
+      vm_map_deallocate(proc_map);
+      return false;
+    }
   }
 
   uint32_t orig_dyld_runInitializers = 0;
@@ -8717,6 +9296,8 @@ bool maybe_cast_hook(proc_t proc)
   strncpy(hookp->inserted_dylib_path, dylib_path, sizeof(hc_path_t));
   hookp->orig_addr = initializeMainExecutable;
   hookp->orig_code = orig_code;
+  hookp->dyld_afterInitMain = dyld_afterInitMain;
+  hookp->orig_dyld_afterInitMain = orig_dyld_afterInitMain;
   hookp->dyld_runInitializers = dyld_runInitializers;
   hookp->orig_dyld_runInitializers = orig_dyld_runInitializers;
   hookp->no_numerical_addrs = no_numerical_addrs;
@@ -8775,12 +9356,13 @@ bool maybe_cast_hook(proc_t proc)
   return true;
 }
 
-// Our breakpoint at dyld::initializeMainExecutable() has been hit for the
-// first time.  Set up a call to dlopen() our hook library and wait for it to
-// be hit again, triggering a call to process_hook_flying().  Also hook
-// dyld::runInitializers() to prevent the call to dlopen() from triggering any
-// calls to C++ initializers.  (Otherwise some of those initializers would run
-// before we had a chance to hook methods they call.)
+// Our breakpoint (at the beginning of the method that initializes the main
+// executable) has been hit for the first time. Set up a call to dlopen() our
+// hook library and wait for it to be hit again, triggering a call to
+// process_hook_flying(). Also hook hookp->dyld_runInitializers to prevent the
+// call to dlopen() from triggering any calls to C++ initializers. (Otherwise
+// some of those initializers would run before we had a chance to hook methods
+// they call.)
 void process_hook_cast(hook_t *hookp, x86_saved_state_t *intr_state)
 {
   if (!hookp || !intr_state) {
@@ -8901,10 +9483,10 @@ void process_hook_cast(hook_t *hookp, x86_saved_state_t *intr_state)
     intr_state->ss_32.eip = (uint32_t) dlopen;
   }
 
-  // Patch dyld::runInitializers() to always "return 0".  This prevents calls
-  // to C++ initializers from being triggered by our call to dlopen().
+  // Patch hookp->dyld_runInitializers to always "return 0". This prevents
+  // calls to C++ initializers from being triggered by our call to dlopen().
   // Without this, C++ initializers might call methods before we've had a
-  // chance to hook them.  We'll restore the original method later in
+  // chance to hook them. We'll restore the original method later in
   // process_hook_flying().
   uint32_t new_code;
   if (intr_state->flavor == x86_SAVED_STATE64) {
@@ -9010,7 +9592,7 @@ bool get_valid_user_hooks(proc_t proc, char *inserted_dylib_path,
       // frameworks have a 'Resources' soft link in the same directory where
       // there used to be a soft link to the framework binary, we can hack
       // together a workaround for frameworks.
-      if (macOS_BigSur() && !fixed_module_name[0]) {
+      if ((macOS_BigSur() || macOS_Monterey()) && !fixed_module_name[0]) {
         char holder[PATH_MAX];
         strncpy(holder, user_hooks[i].orig_module_name, sizeof(holder));
         size_t fixed_to = 0;
@@ -9162,7 +9744,8 @@ bool check_for_pending_user_hooks(hook_desc *patch_hooks,
   return retval;
 }
 
-// Get the user hook information contained in our hook library.
+// Get the user hook information contained in our hook library, plus other
+// useful information.
 bool get_user_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
                     hook_desc **patch_hooks, uint32_t *num_patch_hooks,
                     hook_desc **interpose_hooks, uint32_t *num_interpose_hooks)
@@ -9229,17 +9812,24 @@ bool get_user_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
     slide = module_info.shared_cache_slide;
   }
 
+  vm_offset_t text_sections_offset = 0;
+  uint32_t num_text_sections = 0;
   vm_offset_t data_sections_offset = 0;
   uint32_t num_data_sections = 0;
+  vm_offset_t data_const_sections_offset = 0;
+  uint32_t num_data_const_sections = 0;
   vm_offset_t hook_data_offset = 0;
   vm_size_t hook_data_size = 0;
+  bool found_text_segment = false;
   bool found_data_segment = false;
+  bool found_data_const_segment = false;
+  bool found_initializers_section = false;
   bool found_hook_section = false;
 
   uint32_t num_commands = mh_local.ncmds;
   const struct load_command *load_command =
     (struct load_command *) cmds_local;
-  uint32_t i;
+  uint32_t i, j;
   for (i = 1; i <= num_commands; ++i) {
     uint32_t cmd = load_command->cmd;
     switch (cmd) {
@@ -9282,13 +9872,33 @@ bool get_user_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
         if (!strncmp(segname, text_segname, strlen(text_segname) + 1)) {
           cast_hookp->inserted_dylib_textseg = vmaddr + slide;
           cast_hookp->inserted_dylib_textseg_len = vmsize;
+
+          text_sections_offset = sections_offset;
+          num_text_sections = nsects;
+          found_text_segment = true;
+          if (found_data_segment && found_data_const_segment) {
+            i = num_commands + 1;
+          }
         }
         const char *data_segname = "__DATA";
         if (!strncmp(segname, data_segname, strlen(data_segname) + 1)) {
           data_sections_offset = sections_offset;
           num_data_sections = nsects;
           found_data_segment = true;
-          i = num_commands + 1;
+          if (found_text_segment && found_data_const_segment) {
+            i = num_commands + 1;
+          }
+        }
+        const char *data_const_segname = "__DATA_CONST";
+        if (!strncmp(segname, data_const_segname,
+                     strlen(data_const_segname) + 1))
+        {
+          data_const_sections_offset = sections_offset;
+          num_data_const_sections = nsects;
+          found_data_const_segment = true;
+          if (found_text_segment && found_data_segment) {
+            i = num_commands + 1;
+          }
         }
       }
       break;
@@ -9305,40 +9915,141 @@ bool get_user_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
   char procname[PATH_MAX];
   proc_name(proc_pid(proc), procname, sizeof(procname));
 
-  vm_offset_t section_offset = data_sections_offset;
-  for (i = 1; i <= num_data_sections; ++i) {
-    char *sectname;
-    uint64_t addr;
-    uint64_t size;
-    if (is_64bit) {
-      struct section_64 *section = (struct section_64 *) section_offset;
-      sectname = section->sectname;
-      addr = section->addr;
-      size = section->size;
-    } else {
-      struct section *section = (struct section *) section_offset;
-      sectname = section->sectname;
-      addr = section->addr;
-      size = section->size;
+  // Search for the __hook section in the __DATA segment. And on macOS
+  // Monterey and above, search all three segments for an initializers
+  // section. As of Monterey, hook libraries' initializers are no longer run
+  // "automatically". Instead we need to run each of them explicitly as the
+  // main executable is starting up. So we need to look for them here. For
+  // more info see maybe_cast_hook(), process_hook_flying() and
+  // process_hook_landed().
+  for (i = 1; i <= 3; ++i) {
+    uint32_t num_sections;
+    vm_offset_t sections_offset;
+    switch (i) {
+      case 1: // Searching sections from the __DATA segment
+        num_sections = num_data_sections;
+        sections_offset = data_sections_offset;
+        break;
+      case 2: // Searching sections from the __DATA_CONST segment
+        if (!macOS_Monterey() || found_initializers_section ||
+            !found_hook_section)
+        {
+          continue;
+        }
+        num_sections = num_data_const_sections;
+        sections_offset = data_const_sections_offset;
+        break;
+      case 3: // Searching sections from the __TEXT segment
+        if (!macOS_Monterey() || found_initializers_section ||
+            !found_hook_section)
+        {
+          continue;
+        }
+        num_sections = num_text_sections;
+        sections_offset = text_sections_offset;
+        break;
+      default:
+        continue;
     }
 
-    const char *hook_sectname = "__hook";
-    if (!strncmp(sectname, hook_sectname, strlen(hook_sectname) + 1)) {
-      if (size && (size % user_hook_desc_size == 0)) {
-        found_hook_section = true;
+    for (j = 1; j <= num_sections; ++j) {
+      char *sectname;
+      uint64_t addr;
+      uint64_t size;
+      uint8_t type;
+      uint64_t pointer_size;
+      if (is_64bit) {
+        struct section_64 *section = (struct section_64 *) sections_offset;
+        sectname = section->sectname;
+        addr = section->addr;
+        size = section->size;
+        type = (section->flags & SECTION_TYPE);
+        pointer_size = 8;
       } else {
-        printf("HookCase(%s[%d]): get_user_hooks(): Incorrect size (\'%lld\' bytes) for \"__DATA, __hook\" section of inserted library \"%s\" -- should be a multiple of \'%d\'\n",
-               procname, proc_pid(proc), size, cast_hookp->inserted_dylib_path, user_hook_desc_size);
+        struct section *section = (struct section *) sections_offset;
+        sectname = section->sectname;
+        addr = section->addr;
+        size = section->size;
+        type = (section->flags & SECTION_TYPE);
+        pointer_size = 4;
       }
-      hook_data_offset = addr + slide;
-      hook_data_size = size;
-      break;
-    }
 
-    if (is_64bit) {
-      section_offset += sizeof(struct section_64);
-    } else {
-      section_offset += sizeof(struct section);
+      if (i == 1) { // The __hook section is always in the __DATA segment
+        const char *hook_sectname = "__hook";
+        if (!strncmp(sectname, hook_sectname, strlen(hook_sectname) + 1)) {
+          if (size && (size % user_hook_desc_size == 0)) {
+            found_hook_section = true;
+          } else {
+            printf("HookCase(%s[%d]): get_user_hooks(): Incorrect size (\'%lld\' bytes) for \"__DATA, __hook\" section of inserted library \"%s\" -- should be a multiple of \'%d\'\n",
+                   procname, proc_pid(proc), size, cast_hookp->inserted_dylib_path, user_hook_desc_size);
+          }
+          hook_data_offset = addr + slide;
+          hook_data_size = size;
+          if (!macOS_Monterey() || found_initializers_section ||
+              !found_hook_section)
+          {
+            break;
+          }
+        }
+      }
+
+      if (!macOS_Monterey()) {
+        if (is_64bit) {
+          sections_offset += sizeof(struct section_64);
+        } else {
+          sections_offset += sizeof(struct section);
+        }
+        continue;
+      }
+
+      // Here we assume a hook library will only have one initializers
+      // section. This seems to be true in general, but there may be
+      // exceptions.
+      if (((type == S_MOD_INIT_FUNC_POINTERS) ||
+           (type == S_INIT_FUNC_OFFSETS))
+         && addr && size)
+      {
+        user_addr_t additional_offset = 0;
+        if (type == S_INIT_FUNC_OFFSETS) {
+          additional_offset = module_info.load_address;
+          pointer_size = 4;
+        }
+        uint32_t count = (uint32_t) (size / pointer_size);
+        if (count) {
+          uint8_t *section_buffer = (uint8_t *) IOMalloc(size);
+          user_addr_t *initializers = (user_addr_t *)
+            IOMalloc(count * sizeof(user_addr_t));
+          if (section_buffer) {
+            if (initializers) {
+              if (proc_copyin(proc_map, addr + slide, section_buffer, size)) {
+                cast_hookp->num_hooklib_initializers = count;
+                uint32_t k;
+                for (k = 0; k < count; ++k) {
+                  if (pointer_size == 8) {
+                    initializers[k] =
+                      ((uint64_t *)section_buffer)[k];
+                  } else {
+                    initializers[k] =
+                      ((uint32_t *)section_buffer)[k] + additional_offset;
+                  }
+                }
+                cast_hookp->hooklib_initializers = initializers;
+              }
+            }
+            IOFree(section_buffer, size);
+          }
+        }
+        found_initializers_section = true;
+        if (hook_data_offset || (i > 1)) {
+          break;
+        }
+      }
+
+      if (is_64bit) {
+        sections_offset += sizeof(struct section_64);
+      } else {
+        sections_offset += sizeof(struct section);
+      }
     }
   }
 
@@ -9912,8 +10623,8 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
             user_addr_t old_lazy_ptr_offset = symbol_table.lazy_ptr_table_addr +
               target_index * sizeof(old_lazy_ptr);
             // Don't change 'old_lazy_ptr' if it's already been changed --
-            // presumably via DYLD_INSERT_LIBRARIES.  But note that it won't
-            // be NULL if it's not yet been initialized.  It will point to a
+            // presumably via DYLD_INSERT_LIBRARIES. But note that it won't
+            // be NULL if it's not yet been initialized. It will point to a
             // local method for lazily setting it to the correct (external)
             // value -- a small block in the __stub_helper section of the
             // __TEXT, containing a PUSH instruction and a JMP instruction.
@@ -9923,15 +10634,23 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
                                   (old_lazy_ptr > module_begin) &&
                                   (old_lazy_ptr < module_end));
 #ifdef DEBUG_LAZY_POINTERS
-            if ((old_lazy_ptr != interpose_hooks[j].orig_function) &&
-                !symbol_table.is_in_shared_cache)
-            {
+            bool interesting =
+              ((old_lazy_ptr != interpose_hooks[j].orig_function) &&
+               !symbol_table.is_in_shared_cache);
+            // On macOS Monterey and above, most (if not all) "lazy" pointers
+            // are already initialized. Supposedly this makes applications
+            // load faster.
+            if (macOS_Monterey()) {
+              interesting = true;
+            }
+            if (interesting) {
               pid_t pid = proc_pid(proc);
               char procname[PATH_MAX];
               proc_name(pid, procname, sizeof(procname));
               vm_offset_t slide = symbol_table.slide;
-              printf("HookCase(%s[%d]): set_interpose_hooks_for_module(): module %s, new_lazy_ptr 0x%llx, old_lazy_ptr 0x%llx, module_begin 0x%llx, module_end 0x%llx, uninitialized %d\n",
-                     procname, pid, module_info->path, new_lazy_ptr - slide, old_lazy_ptr - slide,
+              printf("HookCase(%s[%d]): set_interpose_hooks_for_module(): module %s, string_table_item %s, new_lazy_ptr 0x%llx, old_lazy_ptr 0x%llx, orig_function 0x%llx, module_begin 0x%llx, module_end 0x%llx, uninitialized %d\n",
+                     procname, pid, module_info->path, string_table_item, new_lazy_ptr - slide,
+                     old_lazy_ptr - slide, interpose_hooks[j].orig_function - slide,
                      module_begin - slide, module_end - slide, uninitialized);
             }
 #endif
@@ -10113,11 +10832,13 @@ void set_interpose_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
   vm_deallocate(kernel_map, (vm_map_offset_t) holder, info_array_size);
 }
 
-bool set_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp)
+bool set_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
+               bool *user_hooks_pending)
 {
-  if (!proc || !proc_map || !cast_hookp) {
+  if (!proc || !proc_map || !cast_hookp || !user_hooks_pending) {
     return false;
   }
+  *user_hooks_pending = false;
 
   hook_desc *patch_hooks = NULL;
   uint32_t num_patch_hooks = 0;
@@ -10151,10 +10872,10 @@ bool set_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp)
     cast_hookp->num_patch_hooks = num_patch_hooks;
   }
 
-  if (!check_for_pending_user_hooks(patch_hooks, num_patch_hooks,
-                                    interpose_hooks, num_interpose_hooks))
+  if (check_for_pending_user_hooks(patch_hooks, num_patch_hooks,
+                                   interpose_hooks, num_interpose_hooks))
   {
-    retval = false;
+    *user_hooks_pending = true;
   }
 
   thread_interrupt_level(old_state);
@@ -10162,84 +10883,18 @@ bool set_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp)
   return retval;
 }
 
-// Our breakpoint at dyld::initializeMainExecutable() has been hit for the
-// second time.  If dlopen() loaded our hook library, try to set the hooks it
-// describes.  Then if there's no more to do, delete our cast hook, unset our
-// breakpoint at dyld::initializeMainExecutable(), and pay no further
-// attention to the current user process.  Otherwise set up a call to
-// _dyld_register_func_for_add_image(), which (if it succeeds) will trigger
-// calls to on_add_image() (below) whenever a new module is loaded.  Then wait
-// for our dyld::initializeMainExecutable() breakpoint to be hit again,
-// triggering a call to process_hook_landed() below.
-void process_hook_flying(hook_t *hookp, x86_saved_state_t *intr_state)
+// Set up a call to _dyld_register_func_for_add_image().
+bool setup_register_for_add_image(hook_t *hookp, x86_saved_state_t *intr_state,
+                                  vm_map_t proc_map)
 {
-  if (!hookp || !intr_state) {
-    return;
-  }
-
-  hookp->state = hook_state_broken;
-
-  if (!hookp->dyld_runInitializers) {
-    return;
-  }
-
-  proc_t proc = current_proc();
-  vm_map_t proc_map = task_map_for_proc(proc);
-  if (!proc_map) {
-    return;
-  }
-
-  // Restore the original dyld::runInitializers() method that we disabled
-  // above in process_hook_cast().  Our hook library's C++ initializers (and
-  // those of its dependencies) will run along with those from the remaining
-  // modules in our host process, when dyld::runInitializers() is called again
-  // from dyld::initializeMainExecutable().
-  proc_copyout(proc_map, &hookp->orig_dyld_runInitializers,
-               hookp->dyld_runInitializers,
-               sizeof(hookp->orig_dyld_runInitializers));
-
-  char procname[PATH_MAX];
-  proc_name(proc_pid(proc), procname, sizeof(procname));
-
-  uint64_t dlopen_result = 0;
-  if (intr_state->flavor == x86_SAVED_STATE64) {
-    dlopen_result = intr_state->ss_64.rax;
-  } else {     // flavor == x86_SAVED_STATE32
-    dlopen_result = intr_state->ss_32.eax;
-  }
-
-  // Reset the thread state to what it was just before we hit our
-  // dyld::initializeMainExecutable() breakpoint for the first time.
-  memcpy(intr_state, &hookp->orig_intr_state, sizeof(x86_saved_state_t));
-
-  bool user_hooks_pending = false;
-  if (dlopen_result) {
-    if (set_hooks(proc, proc_map, hookp)) {
-      user_hooks_pending = true;
-    }
-  } else {
-    printf("HookCase(%s[%d]): process_hook_flying(): Library \"%s\" not found or can't be loaded\n",
-           procname, proc_pid(proc), hookp->inserted_dylib_path);
-  }
-
-  if (!user_hooks_pending) {
-    if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
-                     sizeof(hookp->orig_code)))
-    {
-      if (intr_state->flavor == x86_SAVED_STATE64) {
-        intr_state->ss_64.isf.rip = hookp->orig_addr;
-      } else {     // flavor == x86_SAVED_STATE32
-        intr_state->ss_32.eip = (uint32_t) hookp->orig_addr;
-      }
-    }
-    vm_map_deallocate(proc_map);
-    return;
+  if (!hookp || !intr_state || !proc_map) {
+    return false;
   }
 
   user_addr_t dyld_register_func_for_add_image = 0;
   module_info_t module_info;
   symbol_table_t symbol_table;
-  if (get_module_info(proc, "/usr/lib/system/libdyld.dylib", 0,
+  if (get_module_info(current_proc(), "/usr/lib/system/libdyld.dylib", 0,
                       &module_info))
   {
     if (copyin_symbol_table(&module_info, &symbol_table,
@@ -10283,9 +10938,8 @@ void process_hook_flying(hook_t *hookp, x86_saved_state_t *intr_state)
         intr_state->ss_32.eip = (uint32_t) hookp->orig_addr;
       }
     }
-    vm_map_deallocate(proc_map);
     remove_hook(hookp);
-    return;
+    return false;
   }
 
   if (intr_state->flavor == x86_SAVED_STATE64) {
@@ -10306,9 +10960,8 @@ void process_hook_flying(hook_t *hookp, x86_saved_state_t *intr_state)
       {
         intr_state->ss_64.isf.rip = hookp->orig_addr;
       }
-      vm_map_deallocate(proc_map);
       remove_hook(hookp);
-      return;
+      return false;
     }
     intr_state->ss_64.isf.rsp = stack_base;
     intr_state->ss_64.rdi = on_add_image;
@@ -10339,22 +10992,227 @@ void process_hook_flying(hook_t *hookp, x86_saved_state_t *intr_state)
       {
         intr_state->ss_32.eip = (uint32_t) hookp->orig_addr;
       }
-      vm_map_deallocate(proc_map);
       remove_hook(hookp);
-      return;
+      return false;
     }
     intr_state->ss_32.uesp = stack_base;
     intr_state->ss_32.eip = (uint32_t) dyld_register_func_for_add_image;
   }
 
-  vm_map_deallocate(proc_map);
-  hookp->state = hook_state_landed;
+  return true;
 }
 
-// Our breakpoint at dyld::initializeMainExecutable() has been hit for the
-// third time.  Unset that breakpoint and keep our cast hook alive for future
-// reference.  Also resume our parent task, if we suspended it above in
-// maybe_cast_hook() above.
+// Set up a call to one of our hook library's initializers.
+bool setup_initializer(hook_t *hookp, x86_saved_state_t *intr_state,
+                       vm_map_t proc_map)
+{
+  if (!hookp || !intr_state || !proc_map) {
+    return false;
+  }
+
+  if (!hookp->hooklib_initializers ||
+      (hookp->hooklib_initializers_run >= hookp->num_hooklib_initializers))
+  {
+    return false;
+  }
+
+  if (intr_state->flavor == x86_SAVED_STATE64) {
+    user_addr_t stack_base = intr_state->ss_64.isf.rsp;
+    stack_base -= C_64_REDZONE_LEN;
+    // In 64-bit mode the stack needs to be 16-byte aligned.  We also need to
+    // ensure that RBP will get the same alignment, to prevent GPFs when
+    // reads/writes are made between stack variables and SSE registers.  As it
+    // happens the standard no-argument stack frame does this just fine.
+    stack_base &= 0xfffffffffffffff0;
+    stack_base -= sizeof(uint64_t);
+    user_addr_t return_address = stack_base;
+    if (!proc_copyout(proc_map, &hookp->orig_addr,
+                      return_address, sizeof(uint64_t)))
+    {
+      if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
+                       sizeof(hookp->orig_code)))
+      {
+        intr_state->ss_64.isf.rip = hookp->orig_addr;
+      }
+      remove_hook(hookp);
+      return false;
+    }
+    intr_state->ss_64.isf.rsp = stack_base;
+    // 'Initializer' is defined in dyld's ImageLoader.h as having the
+    // following parameters. But as best I can tell they're never used. So we
+    // pass them all as '0's.
+    intr_state->ss_64.rdi = 0;    // int argc
+    intr_state->ss_64.rsi = 0;    // const char* argv[]
+    intr_state->ss_64.rdx = 0;    // const char* envp[]
+    intr_state->ss_64.rcx = 0;    // const char* apple[]
+    intr_state->ss_64.r8 = 0;     // const ProgramVars* vars
+    intr_state->ss_64.isf.rip =
+      hookp->hooklib_initializers[hookp->hooklib_initializers_run];
+    // Note for future reference:  In 64-bit mode there's a varargs ABI that
+    // requires AL to be set to how many SSE registers contain arguments.
+    // dyld_register_func_for_add_image() doesn't use varargs, but we might
+    // also want to insert calls to other functions that do.
+    //intr_state->ss_64.rax = 0;
+  } else {     // flavor == x86_SAVED_STATE32
+    user32_addr_t stack_base = intr_state->ss_32.uesp;
+    // As best I can tell, the stack doesn't need to be 16- or 8-byte aligned
+    // in 32-bit mode.  But we do need to ensure that EBP will be 8 bytes off
+    // of 16-byte aligned.  The machine code written by Apple's compilers to
+    // read/write between stack variables and SSE registers assumes this.  So
+    // if we break this rule, these instructions will GPF because the memory
+    // addresses aren't 16-byte aligned.
+    stack_base &= 0xfffffff0;
+    stack_base -= 12;
+    uint32_t args[6];
+    // 'Initializer' is defined in dyld's ImageLoader.h as having the
+    // following parameters. But as best I can tell they're never used. So we
+    // pass them all as '0's.
+    args[5] = (uint32_t) 0;       // int argc
+    args[4] = (uint32_t) 0;       // const char* argv[]
+    args[3] = (uint32_t) 0;       // const char* envp[]
+    args[2] = (uint32_t) 0;       // const char* apple[]
+    args[1] = (uint32_t) 0;       // const ProgramVars* vars
+    args[0] = (uint32_t) hookp->orig_addr;
+    stack_base -= sizeof(args);
+    user32_addr_t args_base = stack_base;
+    if (!proc_copyout(proc_map, args, args_base, sizeof(args))) {
+      if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
+                       sizeof(hookp->orig_code)))
+      {
+        intr_state->ss_32.eip = (uint32_t) hookp->orig_addr;
+      }
+      remove_hook(hookp);
+      return false;
+    }
+    intr_state->ss_32.uesp = stack_base;
+    intr_state->ss_32.eip = (uint32_t)
+      hookp->hooklib_initializers[hookp->hooklib_initializers_run];
+  }
+
+  ++hookp->hooklib_initializers_run;
+  return true;
+}
+
+// Our breakpoint (on the method that initializes the main executable) has
+// been hit for the second time. If dlopen() loaded our hook library, try to
+// set the hooks it describes. Then if there's no more to do, unset our
+// breakpoint and pay no further attention to the current user process.
+// Otherwise set up a call to _dyld_register_func_for_add_image(), which (if
+// it succeeds) will trigger calls to on_add_image() (below) whenever a new
+// module is loaded. Then wait for our breakpoint to be hit again, triggering
+// a call to process_hook_landed() below. On macOS Monterey and above we may
+// need to shift our breakpoint to hookp->dyld_afterInitMain.
+void process_hook_flying(hook_t *hookp, x86_saved_state_t *intr_state)
+{
+  if (!hookp || !intr_state) {
+    return;
+  }
+
+  hookp->state = hook_state_broken;
+
+  if (!hookp->dyld_runInitializers) {
+    return;
+  }
+
+  proc_t proc = current_proc();
+  vm_map_t proc_map = task_map_for_proc(proc);
+  if (!proc_map) {
+    return;
+  }
+
+  // Restore the original hookp->dyld_runInitializers method that we disabled
+  // above in process_hook_cast(). On macOS 11 (Big Sur) and below, our hook
+  // library's C++ initializers (and those of its dependencies) will run along
+  // with those from the remaining modules in our host process, when
+  // dyld::runInitializers() is called again from the code that initializes
+  // our main executable. But on macOS Monterey and above this doesn't happen,
+  // so we need to call our hook library's initializers explicitly.
+  proc_copyout(proc_map, &hookp->orig_dyld_runInitializers,
+               hookp->dyld_runInitializers,
+               sizeof(hookp->orig_dyld_runInitializers));
+
+  char procname[PATH_MAX];
+  proc_name(proc_pid(proc), procname, sizeof(procname));
+
+  uint64_t dlopen_result = 0;
+  if (intr_state->flavor == x86_SAVED_STATE64) {
+    dlopen_result = intr_state->ss_64.rax;
+  } else {     // flavor == x86_SAVED_STATE32
+    dlopen_result = intr_state->ss_32.eax;
+  }
+
+  // Reset the thread state to what it was just before we hit our
+  // dyld::initializeMainExecutable() breakpoint for the first time.
+  memcpy(intr_state, &hookp->orig_intr_state, sizeof(x86_saved_state_t));
+
+  bool work_done = true;
+  bool user_hooks_pending = false;
+  if (dlopen_result) {
+    set_hooks(proc, proc_map, hookp, &user_hooks_pending);
+  } else {
+    printf("HookCase(%s[%d]): process_hook_flying(): Library \"%s\" not found or can't be loaded\n",
+           procname, proc_pid(proc), hookp->inserted_dylib_path);
+  }
+
+  if (user_hooks_pending || hookp->hooklib_initializers) {
+    work_done = false;
+  }
+
+  if (work_done) {
+    if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
+                     sizeof(hookp->orig_code)))
+    {
+      if (intr_state->flavor == x86_SAVED_STATE64) {
+        intr_state->ss_64.isf.rip = hookp->orig_addr;
+      } else {     // flavor == x86_SAVED_STATE32
+        intr_state->ss_32.eip = (uint32_t) hookp->orig_addr;
+      }
+    }
+
+    vm_map_deallocate(proc_map);
+    return;
+  }
+
+  if (user_hooks_pending) {
+    if (setup_register_for_add_image(hookp, intr_state, proc_map)) {
+      hookp->state = hook_state_landed;
+    }
+  } else if (hookp->hooklib_initializers) {
+    // Our hook library's initializers must be called after our main
+    // executable has been initialized. So shift our breakpoint and wait
+    // for the new breakpoint to be hit.
+    if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
+                     sizeof(hookp->orig_code)))
+    {
+      if (intr_state->flavor == x86_SAVED_STATE64) {
+        intr_state->ss_64.isf.rip = hookp->orig_addr;
+      } else {     // flavor == x86_SAVED_STATE32
+        intr_state->ss_32.eip = (uint32_t) hookp->orig_addr;
+      }
+
+      hookp->orig_addr = hookp->dyld_afterInitMain;
+      hookp->orig_code = hookp->orig_dyld_afterInitMain;
+
+      uint16_t new_code = HC_INT1_OPCODE_SHORT;
+      if (proc_copyout(proc_map, &new_code, hookp->orig_addr,
+                       sizeof(new_code)))
+      {
+        hookp->state = hook_state_landed;
+      }
+    }
+  }
+
+  vm_map_deallocate(proc_map);
+}
+
+// Our breakpoint has been hit again. It might still be set to the method that
+// initializes our main executable. Or (on macOS Monterey and up) it might
+// have been shifted to a method that runs just after the first one has
+// returned. On macOS 11 (Big Sur) and below, just unset our breakpoint and
+// keep our cast hook alive for future reference. On macOS Monterey and above,
+// first keep setting up calls to our hook library's initializers until
+// they've all been run. This will result in repeated calls to
+// process_hook_landed().
 void process_hook_landed(hook_t *hookp, x86_saved_state_t *intr_state)
 {
   if (!hookp || !intr_state) {
@@ -10373,19 +11231,52 @@ void process_hook_landed(hook_t *hookp, x86_saved_state_t *intr_state)
   // dyld::initializeMainExecutable() breakpoint for the first time.
   memcpy(intr_state, &hookp->orig_intr_state, sizeof(x86_saved_state_t));
 
-  if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
-                   sizeof(hookp->orig_code)))
+  if (hookp->hooklib_initializers &&
+      (hookp->hooklib_initializers_run < hookp->num_hooklib_initializers))
   {
-    if (intr_state->flavor == x86_SAVED_STATE64) {
-      intr_state->ss_64.isf.rip = hookp->orig_addr;
-    } else {     // flavor == x86_SAVED_STATE32
-      intr_state->ss_32.eip = (uint32_t) hookp->orig_addr;
+    // Our hook library's initializers must be called after our main
+    // executable has been initialized. So (if we haven't already done so in
+    // process_hook_flying()) shift our breakpoint and wait for the new
+    // breakpoint to be hit.
+    if (hookp->orig_addr != hookp->dyld_afterInitMain) {
+      if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
+                       sizeof(hookp->orig_code)))
+      {
+        if (intr_state->flavor == x86_SAVED_STATE64) {
+          intr_state->ss_64.isf.rip = hookp->orig_addr;
+        } else {     // flavor == x86_SAVED_STATE32
+          intr_state->ss_32.eip = (uint32_t) hookp->orig_addr;
+        }
+
+        hookp->orig_addr = hookp->dyld_afterInitMain;
+        hookp->orig_code = hookp->orig_dyld_afterInitMain;
+
+        uint16_t new_code = HC_INT1_OPCODE_SHORT;
+        if (proc_copyout(proc_map, &new_code, hookp->orig_addr,
+                         sizeof(new_code)))
+        {
+          hookp->state = hook_state_landed;
+        }
+      }
+    } else {
+      if (setup_initializer(hookp, intr_state, proc_map)) {
+        hookp->state = hook_state_landed;
+      }
+    }
+  } else {
+    if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
+                     sizeof(hookp->orig_code)))
+    {
+      if (intr_state->flavor == x86_SAVED_STATE64) {
+        intr_state->ss_64.isf.rip = hookp->orig_addr;
+      } else {     // flavor == x86_SAVED_STATE32
+        intr_state->ss_32.eip = (uint32_t) hookp->orig_addr;
+      }
+      hookp->state = hook_state_floating;
     }
   }
 
   vm_map_deallocate(proc_map);
-
-  hookp->state = hook_state_floating;
 }
 
 // We've hit a breakpoint in the original method hooked by one of our patch
@@ -11090,7 +11981,7 @@ int hook_execve(proc_t p, struct execve_args *uap, int *retv)
     // process.
 #ifndef DEBUG_PROCESS_START
     if (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave() &&
-        !macOS_Catalina() && !macOS_BigSur())
+        !macOS_Catalina() && !macOS_BigSur() && !macOS_Monterey())
     {
       maybe_cast_hook(current_proc());
     }
@@ -11171,7 +12062,7 @@ int hook_posix_spawn(proc_t p, struct posix_spawn_args *uap, int *retv)
       // thread_bootstrap_return_hook().
 #ifndef DEBUG_PROCESS_START
       if (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave() &&
-          !macOS_Catalina() && !macOS_BigSur())
+          !macOS_Catalina() && !macOS_BigSur() && !macOS_Monterey())
       {
         maybe_cast_hook(proc);
       }
@@ -11199,7 +12090,7 @@ int hook_mac_execve(proc_t p, struct mac_execve_args *uap, int *retv)
 #endif
 #ifndef DEBUG_PROCESS_START
     if (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave() &&
-        !macOS_Catalina() && !macOS_BigSur())
+        !macOS_Catalina() && !macOS_BigSur() && !macOS_Monterey())
     {
       maybe_cast_hook(current_proc());
     }
@@ -11704,8 +12595,8 @@ void user_trap_hook(x86_saved_state_t *intr_state, kern_hook_t *hookp)
     }
   }
 
-  // Interrupts were disabled when we entered this function. So now we disable
-  // them again.
+  // The original user_trap() method expects interrupts to be disabled on
+  // entry.
   pal_cli();
 
   user_trap_t caller = (user_trap_t) hookp->caller_addr;
@@ -11854,7 +12745,8 @@ void initialize_use_invpcid()
   }
 
   if (macOS_Mojave_less_than_5() ||
-      (!macOS_Mojave() && !macOS_Catalina() && !macOS_BigSur()))
+      (!macOS_Mojave() && !macOS_Catalina() && !macOS_BigSur() &&
+       !macOS_Monterey()))
   {
     g_use_invpcid = false;
   } else {
@@ -12028,7 +12920,7 @@ bool initialize_cpu_data_offsets()
     return true;
   }
 
-  if (macOS_BigSur()) {
+  if (macOS_BigSur() || macOS_Monterey()) {
     g_cpu_active_thread_offset =
       offsetof(cpu_data_fake_bigsur_t, cpu_active_thread);
     g_cpu_number_offset =
@@ -12615,26 +13507,29 @@ bool install_intr_handlers()
     return false;
   }
 
-  if (!macOS_Mojave() && !macOS_Catalina() && !macOS_BigSur()) {
+  if (!macOS_Mojave() && !macOS_Catalina() && !macOS_BigSur() &&
+      !macOS_Monterey())
+  {
     if (!hook_vm_page_validate_cs()) {
       return false;
     }
   }
-  if (macOS_BigSur() || macOS_Catalina() || macOS_Mojave() ||
-      macOS_HighSierra() || macOS_Sierra())
+  if (macOS_Monterey() || macOS_BigSur() || macOS_Catalina() ||
+      macOS_Mojave() || macOS_HighSierra() || macOS_Sierra())
   {
     if (!hook_mac_file_check_library_validation()) {
       return false;
     }
   }
-  if (macOS_BigSur() || macOS_Catalina() || macOS_Mojave() ||
-      macOS_HighSierra() || macOS_Sierra() || OSX_ElCapitan())
+  if (macOS_Monterey() || macOS_BigSur() || macOS_Catalina() ||
+      macOS_Mojave() || macOS_HighSierra() || macOS_Sierra() ||
+      OSX_ElCapitan())
   {
     if (!hook_mac_file_check_mmap()) {
       return false;
     }
   }
-  if (macOS_BigSur() || macOS_Catalina()) {
+  if (macOS_Monterey() || macOS_BigSur() || macOS_Catalina()) {
     if (!hook_mac_vnode_check_open()) {
       return false;
     }
@@ -12652,7 +13547,7 @@ void remove_intr_handlers()
   if (!find_kernel_private_functions()) {
     return;
   }
-  destroy_all_lists();
+  unset_all_kern_hooks();
   remove_intr_handler(HC_INT1);
   remove_intr_handler(HC_INT2);
   remove_intr_handler(HC_INT3);
@@ -12725,7 +13620,7 @@ kern_return_t HookCase_start(kmod_info_t * ki, void *d)
     // rebooting.  But this makes the kernel "capture" the serial port -- it's
     // no longer available to user-mode code, and drivers for it no longer show
     // up in the /dev directory.
-    kprintf("HookCase requires OS X Mavericks (10.9), Yosemite (10.10), El Capitan (10.11), macOS Sierra (10.12), macOS High Sierra (10.13), macOS Mojave (10.14), macOS Catalina (10.15) or macOS Big Sur (10.16): current version %s\n",
+    kprintf("HookCase requires OS X Mavericks (10.9), Yosemite (10.10), El Capitan (10.11), macOS Sierra (10.12), macOS High Sierra (10.13), macOS Mojave (10.14), macOS Catalina (10.15), macOS Big Sur (11) or macOS Monterey (12): current version %s\n",
             gOSVersionString ? gOSVersionString : "null");
     if (gOSVersionString) {
       IOFree(gOSVersionString, gOSVersionStringLength);
@@ -12750,11 +13645,13 @@ kern_return_t HookCase_start(kmod_info_t * ki, void *d)
   initialize_use_invpcid();
   if (!install_intr_handlers()) {
     remove_intr_handlers();
+    destroy_all_lists();
     return KERN_FAILURE;
   }
   if (!install_sysent_hooks()) {
     remove_intr_handlers();
     remove_sysent_hooks();
+    destroy_all_lists();
     return KERN_FAILURE;
   }
   return KERN_SUCCESS;
@@ -12764,5 +13661,6 @@ kern_return_t HookCase_stop(kmod_info_t *ki, void *d)
 {
   remove_intr_handlers();
   remove_sysent_hooks();
+  destroy_all_lists();
   return KERN_SUCCESS;
 }

@@ -76,6 +76,10 @@ void basic_init()
   if (!sGlobalInitDone) {
     gMainThreadID = pthread_self();
     sGlobalInitDone = true;
+    // Needed for LogWithFormat() to work properly both before and after the
+    // CoreFoundation framework is initialized.
+    tzset();
+    tzsetwall();
   }
 }
 
@@ -97,6 +101,13 @@ bool CanUseCF()
   return sCFInitialized;
 }
 
+void Initialize_CF_If_Needed()
+{
+  if (!sCFInitialized && __CFInitialize_caller) {
+    Hooked___CFInitialize();
+  }
+}
+
 #define MAC_OS_X_VERSION_10_9_HEX  0x00000A90
 #define MAC_OS_X_VERSION_10_10_HEX 0x00000AA0
 #define MAC_OS_X_VERSION_10_11_HEX 0x00000AB0
@@ -104,7 +115,8 @@ bool CanUseCF()
 #define MAC_OS_X_VERSION_10_13_HEX 0x00000AD0
 #define MAC_OS_X_VERSION_10_14_HEX 0x00000AE0
 #define MAC_OS_X_VERSION_10_15_HEX 0x00000AF0
-#define MAC_OS_X_VERSION_10_16_HEX 0x00000B00
+#define MAC_OS_X_VERSION_11_00_HEX 0x00000B00
+#define MAC_OS_X_VERSION_12_00_HEX 0x00000C00
 
 char gOSVersionString[PATH_MAX] = {0};
 
@@ -192,7 +204,12 @@ bool macOS_Catalina()
 
 bool macOS_BigSur()
 {
-  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_16_HEX);
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_11_00_HEX);
+}
+
+bool macOS_Monterey()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_12_00_HEX);
 }
 
 class nsAutoreleasePool {
@@ -851,6 +868,7 @@ public:
 loadHandler::loadHandler()
 {
   basic_init();
+  Initialize_CF_If_Needed();
 #if (0)
   LogWithFormat(true, "Hook.mm: loadHandler()");
   PrintStackTrace();

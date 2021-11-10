@@ -544,10 +544,11 @@ typedef struct cpu_data_fake_bigsur
 
 bool macOS_Catalina_5_or_greater();
 bool macOS_BigSur();
+bool macOS_Monterey();
 
 static inline int get_cpu_number(void)
 {
-  if (macOS_BigSur()) {
+  if (macOS_BigSur() || macOS_Monterey()) {
     CPU_DATA_GET_FUNC_BODY(cpu_data_fake_bigsur_t,cpu_number,int)
   } else if (macOS_Catalina_5_or_greater()) {
     CPU_DATA_GET_FUNC_BODY(cpu_data_fake_catalina_t,cpu_number,int)

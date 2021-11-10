@@ -101,6 +101,13 @@ bool CanUseCF()
   return sCFInitialized;
 }
 
+void Initialize_CF_If_Needed()
+{
+  if (!sCFInitialized && __CFInitialize_caller) {
+    Hooked___CFInitialize();
+  }
+}
+
 #define MAC_OS_X_VERSION_10_9_HEX  0x00000A90
 #define MAC_OS_X_VERSION_10_10_HEX 0x00000AA0
 #define MAC_OS_X_VERSION_10_11_HEX 0x00000AB0
@@ -108,7 +115,8 @@ bool CanUseCF()
 #define MAC_OS_X_VERSION_10_13_HEX 0x00000AD0
 #define MAC_OS_X_VERSION_10_14_HEX 0x00000AE0
 #define MAC_OS_X_VERSION_10_15_HEX 0x00000AF0
-#define MAC_OS_X_VERSION_10_16_HEX 0x00000B00
+#define MAC_OS_X_VERSION_11_00_HEX 0x00000B00
+#define MAC_OS_X_VERSION_12_00_HEX 0x00000C00
 
 char gOSVersionString[PATH_MAX] = {0};
 
@@ -196,7 +204,12 @@ bool macOS_Catalina()
 
 bool macOS_BigSur()
 {
-  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_16_HEX);
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_11_00_HEX);
+}
+
+bool macOS_Monterey()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_12_00_HEX);
 }
 
 class nsAutoreleasePool {
@@ -464,6 +477,12 @@ static void LogWithFormat(bool decorate, const char *format, ...)
 // CFStringCreateWithFormatAndArguments() really should, too. But for as long
 // as it doesn't, we can use the following hook to force it to use
 // kCFStringEncodingMacRoman when called from LogWithFormatV().
+//
+// This workaround isn't available for 32-bit hook libraries. This is because
+// __CFGetConverter() uses the "fastcc" calling convention in 32-bit system
+// libraries, which isn't supported by any compiler. It *is* supported in
+// LLVM intermediate language, but frankly it's not worth the trouble to use
+// that here.
 
 //#define DEBUG_GET_CONVERTER 1
 
@@ -1015,6 +1034,7 @@ public:
 loadHandler::loadHandler()
 {
   basic_init();
+  Initialize_CF_If_Needed();
 #if (0)
   LogWithFormat(true, "Hook.mm: loadHandler()");
   PrintStackTrace();
@@ -1231,7 +1251,9 @@ __attribute__((used)) static const hook_desc user_hooks[]
 {
   INTERPOSE_FUNCTION(NSPushAutoreleasePool),
   PATCH_FUNCTION(__CFInitialize, /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation),
+#ifndef __i386__
   PATCH_FUNCTION(__CFGetConverter, /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation),
+#endif
 };
 
 // What follows are declarations of the CoreSymbolication APIs that we use to

@@ -1,3 +1,13 @@
+# What's New in Version 6.0
+
+HookCase now supports macOS 12 (Monterey).
+
+Note that, on macOS 12, as on macOS 11, HookCase now requires the
+`keepsyms=1` boot arg. To set this you'll need to turn off SIP at least
+temporarily.
+
+`sudo nvram boot-args="keepsyms=1"`
+
 # What's New in Version 5.0.5
 
 macOS 11.4 broke HookCase, just like macOS 11.3 did. macOS 11.4 made
@@ -13,14 +23,14 @@ information see
 
 This version of HookCase fixes a bug that caused intermittent
 instability, though not kernel panics. I fixed it by tweaking the
-[code at the heart of HookCase's watchpoint support](HookCase/HookCase/HookCase.cpp#L11620).
+[code at the heart of HookCase's watchpoint support](HookCase/HookCase/HookCase.cpp#L12555).
 See [Issue #26](https://github.com/steven-michaud/HookCase/issues/26)
 for more information.
 
 HookCase's watchpoint code is quite complex. So if you see any sort of
 instability short of kernel panics, especially if it resembles what's
 reported at Issue #26, you should try
-[disabling watchpoint support](HookCase/HookCase/HookCase.cpp#L12531)
+[disabling watchpoint support](HookCase/HookCase/HookCase.cpp#L13467)
 
 # What's New in Version 5.0.3
 
@@ -80,8 +90,8 @@ This version of HookCase supports watchpoints. You can now set a
 watchpoint on a location in memory and gather information (including a
 stack trace) about the code that writes to that location.  For more
 information see
-[config_watcher() in the hook library template](HookLibraryTemplate/hook.mm#L983),
-[Hooked_watcher_example() in the hook library template](HookLibraryTemplate/hook.mm#L1122)
+[config_watcher() in the hook library template](HookLibraryTemplate/hook.mm#L1002),
+[Hooked_watcher_example() in the hook library template](HookLibraryTemplate/hook.mm#L1142)
 and [the watchpoints example](examples-watchpoints.md).
 
 # What's New in Version 4.0.5
@@ -144,7 +154,7 @@ HookCase now supports dynamically adding patch hooks for raw function
 pointers. This is useful in hooks for methods that use callbacks --
 for example CFMachPortCreate() and CFRunLoopObserverCreate(). For more
 information see
-[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L1066)
+[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L1086)
 and [the dynamic patch hooks example](examples-dynamic-hooking.md).
 
 # What's New in Version 3.2.1
@@ -196,7 +206,7 @@ HookCase now supports macOS Mojave (10.14).
 
 But Mojave's Debug kernel is currently very flaky -- lots of panics,
 with and without HookCase.  So support for the Debug kernel
-[has been disabled](HookCase/HookCase/HookCase.cpp#L397), at least
+[has been disabled](HookCase/HookCase/HookCase.cpp#L415), at least
 temporarily.
 
 # What's New in Version 2.1
@@ -224,16 +234,16 @@ instead of `int 0x22`, as follows:
 at a particular address in a given module.  This means that HookCase
 can now hook methods that aren't in their module's symbol table.  For
 more information see
-[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L1105).
+[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L1125).
 
-* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L9914) that
+* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L10625) that
 prevented interpose hooks from working outside the shared cache of
 system modules.
 
 * Version 2.0
-[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L11405)
+[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L12296)
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0
-[fixes a premature-release bug](Examples/events/hook.mm#L1459)
+[fixes a premature-release bug](Examples/events/hook.mm#L1490)
 in the "System Events" example's hook library.

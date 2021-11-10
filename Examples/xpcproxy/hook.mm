@@ -80,6 +80,10 @@ void basic_init()
   if (!sGlobalInitDone) {
     gMainThreadID = pthread_self();
     sGlobalInitDone = true;
+    // Needed for LogWithFormat() to work properly both before and after the
+    // CoreFoundation framework is initialized.
+    tzset();
+    tzsetwall();
   }
 }
 
@@ -101,6 +105,13 @@ bool CanUseCF()
   return sCFInitialized;
 }
 
+void Initialize_CF_If_Needed()
+{
+  if (!sCFInitialized && __CFInitialize_caller) {
+    Hooked___CFInitialize();
+  }
+}
+
 #define MAC_OS_X_VERSION_10_9_HEX  0x00000A90
 #define MAC_OS_X_VERSION_10_10_HEX 0x00000AA0
 #define MAC_OS_X_VERSION_10_11_HEX 0x00000AB0
@@ -108,7 +119,8 @@ bool CanUseCF()
 #define MAC_OS_X_VERSION_10_13_HEX 0x00000AD0
 #define MAC_OS_X_VERSION_10_14_HEX 0x00000AE0
 #define MAC_OS_X_VERSION_10_15_HEX 0x00000AF0
-#define MAC_OS_X_VERSION_10_16_HEX 0x00000B00
+#define MAC_OS_X_VERSION_11_00_HEX 0x00000B00
+#define MAC_OS_X_VERSION_12_00_HEX 0x00000C00
 
 char gOSVersionString[PATH_MAX] = {0};
 
@@ -196,7 +208,12 @@ bool macOS_Catalina()
 
 bool macOS_BigSur()
 {
-  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_16_HEX);
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_11_00_HEX);
+}
+
+bool macOS_Monterey()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_12_00_HEX);
 }
 
 class nsAutoreleasePool {
@@ -855,6 +872,7 @@ public:
 loadHandler::loadHandler()
 {
   basic_init();
+  Initialize_CF_If_Needed();
 #if (0)
   LogWithFormat(true, "Hook.mm: loadHandler()");
   PrintStackTrace();
@@ -1169,7 +1187,18 @@ static int Hooked_setenv(const char *name, const char *value, int overwrite)
 
 typedef struct _xpc_pipe *xpc_pipe_t;
 
-#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101500
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 120000
+extern "C" int
+_xpc_pipe_routine(xpc_pipe_t pipe, uint32_t arg1, xpc_object_t request,
+                  xpc_object_t *reply, uint32_t flags);
+
+int (*_xpc_pipe_routine_caller)(xpc_pipe_t pipe, uint32_t arg1, xpc_object_t request,
+                                xpc_object_t *reply, uint32_t flags) = NULL;
+
+static int
+Hooked__xpc_pipe_routine(xpc_pipe_t pipe, uint32_t arg1, xpc_object_t request,
+                         xpc_object_t *reply, uint32_t flags)
+#elif __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101500
 extern "C" int
 xpc_pipe_routine_with_flags(xpc_pipe_t pipe, xpc_object_t request,
                             xpc_object_t *reply, uint32_t flags);
@@ -1196,7 +1225,9 @@ static int Hooked_xpc_pipe_routine(xpc_pipe_t pipe, xpc_object_t request,
     is_xpcproxy = true;
   }
 
-#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101500
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 120000
+  int retval = _xpc_pipe_routine_caller(pipe, arg1, request, reply, flags);
+#elif __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101500
   int retval = xpc_pipe_routine_with_flags_caller(pipe, request, reply, flags);
 #else
   int retval = xpc_pipe_routine_caller(pipe, request, reply);
@@ -1210,7 +1241,11 @@ static int Hooked_xpc_pipe_routine(xpc_pipe_t pipe, xpc_object_t request,
     if (reply && *reply) {
       reply_desc = xpc_copy_description(*reply);
     }
-#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101500
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 120000
+    LogWithFormat(true, "xpcproxy: _xpc_pipe_routine(): request %s, arg1 0x%x, reply %s, flags 0x%x, returning %i",
+                  request_desc ? request_desc : "null", arg1,
+                  reply_desc ? reply_desc : "null", flags, retval);
+#elif __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101500
     LogWithFormat(true, "xpcproxy: xpc_pipe_routine_with_flags(): request %s, reply %s, flags 0x%x, returning %i",
                   request_desc ? request_desc : "null",
                   reply_desc ? reply_desc : "null", flags, retval);
@@ -1387,7 +1422,9 @@ __attribute__((used)) static const hook_desc user_hooks[]
   PATCH_FUNCTION(__CFInitialize, /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation),
 
   INTERPOSE_FUNCTION(setenv),
-#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101500
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 120000
+  PATCH_FUNCTION(_xpc_pipe_routine, /usr/lib/system/libxpc.dylib),
+#elif __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101500
   PATCH_FUNCTION(xpc_pipe_routine_with_flags, /usr/lib/system/libxpc.dylib),
 #else
   PATCH_FUNCTION(xpc_pipe_routine, /usr/lib/system/libxpc.dylib),

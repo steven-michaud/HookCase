@@ -7,7 +7,8 @@ system integrity protection (SIP) altogether (`csrutil disable`), or
 at least disable "filesystem protection" (`csrutil enable --without
 kext --without fs`).  On macOS 10.15 (Catalina) you also need to
 remount the partition that contains system files with read-write
-permissions (`sudo mount -uw /`).
+permissions (`sudo mount -uw /`).  As also mentioned earlier, this
+example doesn't work at all on macOS 11 (Big Sur) and up.
 
 Apple implemented a new logging subsystem on macOS Sierra (10.12) and
 up.  It's controlled by the `/usr/libexec/diagnosticd daemon`, which
@@ -23,7 +24,7 @@ kernel extensions whose `start()` method fails.
 
 Note that there's a workaround, which involves installing a serial
 port and using `kprintf()` to write to it.  For more information see
-[HookCase_start()](HookCase/HookCase/HookCase.cpp#L12703).
+[HookCase_start()](HookCase/HookCase/HookCase.cpp#L13598).
 
 The root of the problem is that the messages received by Apple's new
 logging subsystem no longer contain full strings.  Instead each

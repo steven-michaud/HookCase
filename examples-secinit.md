@@ -5,7 +5,8 @@ system integrity protection (SIP) altogether (`csrutil disable`), or
 at least disable "filesystem protection" (`csrutil enable --without
 kext --without fs`).  On macOS 10.15 (Catalina) you also need to
 remount the partition that contains system files with read-write
-permissions (`sudo mount -uw /`).
+permissions (`sudo mount -uw /`).  As also mentioned earlier, this
+example doesn't work at all on macOS 11 (Big Sur) and up.
 
 The "secinit subsystem" (if we may call it that) has two parts:
 

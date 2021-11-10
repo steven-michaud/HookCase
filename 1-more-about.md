@@ -82,11 +82,11 @@ in `dyld`, and "call" code in it indirectly.  The best time to
 intervene is after `dyld` has finished most of its initialization, but
 before any of the new process's "own" code has run (including its C++
 initializers).  This is when `dyld`'s
-`dyld::initializeMainExecutable()` method runs.  So we hook that
-method as a process starts up, perform our own initialization, then
-allow the original `dyld::InitializeMainExecutable()` method to run
-(which, among other things, runs the process's C++ initializers).
+`dyld::initializeMainExecutable()` method runs (or
+`dyld4::APIs::runAllInitializersForMain()` on macOS 12 and up).  So we
+hook that method as a process starts up, perform our own
+initialization, then allow the original method to run.
 
 For more information, the best place to start is the
-[long series of comments](HookCase/HookCase/HookCase.cpp#L7031)
+[long series of comments](HookCase/HookCase/HookCase.cpp#L7539)
 in `HookCase.cpp` before the definition of `C_64_REDZONE_LEN`.
