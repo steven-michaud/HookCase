@@ -350,6 +350,24 @@ bool macOS_Monterey()
   return ((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_12_HEX);
 }
 
+bool macOS_Monterey_less_than_1()
+{
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_12_HEX)) {
+    return false;
+  }
+  // The output of "uname -r" for macOS 12.1 is actually "21.2.0".
+  return ((OSX_Version() & 0xFF) < 0x20);
+}
+
+bool macOS_Monterey_1_or_greater()
+{
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_12_HEX)) {
+    return false;
+  }
+  // The output of "uname -r" for macOS 12.1 is actually "21.2.0".
+  return ((OSX_Version() & 0xFF) >= 0x20);
+}
+
 bool OSX_Version_Unsupported()
 {
   return (((OSX_Version() & 0xFF00) < MAC_OS_X_VERSION_10_9_HEX) ||
@@ -1175,6 +1193,7 @@ typedef void (*coalition_release_t)(coalition_t coal);
 typedef int (*coalition_get_pid_list_t)(coalition_t coal, uint32_t rolemask,
                                         int sort_order, int *pid_list, int list_sz);
 typedef void (*vm_object_unlock_t)(vm_object_t object);
+typedef uint64_t (*proc_uniqueid_t)(proc_t p);
 
 static current_map_t current_map = NULL;
 static get_task_map_reference_t get_task_map_reference = NULL;
@@ -1216,6 +1235,9 @@ static coalition_get_pid_list_t coalition_get_pid_list = NULL;
 // Only on Sierra and up (begin)
 static vm_object_unlock_t vm_object_unlock_ptr = NULL;
 // Only on Sierra and up (end)
+// Only on Monterey and up (begin)
+static proc_uniqueid_t proc_uniqueid_ptr;
+// Only on Monterey and up (end)
 
 bool s_kernel_private_functions_found = false;
 
@@ -1528,6 +1550,15 @@ bool find_kernel_private_functions()
       vm_object_unlock_ptr = (vm_object_unlock_t)
         kernel_dlsym("_vm_object_unlock");
       if (!vm_object_unlock_ptr) {
+        return false;
+      }
+    }
+  }
+  if (macOS_Monterey()) {
+    if (!proc_uniqueid_ptr) {
+      proc_uniqueid_ptr = (proc_uniqueid_t)
+        kernel_dlsym("_proc_uniqueid");
+      if (!proc_uniqueid_ptr) {
         return false;
       }
     }
@@ -3870,15 +3901,12 @@ typedef struct _proc_fake_monterey {
   uint64_t p_uniqueid;    // Offset 0x48
   uint32_t pad3[6];
   pid_t p_pid;            // Offset 0x68
-  uint32_t pad4[99];
+  uint32_t pad4[100];
   unsigned int p_flag;    // P_* flags (offset 0x1fc)
   unsigned int p_lflag;
   uint32_t pad5[73];
-  // On Monterey, p_argc and p_argslen are swapped (judging by their contents).
-  // And p_argc is always zero. I won't know why until Apple releases source
-  // code for Monterey's xnu kernel.
-  int32_t p_argc;         // Offset 0x328
-  uint32_t p_argslen;     // Length of "string area" at beginning of user stack (offset 0x32c)
+  uint32_t p_argslen;     // Length of "string area" at beginning of user stack (offset 0x328)
+  int32_t p_argc;         // Offset 0x32c
   user_addr_t user_stack; // Where user stack was allocated (offset 0x330)
   uint32_t pad6[53];
   u_short p_acflag;       // Offset 0x40c
@@ -3891,26 +3919,65 @@ typedef struct _proc_fake_monterey_dev {
   uint64_t p_uniqueid;    // Offset 0x48
   uint32_t pad3[6];
   pid_t p_pid;            // Offset 0x68
-  uint32_t pad4[103];
+  uint32_t pad4[104];
   unsigned int p_flag;    // P_* flags (offset 0x20c)
   unsigned int p_lflag;
   uint32_t pad5[73];
-  // On Monterey, p_argc and p_argslen are swapped (judging by their contents).
-  // And p_argc is always zero. I won't know why until Apple releases source
-  // code for Monterey's xnu kernel.
-  int32_t p_argc;         // Offset 0x338
-  uint32_t p_argslen;     // Length of "string area" at beginning of user stack (offset 0x33c)
+  uint32_t p_argslen;     // Length of "string area" at beginning of user stack (offset 0x338)
+  int32_t p_argc;         // Offset 0x33c
   user_addr_t user_stack; // Where user stack was allocated (offset 0x340)
   uint32_t pad6[53];
   u_short p_acflag;       // Offset 0x41c
 } *proc_fake_monterey_dev_t;
+
+typedef struct _proc_fake_monterey_1 {
+  uint32_t pad1[4];
+  task_t task;            // Offset 0x10
+  uint32_t pad2[12];
+  uint64_t p_uniqueid;    // Offset 0x48 (Not valid on 12.1 and up?)
+  uint32_t pad3[6];
+  pid_t p_pid;            // Offset 0x68
+  uint32_t pad4[144];
+  unsigned int p_flag;    // P_* flags (offset 0x2ac)
+  unsigned int p_lflag;
+  uint32_t pad5[73];
+  uint32_t p_argslen;     // Length of "string area" at beginning of user stack (offset 0x3d8)
+  int32_t p_argc;         // Offset 0x3dc
+  user_addr_t user_stack; // Where user stack was allocated (offset 0x3e0)
+  uint32_t pad6[49];
+  u_short p_acflag;       // Offset 0x4ac
+} *proc_fake_monterey_1_t;
+
+typedef struct _proc_fake_monterey_dev_1 {
+  uint32_t pad1[4];
+  task_t task;            // Offset 0x10
+  uint32_t pad2[12];
+  uint64_t p_uniqueid;    // Offset 0x48 (Not valid on 12.1 and up?)
+  uint32_t pad3[6];
+  pid_t p_pid;            // Offset 0x68
+  uint32_t pad4[148];
+  unsigned int p_flag;    // P_* flags (offset 0x2bc)
+  unsigned int p_lflag;
+  uint32_t pad5[73];
+  uint32_t p_argslen;     // Length of "string area" at beginning of user stack (offset 0x3e8)
+  int32_t p_argc;         // Offset 0x3ec
+  user_addr_t user_stack; // Where user stack was allocated (offset 0x3f0)
+  uint32_t pad6[49];
+  u_short p_acflag;       // Offset 0x4bc
+} *proc_fake_monterey_dev_1_t;
 
 static uint64_t proc_uniqueid(proc_t proc)
 {
   if (!proc) {
     return 0;
   }
-  if (macOS_Catalina() || macOS_BigSur() || macOS_Monterey()) {
+  // As of macOS 12.1, finding a process's uniquepid became much more
+  // complicated, to the point that we're forced to use the system call. It's
+  // also available on 12.0.1, so we can also use it there.
+  if (macOS_Monterey()) {
+    return proc_uniqueid_ptr(proc);
+  }
+  if (macOS_Catalina() || macOS_BigSur()) {
     proc_fake_catalina_t p = (proc_fake_catalina_t) proc;
     return p->p_uniqueid;
   }
@@ -3945,10 +4012,22 @@ static bool IS_64BIT_PROCESS(proc_t proc)
     return false;
   }
 
-  if (macOS_Monterey()) {
-    // Either the P_LP64 flag is no longer supported on Monterey, or it's
-    // initialized very late.
-    return is_64bit_task(proc_task(proc));
+  if (macOS_Monterey_1_or_greater()) {
+    if (kernel_type_is_release()) {
+      proc_fake_monterey_1_t p = (proc_fake_monterey_1_t) proc;
+      return (p && (p->p_flag & P_LP64));
+    } else if (kernel_type_is_development()) {
+      proc_fake_monterey_dev_1_t p = (proc_fake_monterey_dev_1_t) proc;
+      return (p && (p->p_flag & P_LP64));
+    }
+  } else if (macOS_Monterey()) {
+    if (kernel_type_is_release()) {
+      proc_fake_monterey_t p = (proc_fake_monterey_t) proc;
+      return (p && (p->p_flag & P_LP64));
+    } else if (kernel_type_is_development()) {
+      proc_fake_monterey_dev_t p = (proc_fake_monterey_dev_t) proc;
+      return (p && (p->p_flag & P_LP64));
+    }
   } else if (macOS_BigSur()) {
     proc_fake_bigsur_t p = (proc_fake_bigsur_t) proc;
     return (p && (p->p_flag & P_LP64));
@@ -3973,7 +4052,15 @@ u_short get_acflag(proc_t proc)
   if (!proc) {
     return 0;
   }
-  if (macOS_Monterey()) {
+  if (macOS_Monterey_1_or_greater()) {
+    if (kernel_type_is_release()) {
+      proc_fake_monterey_1_t p = (proc_fake_monterey_1_t) proc;
+      return p->p_acflag;
+    } else if (kernel_type_is_development()) {
+      proc_fake_monterey_dev_1_t p = (proc_fake_monterey_dev_1_t) proc;
+      return p->p_acflag;
+    }
+  } else if (macOS_Monterey()) {
     if (kernel_type_is_release()) {
       proc_fake_monterey_t p = (proc_fake_monterey_t) proc;
       return p->p_acflag;
@@ -4010,7 +4097,15 @@ unsigned int get_lflag(proc_t proc)
   if (!proc) {
     return 0;
   }
-  if (macOS_Monterey()) {
+  if (macOS_Monterey_1_or_greater()) {
+    if (kernel_type_is_release()) {
+      proc_fake_monterey_1_t p = (proc_fake_monterey_1_t) proc;
+      return p->p_lflag;
+    } else if (kernel_type_is_development()) {
+      proc_fake_monterey_dev_1_t p = (proc_fake_monterey_dev_1_t) proc;
+      return p->p_lflag;
+    }
+  } else if (macOS_Monterey()) {
     if (kernel_type_is_release()) {
       proc_fake_monterey_t p = (proc_fake_monterey_t) proc;
       return p->p_lflag;
@@ -4042,7 +4137,15 @@ unsigned int get_flag(proc_t proc)
   if (!proc) {
     return 0;
   }
-  if (macOS_Monterey()) {
+  if (macOS_Monterey_1_or_greater()) {
+    if (kernel_type_is_release()) {
+      proc_fake_monterey_1_t p = (proc_fake_monterey_1_t) proc;
+      return p->p_flag;
+    } else if (kernel_type_is_development()) {
+      proc_fake_monterey_dev_1_t p = (proc_fake_monterey_dev_1_t) proc;
+      return p->p_flag;
+    }
+  } else if (macOS_Monterey()) {
     if (kernel_type_is_release()) {
       proc_fake_monterey_t p = (proc_fake_monterey_t) proc;
       return p->p_flag;
@@ -4115,6 +4218,32 @@ typedef struct thread_fake_monterey_dev
   uint32_t pad4[172];
   vm_map_t map;         // Offset 0x748
 } thread_fake_monterey_dev_t;
+
+typedef struct thread_fake_monterey_1
+{
+  uint32_t pad1[24];
+  integer_t options;    // Offset 0x60
+  uint32_t pad2[15];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0xa0
+  uint32_t pad3[231];
+  int iotier_override;  // Offset 0x444
+  uint32_t pad4[128];
+  vm_map_t map;         // Offset 0x648
+} thread_fake_monterey_1_t;
+
+typedef struct thread_fake_monterey_dev_1
+{
+  uint32_t pad1[26];
+  integer_t options;    // Offset 0x68
+  uint32_t pad2[15];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0xa8
+  uint32_t pad3[249];
+  int iotier_override;  // Offset 0x494
+  uint32_t pad4[142];
+  vm_map_t map;         // Offset 0x6d0
+} thread_fake_monterey_dev_1_t;
 
 typedef struct thread_fake_bigsur
 {
@@ -4787,6 +4916,12 @@ typedef struct uthread_fake_monterey
   int uu_flag;        // Offset 0x100
 } *uthread_fake_monterey_t;
 
+typedef struct uthread_fake_monterey_1
+{
+  uint64_t pad[31];
+  int uu_flag;        // Offset 0xf8
+} *uthread_fake_monterey_1_t;
+
 typedef struct uthread_fake_catalina
 {
   uint64_t pad[33];
@@ -4837,7 +4972,9 @@ int get_uu_flag(uthread_t uthread)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Monterey()) {
+    if (macOS_Monterey_1_or_greater()) {
+      offset_in_struct = offsetof(struct uthread_fake_monterey_1, uu_flag);
+    } else if (macOS_Monterey()) {
       offset_in_struct = offsetof(struct uthread_fake_monterey, uu_flag);
     } else if (macOS_Catalina() || macOS_BigSur()) {
       offset_in_struct = offsetof(struct uthread_fake_catalina, uu_flag);
@@ -4884,12 +5021,14 @@ void report_proc_thread_state(const char *header, thread_t thread)
   }
 
   pid_t pid = -1;
+  uint64_t uniqueid = -1;
   u_short acflag = -1;
   unsigned int lflag = -1;
   unsigned int flag = -1;
   char procname[PATH_MAX];
   if (proc) {
     pid = proc_pid(proc);
+    uniqueid = proc_uniqueid(proc);
     acflag = get_acflag(proc);
     lflag = get_lflag(proc);
     flag = get_flag(proc);
@@ -4905,8 +5044,9 @@ void report_proc_thread_state(const char *header, thread_t thread)
     uu_flag = get_uu_flag(uthread);
   }
 
-  printf("%s: report_proc_thread_state(): proc %s[%d], acflag \'0x%x\', lflag \'0x%x\', flag \'0x%x\', tag \'0x%x\', uu_flag \'0x%x\'\n",
-         header, procname, pid, acflag, lflag, flag, tag, uu_flag);
+  printf("%s: report_proc_thread_state(): proc %s[%d:%lld], 64bit %i, acflag \'0x%x\', lflag \'0x%x\', flag \'0x%x\', tag \'0x%x\', uu_flag \'0x%x\'\n",
+         header, procname, pid, uniqueid, IS_64BIT_PROCESS(proc),
+         acflag, lflag, flag, tag, uu_flag);
 }
 
 // Change memory permissions, but only at the lowest level -- that of
@@ -5623,7 +5763,23 @@ bool get_proc_info(int32_t pid, char **path,
   uint32_t p_argslen = 0;
   int32_t p_argc = 0;
   user_addr_t user_stack = 0;
-  if (macOS_Monterey()) {
+  if (macOS_Monterey_1_or_greater()) {
+    if (kernel_type_is_release()) {
+      proc_fake_monterey_1_t p = (proc_fake_monterey_1_t) our_proc;
+      if (p) {
+        p_argslen = p->p_argslen;
+        p_argc = p->p_argc;
+        user_stack = p->user_stack;
+      }
+    } else if (kernel_type_is_development()) {
+      proc_fake_monterey_dev_1_t p = (proc_fake_monterey_dev_1_t) our_proc;
+      if (p) {
+        p_argslen = p->p_argslen;
+        p_argc = p->p_argc;
+        user_stack = p->user_stack;
+      }
+    }
+  } else if (macOS_Monterey()) {
     if (kernel_type_is_release()) {
       proc_fake_monterey_t p = (proc_fake_monterey_t) our_proc;
       if (p) {
@@ -5709,11 +5865,6 @@ bool get_proc_info(int32_t pid, char **path,
   holder_past_end[-1] = 0;
   holder_past_end[-2] = 0;
 
-  // On Monterey, for some reason p_argc is always 0. So we must guess its
-  // value by checking when the argument strings stop and the environment
-  // strings start.
-  int args_count = 0;
-  bool stop_args_count = false;
   int args_env_count = 0;
   int i; char *item;
   for (i = 0, item = holder; item < holder_past_end; ++i) {
@@ -5721,31 +5872,14 @@ bool get_proc_info(int32_t pid, char **path,
       args_env_count = i;
       break;
     }
-
     if (i == 0) {
       const char *path_header = "executable_path=";
       size_t path_header_len = strlen(path_header);
       if (!strncmp(item, path_header, path_header_len)) {
         item += path_header_len;
       }
-      ++args_count;
       *path = item;
-    // Stop counting argument strings when we first encounter a string that
-    // conforms to the environment string syntax. This means that an argument
-    // string may be falsely counted as an environment string, but for the
-    // moment (on Monterey) there's nothing we can do about it.
-    } else if (!stop_args_count) {
-      char item_holder[PATH_MAX];
-      strncpy(item_holder, item, sizeof(item_holder));
-      char *value = item_holder;
-      char *key = strsep(&value, "=");
-      if (key && value && value[0]) {
-        stop_args_count = true;
-      } else {
-        ++args_count;
-      }
     }
-
     item += strlen(item) + 1;
     // The process path (the first 'item') is padded (at the end) with
     // multiple NULLs.  Presumably a fixed amount of storage has been set
@@ -5756,10 +5890,7 @@ bool get_proc_info(int32_t pid, char **path,
       }
     }
   }
-
-  if (!macOS_Monterey()) {
-    args_count = p_argc + 1; // Including the process path
-  }
+  int args_count = p_argc + 1; // Including the process path
   int env_count = args_env_count - args_count;
   // Though it's very unlikely, we might have a process path and no environment.
   if (env_count <= 0) {
@@ -6005,6 +6136,32 @@ typedef struct _task_fake_monterey_dev {
   mach_vm_size_t all_image_info_size;    // Offset 0x448
 } *task_fake_monterey_dev_t;
 
+typedef struct _task_fake_monterey_1 {
+  lck_mtx_t lock;       // Size 0x10
+  uint64_t pad1[9];
+  queue_head_t threads; // Size 0x10, offset 0x58
+  uint64_t pad2[103];
+  void *bsd_info;       // Offset 0x3a0
+  uint64_t pad3[7];
+  volatile uint32_t t_flags; /* Offset 0x3e0, general-purpose task flags protected by task_lock (TL) */
+  uint32_t pad4[3];
+  mach_vm_address_t all_image_info_addr; // Offset 0x3f0
+  mach_vm_size_t all_image_info_size;    // Offset 0x3f8
+} *task_fake_monterey_1_t;
+
+typedef struct _task_fake_monterey_dev_1 {
+  lck_mtx_t lock;       // Size 0x10
+  uint64_t pad1[12];
+  queue_head_t threads; // Size 0x10, offset 0x70
+  uint64_t pad2[104];
+  void *bsd_info;       // Offset 0x3c0
+  uint64_t pad3[7];
+  volatile uint32_t t_flags; /* Offset 0x400, general-purpose task flags protected by task_lock (TL) */
+  uint32_t pad4[3];
+  mach_vm_address_t all_image_info_addr; // Offset 0x410
+  mach_vm_size_t all_image_info_size;    // Offset 0x418
+} *task_fake_monterey_dev_1_t;
+
 void task_lock(task_t task)
 {
   if (!task) {
@@ -6031,7 +6188,15 @@ mach_vm_address_t task_all_image_info_addr(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Monterey()) {
+    if (macOS_Monterey_1_or_greater()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_monterey_1, all_image_info_addr);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_monterey_dev_1, all_image_info_addr);
+      }
+    } else if (macOS_Monterey()) {
       if (kernel_type_is_release()) {
         offset_in_struct =
           offsetof(struct _task_fake_monterey, all_image_info_addr);
@@ -6110,7 +6275,15 @@ mach_vm_size_t task_all_image_info_size(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Monterey()) {
+    if (macOS_Monterey_1_or_greater()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_monterey_1, all_image_info_size);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_monterey_dev_1, all_image_info_size);
+      }
+    } else if (macOS_Monterey()) {
       if (kernel_type_is_release()) {
         offset_in_struct =
           offsetof(struct _task_fake_monterey, all_image_info_size);
@@ -6189,7 +6362,14 @@ uint32_t task_flags(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Monterey()) {
+    if (macOS_Monterey_1_or_greater()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct = offsetof(struct _task_fake_monterey_1, t_flags);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_monterey_dev_1, t_flags);
+      }
+    } else if (macOS_Monterey()) {
       if (kernel_type_is_release()) {
         offset_in_struct = offsetof(struct _task_fake_monterey, t_flags);
       } else if (kernel_type_is_development()) {
@@ -6277,7 +6457,14 @@ proc_t task_proc(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Monterey()) {
+    if (macOS_Monterey_1_or_greater()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct = offsetof(struct _task_fake_monterey_1, bsd_info);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_monterey_dev_1, bsd_info);
+      }
+    } else if (macOS_Monterey()) {
       if (kernel_type_is_release()) {
         offset_in_struct = offsetof(struct _task_fake_monterey, bsd_info);
       } else if (kernel_type_is_development()) {
@@ -11967,8 +12154,8 @@ int hook_execve(proc_t p, struct execve_args *uap, int *retv)
     proc_t proc = current_proc();
     char procname[PATH_MAX];
     proc_name(proc_pid(proc), procname, sizeof(procname));
-    printf("HookCase: hook_execve(%s[%d])\n",
-           procname, proc_pid(proc));
+    printf("HookCase: hook_execve(%s[%d:%lld])\n",
+           procname, proc_pid(proc), proc_uniqueid(proc));
     report_proc_thread_state("HookCase: hook_execve()", current_thread());
 #endif
     // On all versions of OS X before Sierra, at this point the current
@@ -12045,8 +12232,8 @@ int hook_posix_spawn(proc_t p, struct posix_spawn_args *uap, int *retv)
 #ifdef DEBUG_PROCESS_START
       char procname[PATH_MAX];
       proc_name(proc_pid(proc), procname, sizeof(procname));
-      printf("HookCase: hook_posix_spawn(%s[%d])\n",
-             procname, proc_pid(proc));
+      printf("HookCase: hook_posix_spawn(%s[%d:%lld])\n",
+             procname, proc_pid(proc), proc_uniqueid(proc));
       report_proc_thread_state("HookCase: hook_posix_spawn()", current_thread());
 #endif
       remove_process_hooks(proc_uniqueid(proc));
@@ -12084,8 +12271,8 @@ int hook_mac_execve(proc_t p, struct mac_execve_args *uap, int *retv)
     proc_t proc = current_proc();
     char procname[PATH_MAX];
     proc_name(proc_pid(proc), procname, sizeof(procname));
-    printf("HookCase: hook_mac_execve(%s[%d])\n",
-           procname, proc_pid(proc));
+    printf("HookCase: hook_mac_execve(%s[%d:%lld])\n",
+           procname, proc_pid(proc), proc_uniqueid(proc));
     report_proc_thread_state("HookCase: hook_mac_execve()", current_thread());
 #endif
 #ifndef DEBUG_PROCESS_START
@@ -12195,8 +12382,8 @@ void thread_bootstrap_return_hook(x86_saved_state_t *intr_state,
   if ((info.num_threads == 1) && info.main_thread) {
     char procname[PATH_MAX];
     proc_name(proc_pid(proc), procname, sizeof(procname));
-    printf("HookCase: thread_bootstrap_return(%s[%d]): forked_only %d, start_funcs_registered %d\n",
-           procname, proc_pid(proc), forked_only, start_funcs_registered);
+    printf("HookCase: thread_bootstrap_return(%s[%d:%lld]): forked_only %d, start_funcs_registered %d\n",
+           procname, proc_pid(proc), proc_uniqueid(proc), forked_only, start_funcs_registered);
     report_proc_thread_state("HookCase: thread_bootstrap_return()", current_thread());
   }
 #endif
