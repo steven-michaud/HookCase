@@ -88,5 +88,5 @@ hook that method as a process starts up, perform our own
 initialization, then allow the original method to run.
 
 For more information, the best place to start is the
-[long series of comments](HookCase/HookCase/HookCase.cpp#L7726)
+[long series of comments](HookCase/HookCase/HookCase.cpp#L7865)
 in `HookCase.cpp` before the definition of `C_64_REDZONE_LEN`.

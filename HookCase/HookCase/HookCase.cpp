@@ -1,6 +1,6 @@
 // The MIT License (MIT)
 //
-// Copyright (c) 2021 Steven Michaud
+// Copyright (c) 2022 Steven Michaud
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -366,6 +366,24 @@ bool macOS_Monterey_1_or_greater()
   }
   // The output of "uname -r" for macOS 12.1 is actually "21.2.0".
   return ((OSX_Version() & 0xFF) >= 0x20);
+}
+
+bool macOS_Monterey_less_than_3()
+{
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_12_HEX)) {
+    return false;
+  }
+  // The output of "uname -r" for macOS 12.3 is actually "21.4.0".
+  return ((OSX_Version() & 0xFF) < 0x40);
+}
+
+bool macOS_Monterey_3_or_greater()
+{
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_12_HEX)) {
+    return false;
+  }
+  // The output of "uname -r" for macOS 12.3 is actually "21.4.0".
+  return ((OSX_Version() & 0xFF) >= 0x40);
 }
 
 bool OSX_Version_Unsupported()
@@ -1765,13 +1783,30 @@ typedef struct _vm_map_fake_monterey_dev {
   unsigned int timestamp; // Offset 0x10c
 } *vm_map_fake_monterey_dev_t;
 
+typedef struct _vm_map_fake_monterey_3 {
+  lck_rw_t lock;
+  struct vm_map_links links; // Actually 1st member of "struct vm_map_header hdr"
+#define hdr links
+  uint64_t pad1[2];
+  pmap_t pmap;            // Offset 0x40
+  vm_map_size_t size;     // Offset 0x48
+  uint64_t pad2[2];
+  vm_map_size_t user_wire_limit; // Offset 0x60
+  vm_map_size_t user_wire_size;  // Offset 0x68
+  uint32_t pad3[12];
+  unsigned int timestamp; // Offset 0xa0
+} *vm_map_fake_monterey_3_t;
+
 pmap_t vm_map_pmap(vm_map_t map)
 {
   if (!map) {
     return NULL;
   }
-  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
-      macOS_Catalina() || macOS_BigSur() || macOS_Monterey())
+  if (macOS_Monterey_3_or_greater()) {
+    vm_map_fake_monterey_3_t m = (vm_map_fake_monterey_3_t) map;
+    return m->pmap;
+  } else if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
+             macOS_Catalina() || macOS_BigSur() || macOS_Monterey())
   {
     vm_map_fake_sierra_t m = (vm_map_fake_sierra_t) map;
     return m->pmap;
@@ -1787,7 +1822,10 @@ unsigned int vm_map_timestamp(vm_map_t map)
     return 0;
   }
   unsigned int retval = 0;
-  if (macOS_Monterey()) {
+  if (macOS_Monterey_3_or_greater()) {
+    vm_map_fake_monterey_3_t map_local = (vm_map_fake_monterey_3_t) map;
+    retval = map_local->timestamp;
+  } else if (macOS_Monterey()) {
     if (kernel_type_is_release()) {
       vm_map_fake_monterey_t map_local = (vm_map_fake_monterey_t) map;
       retval = map_local->timestamp;
@@ -1847,7 +1885,10 @@ vm_map_size_t vm_map_user_wire_limit(vm_map_t map)
     return 0;
   }
   vm_map_size_t retval;
-  if (macOS_Monterey()) {
+  if (macOS_Monterey_3_or_greater()) {
+    vm_map_fake_monterey_3_t m = (vm_map_fake_monterey_3_t) map;
+    retval = m->user_wire_limit;
+  } else if (macOS_Monterey()) {
     vm_map_fake_monterey_t m = (vm_map_fake_monterey_t) map;
     retval = m->user_wire_limit;
   } else if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
@@ -1868,7 +1909,10 @@ vm_map_size_t vm_map_user_wire_size(vm_map_t map)
     return 0;
   }
   vm_map_size_t retval;
-  if (macOS_Monterey()) {
+  if (macOS_Monterey_3_or_greater()) {
+    vm_map_fake_monterey_3_t m = (vm_map_fake_monterey_3_t) map;
+    retval = m->user_wire_size;
+  } else if (macOS_Monterey()) {
     vm_map_fake_monterey_t m = (vm_map_fake_monterey_t) map;
     retval = m->user_wire_size;
   } else if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
@@ -1888,7 +1932,10 @@ void vm_map_set_user_wire_size(vm_map_t map, vm_map_size_t new_size)
   if (!map) {
     return;
   }
-  if (macOS_Monterey()) {
+  if (macOS_Monterey_3_or_greater()) {
+    vm_map_fake_monterey_3_t m = (vm_map_fake_monterey_3_t) map;
+    m->user_wire_size = new_size;
+  } else if (macOS_Monterey()) {
     vm_map_fake_monterey_t m = (vm_map_fake_monterey_t) map;
     m->user_wire_size = new_size;
   } else if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
@@ -2115,7 +2162,11 @@ void vm_map_lock_write_to_read(vm_map_t map)
   if (!map) {
     return;
   }
-  if (macOS_Monterey()) {
+  if (macOS_Monterey_3_or_greater()) {
+    vm_map_fake_monterey_3_t map_local = (vm_map_fake_monterey_3_t) map;
+    ++map_local->timestamp;
+    lck_rw_lock_exclusive_to_shared(&(map_local->lock));
+  } else if (macOS_Monterey()) {
     if (kernel_type_is_release()) {
       vm_map_fake_monterey_t map_local = (vm_map_fake_monterey_t) map;
       ++map_local->timestamp;
@@ -2163,7 +2214,11 @@ void vm_map_unlock(vm_map_t map)
   if (!map) {
     return;
   }
-  if (macOS_Monterey()) {
+  if (macOS_Monterey_3_or_greater()) {
+    vm_map_fake_monterey_3_t map_local = (vm_map_fake_monterey_3_t) map;
+    ++map_local->timestamp;
+    lck_rw_done(&(map_local->lock));
+  } else if (macOS_Monterey()) {
     if (kernel_type_is_release()) {
       vm_map_fake_monterey_t map_local = (vm_map_fake_monterey_t) map;
       ++map_local->timestamp;
@@ -3966,6 +4021,42 @@ typedef struct _proc_fake_monterey_dev_1 {
   u_short p_acflag;       // Offset 0x4bc
 } *proc_fake_monterey_dev_1_t;
 
+typedef struct _proc_fake_monterey_3 {
+  uint32_t pad1[4];
+  task_t task;            // Offset 0x10
+  uint32_t pad2[12];
+  uint64_t p_uniqueid;    // Offset 0x48 (Not valid on 12.1 and up?)
+  uint32_t pad3[6];
+  pid_t p_pid;            // Offset 0x68
+  uint32_t pad4[142];
+  unsigned int p_flag;    // P_* flags (offset 0x2a4)
+  unsigned int p_lflag;
+  uint32_t pad5[73];
+  uint32_t p_argslen;     // Length of "string area" at beginning of user stack (offset 0x3d0)
+  int32_t p_argc;         // Offset 0x3d4
+  user_addr_t user_stack; // Where user stack was allocated (offset 0x3d8)
+  uint32_t pad6[49];
+  u_short p_acflag;       // Offset 0x4a4
+} *proc_fake_monterey_3_t;
+
+typedef struct _proc_fake_monterey_dev_3 {
+  uint32_t pad1[4];
+  task_t task;            // Offset 0x10
+  uint32_t pad2[12];
+  uint64_t p_uniqueid;    // Offset 0x48 (Not valid on 12.1 and up?)
+  uint32_t pad3[6];
+  pid_t p_pid;            // Offset 0x68
+  uint32_t pad4[146];
+  unsigned int p_flag;    // P_* flags (offset 0x2b4)
+  unsigned int p_lflag;
+  uint32_t pad5[73];
+  uint32_t p_argslen;     // Length of "string area" at beginning of user stack (offset 0x3e0)
+  int32_t p_argc;         // Offset 0x3e4
+  user_addr_t user_stack; // Where user stack was allocated (offset 0x3e8)
+  uint32_t pad6[49];
+  u_short p_acflag;       // Offset 0x4b4
+} *proc_fake_monterey_dev_3_t;
+
 static uint64_t proc_uniqueid(proc_t proc)
 {
   if (!proc) {
@@ -4012,7 +4103,15 @@ static bool IS_64BIT_PROCESS(proc_t proc)
     return false;
   }
 
-  if (macOS_Monterey_1_or_greater()) {
+  if (macOS_Monterey_3_or_greater()) {
+    if (kernel_type_is_release()) {
+      proc_fake_monterey_3_t p = (proc_fake_monterey_3_t) proc;
+      return (p && (p->p_flag & P_LP64));
+    } else if (kernel_type_is_development()) {
+      proc_fake_monterey_dev_3_t p = (proc_fake_monterey_dev_3_t) proc;
+      return (p && (p->p_flag & P_LP64));
+    }
+  } else if (macOS_Monterey_1_or_greater()) {
     if (kernel_type_is_release()) {
       proc_fake_monterey_1_t p = (proc_fake_monterey_1_t) proc;
       return (p && (p->p_flag & P_LP64));
@@ -4052,7 +4151,15 @@ u_short get_acflag(proc_t proc)
   if (!proc) {
     return 0;
   }
-  if (macOS_Monterey_1_or_greater()) {
+  if (macOS_Monterey_3_or_greater()) {
+    if (kernel_type_is_release()) {
+      proc_fake_monterey_3_t p = (proc_fake_monterey_3_t) proc;
+      return p->p_acflag;
+    } else if (kernel_type_is_development()) {
+      proc_fake_monterey_dev_3_t p = (proc_fake_monterey_dev_3_t) proc;
+      return p->p_acflag;
+    }
+  } else if (macOS_Monterey_1_or_greater()) {
     if (kernel_type_is_release()) {
       proc_fake_monterey_1_t p = (proc_fake_monterey_1_t) proc;
       return p->p_acflag;
@@ -4097,7 +4204,15 @@ unsigned int get_lflag(proc_t proc)
   if (!proc) {
     return 0;
   }
-  if (macOS_Monterey_1_or_greater()) {
+  if (macOS_Monterey_3_or_greater()) {
+    if (kernel_type_is_release()) {
+      proc_fake_monterey_3_t p = (proc_fake_monterey_3_t) proc;
+      return p->p_lflag;
+    } else if (kernel_type_is_development()) {
+      proc_fake_monterey_dev_3_t p = (proc_fake_monterey_dev_3_t) proc;
+      return p->p_lflag;
+    }
+  } else if (macOS_Monterey_1_or_greater()) {
     if (kernel_type_is_release()) {
       proc_fake_monterey_1_t p = (proc_fake_monterey_1_t) proc;
       return p->p_lflag;
@@ -4137,7 +4252,15 @@ unsigned int get_flag(proc_t proc)
   if (!proc) {
     return 0;
   }
-  if (macOS_Monterey_1_or_greater()) {
+  if (macOS_Monterey_3_or_greater()) {
+    if (kernel_type_is_release()) {
+      proc_fake_monterey_3_t p = (proc_fake_monterey_3_t) proc;
+      return p->p_flag;
+    } else if (kernel_type_is_development()) {
+      proc_fake_monterey_dev_3_t p = (proc_fake_monterey_dev_3_t) proc;
+      return p->p_flag;
+    }
+  } else if (macOS_Monterey_1_or_greater()) {
     if (kernel_type_is_release()) {
       proc_fake_monterey_1_t p = (proc_fake_monterey_1_t) proc;
       return p->p_flag;
@@ -5763,7 +5886,23 @@ bool get_proc_info(int32_t pid, char **path,
   uint32_t p_argslen = 0;
   int32_t p_argc = 0;
   user_addr_t user_stack = 0;
-  if (macOS_Monterey_1_or_greater()) {
+  if (macOS_Monterey_3_or_greater()) {
+    if (kernel_type_is_release()) {
+      proc_fake_monterey_3_t p = (proc_fake_monterey_3_t) our_proc;
+      if (p) {
+        p_argslen = p->p_argslen;
+        p_argc = p->p_argc;
+        user_stack = p->user_stack;
+      }
+    } else if (kernel_type_is_development()) {
+      proc_fake_monterey_dev_3_t p = (proc_fake_monterey_dev_3_t) our_proc;
+      if (p) {
+        p_argslen = p->p_argslen;
+        p_argc = p->p_argc;
+        user_stack = p->user_stack;
+      }
+    }
+  } else if (macOS_Monterey_1_or_greater()) {
     if (kernel_type_is_release()) {
       proc_fake_monterey_1_t p = (proc_fake_monterey_1_t) our_proc;
       if (p) {
@@ -13210,20 +13349,30 @@ bool install_stub_dispatcher()
       return false;
     }
   }
+  static vm_offset_t kernel_scfstks_addr = -1;
+  if (kernel_scfstks_addr == -1) {
+    kernel_scfstks_addr =
+      (vm_offset_t) kernel_dlsym("_scfstks");
+  }
 
   // On versions of macOS/OS X that support KPTI, idt64_hndl_table0 is either
   // just before gIOHibernateRestoreStack (ElCapitan and the HighSierra debug
-  // kernel) or master_idt64 (all the rest).  I don't know the reason for the
-  // variation.  Our main concern here is to ensure that there's enough empty
-  // space at the end of idt64_hndl_table0.  We try to do that by ensuring
-  // that idt64_hndl_table0 and the "next" label in the symbol table are page-
-  // aligned and one page apart.  (idt64_hndl_table1, which isn't in all
-  // kernels' symbol tables, is counted as part of idt64_hndl_table0.)
+  // kernel) or scfstks (macOS 12.3 and above) or master_idt64 (all the rest).
+  // I don't know the reason for the variation.  Our main concern here is to
+  // ensure that there's enough empty space at the end of idt64_hndl_table0.
+  // We try to do that by ensuring that idt64_hndl_table0 and the "next" label
+  // in the symbol table are page-aligned and one page apart.
+  // (idt64_hndl_table1, which isn't in all kernels' symbol tables, is counted
+  // as part of idt64_hndl_table0.)
   int64_t idt64_hndl_table0_size =
     kernel_master_idt64_addr - g_kernel_idt64_hndl_table0_addr;
   if (idt64_hndl_table0_size != PAGE_SIZE) {
     idt64_hndl_table0_size =
       kernel_gIOHibernateRestoreStack_addr - g_kernel_idt64_hndl_table0_addr;
+    if (kernel_scfstks_addr && (idt64_hndl_table0_size != PAGE_SIZE)) {
+      idt64_hndl_table0_size =
+        kernel_scfstks_addr - g_kernel_idt64_hndl_table0_addr;
+    }
   }
   if ((idt64_hndl_table0_size != PAGE_SIZE) ||
       (g_kernel_idt64_hndl_table0_addr & PAGE_MASK))
