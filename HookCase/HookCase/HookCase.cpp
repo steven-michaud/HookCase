@@ -386,6 +386,24 @@ bool macOS_Monterey_3_or_greater()
   return ((OSX_Version() & 0xFF) >= 0x40);
 }
 
+bool macOS_Monterey_less_than_4()
+{
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_12_HEX)) {
+    return false;
+  }
+  // The output of "uname -r" for macOS 12.4 is actually "21.5.0".
+  return ((OSX_Version() & 0xFF) < 0x50);
+}
+
+bool macOS_Monterey_4_or_greater()
+{
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_12_HEX)) {
+    return false;
+  }
+  // The output of "uname -r" for macOS 12.4 is actually "21.5.0".
+  return ((OSX_Version() & 0xFF) >= 0x50);
+}
+
 bool OSX_Version_Unsupported()
 {
   return (((OSX_Version() & 0xFF00) < MAC_OS_X_VERSION_10_9_HEX) ||
@@ -3549,6 +3567,45 @@ typedef struct _vm_object_fake_catalina_dev_debug {
     __object2_unused_bits:7; /* for expansion */
 } *vm_object_fake_catalina_dev_debug_t;
 
+typedef struct _vm_object_fake_monterey_4 {
+  uint64_t pad1[1];
+  lck_rw_t Lock;
+  uint64_t pad2[5];
+  vm_object_t shadow; // Offset 0x40
+  uint64_t pad3[1];
+  union {
+    vm_object_offset_t vou_shadow_offset; /* Offset into shadow (offset 0x50) */
+    clock_sec_t vou_cache_ts; /* age of an external object
+                               * present in cache
+                               */
+    task_t vou_owner; /* If the object is purgeable
+                       * or has a "ledger_tag", this
+                       * is the task that owns it.
+                       */
+  } vo_un2;
+  uint32_t pad4[19];
+  /* hold object lock when altering */
+  unsigned int // Offset 0xa4
+    wimg_bits:8,    /* cache WIMG bits         */
+    code_signed:1,  /* pages are signed and should be
+                       validated; the signatures are stored
+                       with the pager */
+    transposed:1,   /* object was transposed with another */
+    mapping_in_progress:1, /* pager being mapped/unmapped */
+    phantom_isssd:1,
+    volatile_empty:1,
+    volatile_fault:1,
+    all_reusable:1,
+    blocked_access:1,
+    set_cache_attr:1,
+    object_is_shared_cache:1,
+    purgeable_queue_type:2,
+    purgeable_queue_group:3,
+    io_tracking:1,
+    no_tag_update:1,
+    __object2_unused_bits:7; /* for expansion */
+} *vm_object_fake_monterey_4_t;
+
 bool object_is_code_signed(vm_object_t object)
 {
   if (!object) {
@@ -3589,7 +3646,9 @@ bool object_is_code_signed(vm_object_t object)
         (vm_object_fake_highsierra_dev_debug_t) object;
       retval = object_local->code_signed;
     }
-  } else if (macOS_Catalina() || macOS_BigSur() || macOS_Monterey()) {
+  } else if (macOS_Catalina() || macOS_BigSur() ||
+             macOS_Monterey_less_than_4())
+  {
     if (kernel_type_is_release()) {
       vm_object_fake_catalina_t object_local =
         (vm_object_fake_catalina_t) object;
@@ -3601,6 +3660,10 @@ bool object_is_code_signed(vm_object_t object)
         (vm_object_fake_catalina_dev_debug_t) object;
       retval = object_local->code_signed;
     }
+  } else if (macOS_Monterey_4_or_greater()) {
+    vm_object_fake_monterey_4_t object_local =
+      (vm_object_fake_monterey_4_t) object;
+    retval = object_local->code_signed;
   } else {
     if (kernel_type_is_release()) {
       vm_object_fake_yosemite_t object_local =
@@ -3656,7 +3719,9 @@ void object_set_code_signed(vm_object_t object, bool flag)
         (vm_object_fake_highsierra_dev_debug_t) object;
       object_local->code_signed = flag;
     }
-  } else if (macOS_Catalina() || macOS_BigSur() || macOS_Monterey()) {
+  } else if (macOS_Catalina() || macOS_BigSur() ||
+             macOS_Monterey_less_than_4())
+  {
     if (kernel_type_is_release()) {
       vm_object_fake_catalina_t object_local =
         (vm_object_fake_catalina_t) object;
@@ -3668,6 +3733,10 @@ void object_set_code_signed(vm_object_t object, bool flag)
         (vm_object_fake_catalina_dev_debug_t) object;
       object_local->code_signed = flag;
     }
+  } else if (macOS_Monterey_4_or_greater()) {
+    vm_object_fake_monterey_4_t object_local =
+      (vm_object_fake_monterey_4_t) object;
+    object_local->code_signed = flag;
   } else {
     if (kernel_type_is_release()) {
       vm_object_fake_yosemite_t object_local =
@@ -3750,7 +3819,7 @@ vm_object_t object_get_shadow(vm_object_t object)
   }
   vm_object_t retval = NULL;
   if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
-      macOS_Catalina() || macOS_BigSur() || macOS_Monterey())
+      macOS_Catalina() || macOS_BigSur() || macOS_Monterey_less_than_4())
   {
     if (kernel_type_is_release()) {
       vm_object_fake_sierra_t object_local =
@@ -3763,6 +3832,10 @@ vm_object_t object_get_shadow(vm_object_t object)
         (vm_object_fake_sierra_dev_debug_t) object;
       retval = object_local->shadow;
     }
+  } else if (macOS_Monterey_4_or_greater()) {
+    vm_object_fake_monterey_4_t object_local =
+      (vm_object_fake_monterey_4_t) object;
+    retval = object_local->shadow;
   } else {
     vm_object_fake_yosemite_t object_local =
       (vm_object_fake_yosemite_t) object;
@@ -3777,7 +3850,13 @@ vm_object_offset_t object_get_shadow_offset(vm_object_t object)
     return 0;
   }
   vm_object_offset_t retval = 0;
-  if (macOS_Catalina() || macOS_BigSur() || macOS_Monterey()) {
+  if (macOS_Monterey_4_or_greater()) {
+    vm_object_fake_monterey_4_t object_local =
+      (vm_object_fake_monterey_4_t) object;
+    retval = object_local->vo_un2.vou_shadow_offset;
+  } else if (macOS_Catalina() || macOS_BigSur() ||
+             macOS_Monterey_less_than_4())
+  {
     if (kernel_type_is_release()) {
       vm_object_fake_catalina_t object_local =
         (vm_object_fake_catalina_t) object;
@@ -4367,6 +4446,32 @@ typedef struct thread_fake_monterey_dev_1
   uint32_t pad4[142];
   vm_map_t map;         // Offset 0x6d0
 } thread_fake_monterey_dev_1_t;
+
+typedef struct thread_fake_monterey_4
+{
+  uint32_t pad1[24];
+  integer_t options;    // Offset 0x60
+  uint32_t pad2[15];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0xa0
+  uint32_t pad3[231];
+  int iotier_override;  // Offset 0x444
+  uint32_t pad4[126];
+  vm_map_t map;         // Offset 0x640
+} thread_fake_monterey_4_t;
+
+typedef struct thread_fake_monterey_dev_4
+{
+  uint32_t pad1[26];
+  integer_t options;    // Offset 0x68
+  uint32_t pad2[15];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0xa8
+  uint32_t pad3[249];
+  int iotier_override;  // Offset 0x494
+  uint32_t pad4[140];
+  vm_map_t map;         // Offset 0x6c8
+} thread_fake_monterey_dev_4_t;
 
 typedef struct thread_fake_bigsur
 {
@@ -5533,11 +5638,15 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
     }
     // If we're writing to a "private" region that's codesigned, we should
     // first "unsign" it -- otherwise the OS may give us trouble for setting
-    // write permission on a region that should remain unchanged.  We don't
+    // write permission on a region that should remain unchanged. We don't
     // need to worry about this for a shared region, because the region we
-    // write to will be a private copy of it (generated via COW).  On Mojave
-    // and above we need to do this for all private regions.
-    if (info.share_mode == SM_PRIVATE) {
+    // write to will be a private copy of it (generated via COW). On Mojave
+    // and above we need to do this for all private regions. Starting on
+    // Monterey 12.4, "private" regions have the share_mode SM_PRIVATE or
+    // SM_PRIVATE_ALIASED.
+    if ((info.share_mode == SM_PRIVATE) ||
+        (info.share_mode == SM_PRIVATE_ALIASED))
+    {
       if (macOS_Mojave() || macOS_Catalina() || macOS_BigSur() ||
           macOS_Monterey() || codesigned)
       {
@@ -5615,8 +5724,7 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
 }
 
 bool proc_mapout(vm_map_t proc_map, const void *source,
-                 vm_map_offset_t *target, size_t len,
-                 bool src_destroy)
+                 vm_map_offset_t *target, size_t len)
 {
   if (!proc_map || !source || !target || !len) {
     return false;
@@ -5627,8 +5735,14 @@ bool proc_mapout(vm_map_t proc_map, const void *source,
   *target = 0;
 
   vm_map_copy_t copy;
+  // On Monterey 12.4 and above, setting 'src_destroy' to 'true' triggers
+  // a kernel panic with an error message about "attempting to remove
+  // permanent VM map entry". This error presumably also happened on earlier
+  // versions of macOS, but was non-fatal. We should probably never trigger
+  // it. So set 'src_destroy' to 'false' here and release 'source' in the
+  // caller.
   kern_return_t rv = vm_map_copyin(kernel_map, (vm_map_address_t) source,
-                                   len, src_destroy, &copy);
+                                   len, false, &copy);
   if (rv != KERN_SUCCESS) {
     return false;
   }
@@ -10633,16 +10747,16 @@ bool setup_call_orig_func_block(vm_map_t proc_map, hook_t *cast_hookp)
 
   bool rv = true;
   vm_map_offset_t block = 0;
-  if (proc_mapout(proc_map, page_buffer, &block, 2 * PAGE_SIZE, true)) {
+  if (proc_mapout(proc_map, page_buffer, &block, 2 * PAGE_SIZE)) {
     vm_protect(proc_map, block, PAGE_SIZE, false,
                VM_PROT_READ | VM_PROT_EXECUTE);
     vm_protect(proc_map, block + PAGE_SIZE, PAGE_SIZE, false,
                VM_PROT_READ);
     cast_hookp->call_orig_func_block = block;
   } else {
-    IOFreePageable(page_buffer, 2 * PAGE_SIZE);
     rv = false;
   }
+  IOFreePageable(page_buffer, 2 * PAGE_SIZE);
 
   return rv;
 }
@@ -11245,13 +11359,12 @@ bool setup_register_for_add_image(hook_t *hookp, x86_saved_state_t *intr_state,
     } else {     // flavor == x86_SAVED_STATE32
       func_buffer[0] = HC_INT2_FUNC_32BIT_LONG;
     }
-    if (proc_mapout(proc_map, func_buffer, &on_add_image, PAGE_SIZE, true)) {
+    if (proc_mapout(proc_map, func_buffer, &on_add_image, PAGE_SIZE)) {
       vm_protect(proc_map, on_add_image, PAGE_SIZE, false,
                  VM_PROT_READ | VM_PROT_EXECUTE);
       hookp->add_image_func_addr = on_add_image;
-    } else {
-      IOFreePageable(func_buffer, PAGE_SIZE);
     }
+    IOFreePageable(func_buffer, PAGE_SIZE);
   }
 
   if (!dyld_register_func_for_add_image || !on_add_image) {
