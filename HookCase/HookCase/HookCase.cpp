@@ -12916,7 +12916,14 @@ bool get_vnode_path(struct vnode *vp, char *path, vm_size_t path_size)
 
 typedef int (*mac_vnode_check_open_t)(vfs_context_t ctx, struct vnode *vp, int acc_mode);
 
-extern "C" mac_vnode_check_open_t mac_vnode_check_open = NULL;
+// Build 19H2026 of macOS 10.15.7 suddenly (and possibly mistakenly) includes
+// mac_vnode_check_open() in its list of supported kernel calls (in
+// /System/Library/Extensions/System.kext/PlugIns/MACFramework.kext). This
+// means that, unless the following pointer has its name changed from
+// 'mac_vnode_check_open', HookCase.kext will refuse to load, complaining
+// about the 'mac_vnode_check_open' symbol having more than one definition.
+// This is issue #36.
+extern "C" mac_vnode_check_open_t mac_vnode_check_open_ptr = NULL;
 
 void mac_vnode_check_open_hook(x86_saved_state_t *intr_state,
                                kern_hook_t *kern_hookp)
@@ -12954,17 +12961,17 @@ void mac_vnode_check_open_hook(x86_saved_state_t *intr_state,
 
 bool hook_mac_vnode_check_open()
 {
-  if (!mac_vnode_check_open) {
-    mac_vnode_check_open = (mac_vnode_check_open_t)
+  if (!mac_vnode_check_open_ptr) {
+    mac_vnode_check_open_ptr = (mac_vnode_check_open_t)
       kernel_dlsym("_mac_vnode_check_open");
-    if (!mac_vnode_check_open) {
+    if (!mac_vnode_check_open_ptr) {
       return false;
     }
   }
 
-  return set_kern_hook((vm_offset_t)mac_vnode_check_open,
+  return set_kern_hook((vm_offset_t)mac_vnode_check_open_ptr,
                        (vm_offset_t)mac_vnode_check_open_hook,
-                       (vm_offset_t)mac_vnode_check_open_caller);
+                       (vm_offset_t)mac_vnode_check_open_ptr_caller);
 }
 
 #define pal_sti() __asm__ volatile ("sti")

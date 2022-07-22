@@ -24,7 +24,7 @@ kernel extensions whose `start()` method fails.
 
 Note that there's a workaround, which involves installing a serial
 port and using `kprintf()` to write to it.  For more information see
-[HookCase_start()](HookCase/HookCase/HookCase.cpp#L14047).
+[HookCase_start()](HookCase/HookCase/HookCase.cpp#L14054).
 
 The root of the problem is that the messages received by Apple's new
 logging subsystem no longer contain full strings.  Instead each
