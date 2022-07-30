@@ -404,6 +404,24 @@ bool macOS_Monterey_4_or_greater()
   return ((OSX_Version() & 0xFF) >= 0x50);
 }
 
+bool macOS_Monterey_less_than_5()
+{
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_12_HEX)) {
+    return false;
+  }
+  // The output of "uname -r" for macOS 12.5 is actually "21.6.0".
+  return ((OSX_Version() & 0xFF) < 0x60);
+}
+
+bool macOS_Monterey_5_or_greater()
+{
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_12_HEX)) {
+    return false;
+  }
+  // The output of "uname -r" for macOS 12.5 is actually "21.6.0".
+  return ((OSX_Version() & 0xFF) >= 0x60);
+}
+
 bool OSX_Version_Unsupported()
 {
   return (((OSX_Version() & 0xFF00) < MAC_OS_X_VERSION_10_9_HEX) ||
@@ -2315,13 +2333,71 @@ vm_map_offset_t map_entry_end(vm_map_entry_t entry)
   return entry_local->vme_end;
 }
 
-vm_object_t map_entry_object(vm_map_entry_t entry)
+// As of macOS 12.5, a flag in the 'vm_map_entry' structure's
+// 'vme_object' member is used to determine whether or not the
+// map entry is for a submap.
+bool map_entry_is_submap(vm_map_entry_t entry)
 {
   if (!entry) {
-    return NULL;
+    return false;
+  }
+
+  bool retval = false;
+  vm_map_entry_fake_t entry_local = (vm_map_entry_fake_t) entry;
+  if (macOS_Monterey_less_than_5()) {
+    retval = entry_local->is_sub_map;
+  } else {
+    uintptr_t value = (uintptr_t) entry_local->vme_object.vmo_object;
+    uintptr_t flag = (value & 0xffff);
+    retval = ((flag & 2) != 0);
+  }
+
+  return retval;
+}
+
+// What's returned may be either an "object" or a "submap". As of macOS 12.5,
+// the 'vm_map_entry' structure's 'vme_object' member is "packed". I don't
+// know why -- no space seems to have been saved.
+union vm_map_object map_entry_object_unpack_ptr(vm_object_t p)
+{
+  uintptr_t value = (uintptr_t) p;
+
+  union vm_map_object retval;
+  retval.vmo_object = p;
+
+  if (macOS_Monterey_less_than_5()) {
+    return retval;
+  }
+
+  uintptr_t flag = (value & 0xffff);
+  bool is_sub_map = ((flag & 2) != 0);
+
+  if (is_sub_map) {
+    value &= 0xfffffffffffffffc;
+  } else {
+    uintptr_t raw = (value >> 32);
+    if (raw != 0) {
+      value = ((value >> 26) & 0xffffffffffffffc0);
+      value += 0xffffff7f80000000;
+    } else {
+      value = 0;
+    }
+  }
+
+  retval.vmo_object = (vm_object_t) value;
+  return retval;
+}
+
+// What's returned may be either an "object" or a "submap".
+union vm_map_object map_entry_object(vm_map_entry_t entry)
+{
+  if (!entry) {
+    union vm_map_object retval;
+    retval.vmo_object = NULL;
+    return retval;
   }
   vm_map_entry_fake_t entry_local = (vm_map_entry_fake_t) entry;
-  return entry_local->vme_object.vmo_object;
+  return map_entry_object_unpack_ptr(entry_local->vme_object.vmo_object);
 }
 
 vm_object_offset_t map_entry_offset(vm_map_entry_t entry)
@@ -5150,6 +5226,12 @@ typedef struct uthread_fake_monterey_1
   int uu_flag;        // Offset 0xf8
 } *uthread_fake_monterey_1_t;
 
+typedef struct uthread_fake_monterey_3
+{
+  uint64_t pad[30];
+  int uu_flag;        // Offset 0xf0
+} *uthread_fake_monterey_3_t;
+
 typedef struct uthread_fake_catalina
 {
   uint64_t pad[33];
@@ -5200,7 +5282,9 @@ int get_uu_flag(uthread_t uthread)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Monterey_1_or_greater()) {
+    if (macOS_Monterey_3_or_greater()) {
+      offset_in_struct = offsetof(struct uthread_fake_monterey_3, uu_flag);
+    } else if (macOS_Monterey_1_or_greater()) {
       offset_in_struct = offsetof(struct uthread_fake_monterey_1, uu_flag);
     } else if (macOS_Monterey()) {
       offset_in_struct = offsetof(struct uthread_fake_monterey, uu_flag);
@@ -5402,13 +5486,11 @@ void vm_submap_iterate_entries(vm_map_t submap, vm_map_offset_t start,
   }
 
   while ((entry != vm_map_to_entry(submap)) && (entry_start < end_fixed)) {
-    vm_map_entry_fake_t an_entry = (vm_map_entry_fake_t) entry;
-
-    if (an_entry->is_sub_map) {
+    if (map_entry_is_submap(entry)) {
       vm_map_offset_t submap_start = map_entry_offset(entry);
       vm_map_offset_t submap_end =
         map_entry_offset(entry) + end_fixed - entry_start;
-      vm_submap_iterate_entries(an_entry->vme_object.vmo_submap,
+      vm_submap_iterate_entries(map_entry_object(entry).vmo_submap,
                                 submap_start, submap_end, submap_level + 1,
                                 iterator, info);
     } else {
@@ -5465,13 +5547,11 @@ void vm_map_iterate_entries(vm_map_t map, vm_map_offset_t start,
   }
 
   while ((entry != vm_map_to_entry(map)) && (entry_start < end_fixed)) {
-    vm_map_entry_fake_t an_entry = (vm_map_entry_fake_t) entry;
-
-    if (an_entry->is_sub_map) {
+    if (map_entry_is_submap(entry)) {
       vm_map_offset_t submap_start = map_entry_offset(entry);
       vm_map_offset_t submap_end = 
         map_entry_offset(entry) + end_fixed - entry_start;
-      vm_submap_iterate_entries(an_entry->vme_object.vmo_submap,
+      vm_submap_iterate_entries(map_entry_object(entry).vmo_submap,
                                 submap_start, submap_end, 1, iterator, info);
     } else {
       iterator(map, entry, 0, info);
@@ -7765,7 +7845,7 @@ void report_region_iterator(vm_map_t map, vm_map_entry_t entry,
   entry_start = an_entry->vme_start;
   entry_end = an_entry->vme_end;
   entry_size = entry_end - entry_start;
-  object = an_entry->vme_object.vmo_object;
+  object = map_entry_object(entry).vmo_object;
   offset = map_entry_offset(entry);
 
   if (object) {
@@ -7837,9 +7917,7 @@ void user_region_codesigned_iterator(vm_map_t map, vm_map_entry_t entry,
 
   bool is_signed = false;
 
-  vm_map_entry_fake_t an_entry = (vm_map_entry_fake_t) entry;
-
-  vm_object_t object = an_entry->vme_object.vmo_object;
+  vm_object_t object = map_entry_object(entry).vmo_object;
   vm_object_offset_t offset = map_entry_offset(entry);
 
   if (object) {
@@ -7895,9 +7973,7 @@ void sign_user_pages_iterator(vm_map_t map, vm_map_entry_t entry,
 
   bool sign = (bool) info;
 
-  vm_map_entry_fake_t an_entry = (vm_map_entry_fake_t) entry;
-
-  vm_object_t object = an_entry->vme_object.vmo_object;
+  vm_object_t object = map_entry_object(entry).vmo_object;
   vm_object_offset_t offset = map_entry_offset(entry);
 
   if (!object) {
