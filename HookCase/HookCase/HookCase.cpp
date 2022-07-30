@@ -2344,7 +2344,7 @@ bool map_entry_is_submap(vm_map_entry_t entry)
 
   bool retval = false;
   vm_map_entry_fake_t entry_local = (vm_map_entry_fake_t) entry;
-  if (macOS_Monterey_less_than_5()) {
+  if (!macOS_Monterey_5_or_greater()) {
     retval = entry_local->is_sub_map;
   } else {
     uintptr_t value = (uintptr_t) entry_local->vme_object.vmo_object;
@@ -2365,7 +2365,7 @@ union vm_map_object map_entry_object_unpack_ptr(vm_object_t p)
   union vm_map_object retval;
   retval.vmo_object = p;
 
-  if (macOS_Monterey_less_than_5()) {
+  if (!macOS_Monterey_5_or_greater()) {
     return retval;
   }
 
