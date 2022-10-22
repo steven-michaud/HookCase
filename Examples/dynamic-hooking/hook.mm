@@ -271,6 +271,27 @@ bool g_serial1_checked = false;
 int g_serial1 = -1;
 FILE *g_serial1_FILE = NULL;
 
+// It's always been difficult to log output from hook libraries -- especially
+// from secondary processes. STDOUT and STDERR are often redirected to
+// /dev/null. And sometimes Apple even blocks system log output. As mentioned
+// above, a hardware serial port can be used for output. But it's tricky to
+// use if you're not running macOS in a VM. It's easier to create a virtual
+// serial port inside macOS and use that for logging output. You can do this
+// with https://github.com/steven-michaud/PySerialPortLogger. Install it and
+// run 'serialportlogger'. Observe the name of its virtual serial port, make
+// the definition of VIRTUAL_SERIAL_PORT match it, then uncomment it.
+//
+// For unknown reasons, opening VIRTUAL_SERIAL_PORT sometimes fails with
+// EPERM. So when that happens we must fall back to older methods.
+//#define VIRTUAL_SERIAL_PORT "/dev/ttys003"
+bool g_virtual_serial_checked = false;
+int g_virtual_serial = -1;
+FILE *g_virtual_serial_FILE = NULL;
+
+#ifdef DEBUG_VIRTUAL_SERIAL_PORT
+static void LogWithFormat(bool decorate, const char *format, ...);
+#endif
+
 static void LogWithFormatV(bool decorate, const char *format, va_list args)
 {
   MaybeGetProcPath();
@@ -322,15 +343,72 @@ static void LogWithFormatV(bool decorate, const char *format, va_list args)
 
   char stdout_path[PATH_MAX] = {0};
   fcntl(STDOUT_FILENO, F_GETPATH, stdout_path);
+#ifdef VIRTUAL_SERIAL_PORT
+  if (!g_virtual_serial_checked) {
+    g_virtual_serial_checked = true;
+    g_virtual_serial =
+      open(VIRTUAL_SERIAL_PORT, O_WRONLY | O_NONBLOCK | O_NOCTTY);
+    if (g_virtual_serial >= 0) {
+      g_virtual_serial_FILE = fdopen(g_virtual_serial, "w");
+    }
+#ifdef DEBUG_VIRTUAL_SERIAL_PORT
+    if (!g_virtual_serial_FILE) {
+      LogWithFormat(true, "Hook.mm: g_virtual_serial %i, g_virtual_serial_FILE %p, errno %i, stdout_path %s",
+             g_virtual_serial, g_virtual_serial_FILE, errno, stdout_path);
+    }
+#endif
+  }
+#endif
+  if (g_virtual_serial_FILE) {
+    fputs(finished, g_virtual_serial_FILE);
+  } else {
+    if (!strcmp("/dev/console", stdout_path) ||
+        !strcmp("/dev/null", stdout_path))
+    {
+      if (CanUseCF()) {
+        aslclient asl = asl_open(NULL, "com.apple.console", ASL_OPT_NO_REMOTE);
+        aslmsg msg = asl_new(ASL_TYPE_MSG);
+        asl_set(msg, ASL_KEY_LEVEL, "3"); // kCFLogLevelError
+        asl_set(msg, ASL_KEY_MSG, finished);
+        asl_send(asl, msg);
+        asl_free(msg);
+        asl_close(asl);
+      } else {
+        if (!g_serial1_checked) {
+          g_serial1_checked = true;
+          g_serial1 =
+            open("/dev/tty.serial1", O_WRONLY | O_NONBLOCK | O_NOCTTY);
+          if (g_serial1 >= 0) {
+            g_serial1_FILE = fdopen(g_serial1, "w");
+          }
+        }
+        if (g_serial1_FILE) {
+          fputs(finished, g_serial1_FILE);
+        }
+      }
+    } else {
+      fputs(finished, stdout);
+    }
+  }
 
-  if (!strcmp("/dev/console", stdout_path) ||
-      !strcmp("/dev/null", stdout_path))
-  {
+#ifdef DEBUG_STDOUT
+  struct stat stdout_stat;
+  fstat(STDOUT_FILENO, &stdout_stat);
+  char *stdout_info = (char *) calloc(4096, 1);
+  sprintf(stdout_info, "stdout: pid \'%i\', path \"%s\", st_dev \'%i\', st_mode \'0x%x\', st_nlink \'%i\', st_ino \'%lli\', st_uid \'%i\', st_gid \'%i\', st_rdev \'%i\', st_size \'%lli\', st_blocks \'%lli\', st_blksize \'%i\', st_flags \'0x%x\', st_gen \'%i\'\n",
+          getpid(), stdout_path, stdout_stat.st_dev, stdout_stat.st_mode, stdout_stat.st_nlink,
+          stdout_stat.st_ino, stdout_stat.st_uid, stdout_stat.st_gid, stdout_stat.st_rdev,
+          stdout_stat.st_size, stdout_stat.st_blocks, stdout_stat.st_blksize,
+          stdout_stat.st_flags, stdout_stat.st_gen);
+
+  if (g_virtual_serial_FILE) {
+    fputs(finished, g_virtual_serial_FILE);
+  } else {
     if (CanUseCF()) {
       aslclient asl = asl_open(NULL, "com.apple.console", ASL_OPT_NO_REMOTE);
       aslmsg msg = asl_new(ASL_TYPE_MSG);
       asl_set(msg, ASL_KEY_LEVEL, "3"); // kCFLogLevelError
-      asl_set(msg, ASL_KEY_MSG, finished);
+      asl_set(msg, ASL_KEY_MSG, stdout_info);
       asl_send(asl, msg);
       asl_free(msg);
       asl_close(asl);
@@ -344,42 +422,8 @@ static void LogWithFormatV(bool decorate, const char *format, va_list args)
         }
       }
       if (g_serial1_FILE) {
-        fputs(finished, g_serial1_FILE);
+        fputs(stdout_info, g_serial1_FILE);
       }
-    }
-  } else {
-    fputs(finished, stdout);
-  }
-
-#ifdef DEBUG_STDOUT
-  struct stat stdout_stat;
-  fstat(STDOUT_FILENO, &stdout_stat);
-  char *stdout_info = (char *) calloc(4096, 1);
-  sprintf(stdout_info, "stdout: pid \'%i\', path \"%s\", st_dev \'%i\', st_mode \'0x%x\', st_nlink \'%i\', st_ino \'%lli\', st_uid \'%i\', st_gid \'%i\', st_rdev \'%i\', st_size \'%lli\', st_blocks \'%lli\', st_blksize \'%i\', st_flags \'0x%x\', st_gen \'%i\'\n",
-          getpid(), stdout_path, stdout_stat.st_dev, stdout_stat.st_mode, stdout_stat.st_nlink,
-          stdout_stat.st_ino, stdout_stat.st_uid, stdout_stat.st_gid, stdout_stat.st_rdev,
-          stdout_stat.st_size, stdout_stat.st_blocks, stdout_stat.st_blksize,
-          stdout_stat.st_flags, stdout_stat.st_gen);
-
-  if (CanUseCF()) {
-    aslclient asl = asl_open(NULL, "com.apple.console", ASL_OPT_NO_REMOTE);
-    aslmsg msg = asl_new(ASL_TYPE_MSG);
-    asl_set(msg, ASL_KEY_LEVEL, "3"); // kCFLogLevelError
-    asl_set(msg, ASL_KEY_MSG, stdout_info);
-    asl_send(asl, msg);
-    asl_free(msg);
-    asl_close(asl);
-  } else {
-    if (!g_serial1_checked) {
-      g_serial1_checked = true;
-      g_serial1 =
-        open("/dev/tty.serial1", O_WRONLY | O_NONBLOCK | O_NOCTTY);
-      if (g_serial1 >= 0) {
-        g_serial1_FILE = fdopen(g_serial1, "w");
-      }
-    }
-    if (g_serial1_FILE) {
-      fputs(stdout_info, g_serial1_FILE);
     }
   }
   free(stdout_info);
@@ -882,6 +926,12 @@ loadHandler::~loadHandler()
   }
   if (g_serial1) {
     close(g_serial1);
+  }
+  if (g_virtual_serial_FILE) {
+    fclose(g_virtual_serial_FILE);
+  }
+  if (g_virtual_serial) {
+    close(g_virtual_serial);
   }
 }
 

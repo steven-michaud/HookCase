@@ -1240,6 +1240,7 @@ typedef mach_port_name_t (*ipc_port_copyout_send_t)(ipc_port_t sright,
                                                     ipc_space_t space);
 typedef ipc_space_t (*get_task_ipcspace_t)(task_t task);
 typedef ipc_port_t (*convert_thread_to_port_t)(thread_t thread);
+typedef proc_t (*proc_parent_t)(proc_t);
 typedef void (*task_coalition_ids_t)(task_t task,
                                      uint64_t ids[2 /* COALITION_NUM_TYPES */]);
 typedef coalition_t (*coalition_find_by_id_t)(uint64_t coal_id);
@@ -1280,6 +1281,7 @@ static get_threadtask_t get_threadtask = NULL;
 static ipc_port_copyout_send_t ipc_port_copyout_send = NULL;
 static get_task_ipcspace_t get_task_ipcspace = NULL;
 static convert_thread_to_port_t convert_thread_to_port = NULL;
+static proc_parent_t proc_parent = NULL;
 // Only on ElCapitan and up (begin)
 static task_coalition_ids_t task_coalition_ids = NULL;
 static coalition_find_by_id_t coalition_find_by_id = NULL;
@@ -1547,6 +1549,13 @@ bool find_kernel_private_functions()
     convert_thread_to_port = (convert_thread_to_port_t)
       kernel_dlsym("_convert_thread_to_port");
     if (!convert_thread_to_port) {
+      return false;
+    }
+  }
+  if (!proc_parent) {
+    proc_parent = (proc_parent_t)
+      kernel_dlsym("_proc_parent");
+    if (!proc_parent) {
       return false;
     }
   }
@@ -9486,7 +9495,7 @@ void do_kern_hook(x86_saved_state_t *intr_state)
   hook(intr_state, kern_hookp);
 }
 
-// Check if 'proc' (or its XPC parent) has an HC_INSERT_LIBRARY, HC_NOKIDS or
+// Check if 'proc' (or its parent) has an HC_INSERT_LIBRARY, HC_NOKIDS or
 // HC_NO_NUMERICAL_ADDRS environment variable that we should pay attention to.
 bool get_cast_info(proc_t proc, hc_path_t proc_path, hc_path_t dylib_path,
                    pid_t *hooked_parent, bool *no_numerical_addrs)
@@ -9506,7 +9515,8 @@ bool get_cast_info(proc_t proc, hc_path_t proc_path, hc_path_t dylib_path,
   vm_size_t envp_size = 0;
   void *buffer = NULL;
   vm_size_t buf_size = 0;
-  if (!get_proc_info(proc_pid(proc), &path_ptr, &envp, &envp_size,
+  pid_t current_pid = proc_pid(proc);
+  if (!get_proc_info(current_pid, &path_ptr, &envp, &envp_size,
                      &buffer, &buf_size))
   {
     return false;
@@ -9555,74 +9565,141 @@ bool get_cast_info(proc_t proc, hc_path_t proc_path, hc_path_t dylib_path,
   }
   IOFree(envp, envp_size);
   IOFree(buffer, buf_size);
+  envp = NULL;
+  buffer = NULL;
+
+  // Check our ancestors to see if we're descended from a previously
+  // hooked process, and (if so) whether or not we should inherit the values
+  // of its HookCase-specific environment variables. We used to check only
+  // one level up -- to that of our parent. But that may not be enough.
 
   bool is_child = false;
+  bool done_with_ancestors = false;
 
-  if (found_trigger_variable) {
-    pid_t normal_parent = proc_ppid(proc);
-    if ((normal_parent > 0) && (normal_parent != 1)) {
-      if (get_proc_info(normal_parent, &path_ptr,
-                        &envp, &envp_size, &buffer, &buf_size))
-      {
-        if (envp) {
-          for (i = 0; envp[i]; ++i) {
-            char *value = envp[i];
-            char *key = strsep(&value, "=");
-            if (key && value && value[0]) {
-              if (!strncmp(key, HC_INSERT_LIBRARY_ENV_VAR,
-                           strlen(HC_INSERT_LIBRARY_ENV_VAR) + 1) ||
-                  !strncmp(key, HC_NOKIDS_ENV_VAR,
-                           strlen(HC_NOKIDS_ENV_VAR) + 1) ||
-                  !strncmp(key, HC_NO_NUMERICAL_ADDRS_ENV_VAR,
-                           strlen(HC_NO_NUMERICAL_ADDRS_ENV_VAR) + 1))
-              {
-                is_child = true;
-                *hooked_parent = normal_parent;
-                break;
+  proc_t prev_proc = proc;
+  proc_t parent_proc = proc_parent(prev_proc);
+  pid_t parent_pid = proc_ppid(prev_proc);
+  pid_t first_parent_pid = parent_pid;
+  if (!parent_proc || !parent_pid) {
+    done_with_ancestors = true;
+  }
+
+  int ancestor_level;
+  for (ancestor_level = 1; !done_with_ancestors; ++ancestor_level) {
+    // "Normal" parents usually pass their environments to their children, but
+    // not always. XPC parents never do. So check both for trigger variables,
+    // to determine if the current process is the child of a hooked parent,
+    // and so if it should also be hooked.
+    bool have_parent_info = false;
+    bool have_xpc_parent_info = false;
+    if (parent_pid != 1) {
+      have_parent_info =
+        get_proc_info(parent_pid, &path_ptr,
+                      &envp, &envp_size, &buffer, &buf_size);
+    }
+
+    int tries;
+    bool done_with_parent = false;
+    for (tries = 1; (tries <= 2) && !done_with_parent; ++tries) {
+      if (found_trigger_variable) {
+        if (have_parent_info) {
+          if (envp) {
+            for (i = 0; envp[i]; ++i) {
+              char *value = envp[i];
+              char *key = strsep(&value, "=");
+              if (key && value && value[0]) {
+                if (!strncmp(key, HC_INSERT_LIBRARY_ENV_VAR,
+                             strlen(HC_INSERT_LIBRARY_ENV_VAR) + 1) ||
+                    !strncmp(key, HC_NOKIDS_ENV_VAR,
+                             strlen(HC_NOKIDS_ENV_VAR) + 1) ||
+                    !strncmp(key, HC_NO_NUMERICAL_ADDRS_ENV_VAR,
+                             strlen(HC_NO_NUMERICAL_ADDRS_ENV_VAR) + 1))
+                {
+                  is_child = true;
+                  *hooked_parent = first_parent_pid;
+                  done_with_parent = true;
+                }
               }
             }
+            IOFree(envp, envp_size);
+            envp = NULL;
           }
-          IOFree(envp, envp_size);
+          if (buffer) {
+            IOFree(buffer, buf_size);
+            buffer = NULL;
+          }
+          have_parent_info = false;
         }
-        IOFree(buffer, buf_size);
+      } else {
+        if (have_parent_info) {
+          if (envp) {
+            for (i = 0; envp[i]; ++i) {
+              char *value = envp[i];
+              char *key = strsep(&value, "=");
+              if (key && value && value[0]) {
+                if (!strncmp(key, HC_INSERT_LIBRARY_ENV_VAR,
+                             strlen(HC_INSERT_LIBRARY_ENV_VAR) + 1))
+                {
+                  strncpy(dylib_path, value, HC_PATH_SIZE);
+                  found_insert_file_variable = true;
+                  is_child = true;
+                  *hooked_parent = first_parent_pid;
+                  found_trigger_variable = true;
+                  done_with_parent = true;
+                } else if (!strncmp(key, HC_NOKIDS_ENV_VAR,
+                           strlen(HC_NOKIDS_ENV_VAR) + 1))
+                {
+                  no_kids = true;
+                  is_child = true;
+                  *hooked_parent = first_parent_pid;
+                  found_trigger_variable = true;
+                  done_with_parent = true;
+                } else if (!strncmp(key, HC_NO_NUMERICAL_ADDRS_ENV_VAR,
+                           strlen(HC_NO_NUMERICAL_ADDRS_ENV_VAR) + 1))
+                {
+                  *no_numerical_addrs = true;
+                  is_child = true;
+                  *hooked_parent = first_parent_pid;
+                  found_trigger_variable = true;
+                  done_with_parent = true;
+                }
+              }
+            }
+            IOFree(envp, envp_size);
+            envp = NULL;
+          }
+          if (buffer) {
+            IOFree(buffer, buf_size);
+            buffer = NULL;
+          }
+          have_parent_info = false;
+        }
+      }
+
+      if (!done_with_parent && !have_xpc_parent_info) {
+        parent_pid = get_xpc_parent(proc_pid(prev_proc));
+        if (parent_pid) {
+          have_xpc_parent_info =
+            get_proc_info(parent_pid, &path_ptr, &envp, &envp_size,
+                          &buffer, &buf_size);
+        }
+        if (!have_xpc_parent_info) {
+          done_with_parent = true;
+        }
+        have_parent_info = have_xpc_parent_info;
       }
     }
-  } else {
-    pid_t xpc_parent = get_xpc_parent(proc_pid(proc));
-    if (xpc_parent) {
-      if (get_proc_info(xpc_parent, &path_ptr, &envp, &envp_size,
-                        &buffer, &buf_size))
-      {
-        if (envp) {
-          for (i = 0; envp[i]; ++i) {
-            char *value = envp[i];
-            char *key = strsep(&value, "=");
-            if (key && value && value[0]) {
-              if (!strncmp(key, HC_INSERT_LIBRARY_ENV_VAR,
-                           strlen(HC_INSERT_LIBRARY_ENV_VAR) + 1))
-              {
-                strncpy(dylib_path, value, HC_PATH_SIZE);
-                found_insert_file_variable = true;
-                is_child = true;
-                *hooked_parent = xpc_parent;
-              } else if (!strncmp(key, HC_NOKIDS_ENV_VAR,
-                         strlen(HC_NOKIDS_ENV_VAR) + 1))
-              {
-                no_kids = true;
-                is_child = true;
-                *hooked_parent = xpc_parent;
-              } else if (!strncmp(key, HC_NO_NUMERICAL_ADDRS_ENV_VAR,
-                         strlen(HC_NO_NUMERICAL_ADDRS_ENV_VAR) + 1))
-              {
-                *no_numerical_addrs = true;
-                is_child = true;
-                *hooked_parent = xpc_parent;
-              }
-            }
-          }
-          IOFree(envp, envp_size);
-        }
-        IOFree(buffer, buf_size);
+
+    if (found_trigger_variable) {
+      proc_rele(parent_proc);
+      done_with_ancestors = true;
+    } else {
+      prev_proc = parent_proc;
+      parent_proc = proc_parent(prev_proc);
+      parent_pid = proc_ppid(prev_proc);
+      proc_rele(prev_proc);
+      if (!parent_proc || !parent_pid) {
+        done_with_ancestors = true;
       }
     }
   }

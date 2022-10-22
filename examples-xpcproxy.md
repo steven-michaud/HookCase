@@ -19,7 +19,10 @@ Once the hook library is built, you should use it with an application
 a Terminal session.  Note that all the logging will go to the Console
 app, which on macOS 10.12 (Sierra) and above needs to be running
 before you do the following.  Use "xpcproxy" to filter the Console
-app's output.
+app's output. Alternatively, you can use `serialportlogger` from
+[PySerialPortLogger](https://github.com/steven-michaud/PySerialPortLogger)
+and
+[define VIRTUAL_SERIAL_PORT in the hook library](Examples/xpcproxy/hook.mm#L278).
 
         HC_INSERT_LIBRARY=/full/path/to/hook.dylib open /Applications/Safari.app
 

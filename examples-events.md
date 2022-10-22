@@ -46,8 +46,13 @@ above.
 
 Do the following (with various applications) to see the events hook
 library in action.  As always, on OS X 10.12 (Sierra) and above you'll
-want to run the Console app before starting.  Filter on "events".
-Most output should be visible in the Terminal window, though.
+want to run the Console app before starting. Filter on
+"events". Alternatively, you can use `serialportlogger` from
+[PySerialPortLogger](https://github.com/steven-michaud/PySerialPortLogger)
+and
+[define VIRTUAL_SERIAL_PORT in the hook library](Examples/events/hook.mm#L274).
+Most output should be visible in the Terminal window from which you
+run the main application's main process, though.
 
         HC_INSERT_LIBRARY=/full/path/to/hook.dylib /Applications/Safari.app/Contents/MacOS/Safari
 
