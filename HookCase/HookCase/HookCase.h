@@ -535,6 +535,43 @@ typedef struct cpu_data_fake_bigsur
   addr64_t cpu_excstack;                // Offset 0x168, cd_estack
 } cpu_data_fake_bigsur_t;
 
+// With KPTI support as implemented on macOS 13 Ventura.
+typedef struct cpu_data_fake_ventura
+{
+  void *cpu_this;                       // Pointer to myself (offset 0x0)
+  uint64_t pad1[1];
+  thread_t cpu_active_thread;           // Offset 0x10
+  thread_t cpu_nthread;                 // Offset 0x18
+  int cpu_number;                       // Logical CPU (offset 0x20)
+  x86_saved_state_t *cpu_int_state;     // Interrupt state (offset 0x28)
+  /* A stack's "top" is where it grows or shrinks with each push or pop */
+  vm_offset_t cpu_active_stack;         // Kernel stack base (offset 0x30)
+  vm_offset_t cpu_kernel_stack;         // Kernel stack top (offset 0x38)
+  vm_offset_t cpu_int_stack_top;        // Offset 0x40
+  uint64_t pad2[15];
+  volatile addr64_t cpu_active_cr3 __attribute((aligned(64))); // Offset 0xc0
+  union {                               // Offset 0xc8
+    volatile uint32_t cpu_tlb_invalid;
+    struct {
+      volatile uint16_t cpu_tlb_invalid_local;
+      volatile uint16_t cpu_tlb_invalid_global;
+    };
+  };
+  __uint128_t cpu_invpcid_target;       // Offset 0xd0, cpu_ip_desc
+  volatile task_map_t cpu_task_map;     // Offset 0xe0
+  volatile uint64_t cpu_task_cr3;       // Offset 0xe8
+  addr64_t cpu_kernel_cr3;              // Offset 0xf0
+  // User-mode (per-task) CR3 with kernel unmapped
+  volatile addr64_t cpu_user_cr3;       // Offset 0xf8, cpu_ucr3
+  // User-mode (per-task) CR3 with kernel mapped in
+  volatile addr64_t cpu_shadowtask_cr3; // Offset 0x100
+  boolean_t cpu_pagezero_mapped;        // Offset 0x108
+  addr64_t cpu_uber_isf;                // Offset 0x110
+  uint64_t cpu_uber_tmp;                // Offset 0x118
+  addr64_t cpu_uber_user_gs_base;       // Offset 0x120
+  addr64_t cpu_excstack;                // Offset 0x128, cd_estack
+} cpu_data_fake_ventura_t;
+
 #define CPU_DATA_GET_FUNC_BODY(object,member,type) \
   type ret;                                        \
   __asm__ volatile ("mov %%gs:%P1,%0"              \
@@ -545,10 +582,13 @@ typedef struct cpu_data_fake_bigsur
 bool macOS_Catalina_5_or_greater();
 bool macOS_BigSur();
 bool macOS_Monterey();
+bool macOS_Ventura();
 
 static inline int get_cpu_number(void)
 {
-  if (macOS_BigSur() || macOS_Monterey()) {
+  if (macOS_Ventura()) {
+    CPU_DATA_GET_FUNC_BODY(cpu_data_fake_ventura_t,cpu_number,int)
+  } else if (macOS_BigSur() || macOS_Monterey()) {
     CPU_DATA_GET_FUNC_BODY(cpu_data_fake_bigsur_t,cpu_number,int)
   } else if (macOS_Catalina_5_or_greater()) {
     CPU_DATA_GET_FUNC_BODY(cpu_data_fake_catalina_t,cpu_number,int)

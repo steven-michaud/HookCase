@@ -121,6 +121,7 @@ void Initialize_CF_If_Needed()
 #define MAC_OS_X_VERSION_10_15_HEX 0x00000AF0
 #define MAC_OS_X_VERSION_11_00_HEX 0x00000B00
 #define MAC_OS_X_VERSION_12_00_HEX 0x00000C00
+#define MAC_OS_X_VERSION_13_00_HEX 0x00000D00
 
 char gOSVersionString[PATH_MAX] = {0};
 
@@ -216,6 +217,11 @@ bool macOS_Monterey()
   return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_12_00_HEX);
 }
 
+bool macOS_Ventura()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_13_00_HEX);
+}
+
 class nsAutoreleasePool {
 public:
     nsAutoreleasePool()
@@ -284,9 +290,6 @@ FILE *g_serial1_FILE = NULL;
 // with https://github.com/steven-michaud/PySerialPortLogger. Install it and
 // run 'serialportlogger'. Observe the name of its virtual serial port, make
 // the definition of VIRTUAL_SERIAL_PORT match it, then uncomment it.
-//
-// For unknown reasons, opening VIRTUAL_SERIAL_PORT sometimes fails with
-// EPERM. So when that happens we must fall back to older methods.
 //#define VIRTUAL_SERIAL_PORT "/dev/ttys003"
 bool g_virtual_serial_checked = false;
 int g_virtual_serial = -1;
