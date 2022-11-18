@@ -1,6 +1,6 @@
 // The MIT License (MIT)
 //
-// Copyright (c) 2019 Steven Michaud
+// Copyright (c) 2022 Steven Michaud
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -61,6 +61,7 @@ extern "C" {
 #include <mach/vm_map.h>
 #include <libgen.h>
 #include <execinfo.h>
+#include <termios.h>
 
 #include <xpc/xpc.h>
 
@@ -78,6 +79,10 @@ void basic_init()
   if (!sGlobalInitDone) {
     gMainThreadID = pthread_self();
     sGlobalInitDone = true;
+    // Needed for LogWithFormat() to work properly both before and after the
+    // CoreFoundation framework is initialized.
+    tzset();
+    tzsetwall();
   }
 }
 
@@ -99,6 +104,13 @@ bool CanUseCF()
   return sCFInitialized;
 }
 
+void Initialize_CF_If_Needed()
+{
+  if (!sCFInitialized && __CFInitialize_caller) {
+    Hooked___CFInitialize();
+  }
+}
+
 #define MAC_OS_X_VERSION_10_9_HEX  0x00000A90
 #define MAC_OS_X_VERSION_10_10_HEX 0x00000AA0
 #define MAC_OS_X_VERSION_10_11_HEX 0x00000AB0
@@ -106,6 +118,9 @@ bool CanUseCF()
 #define MAC_OS_X_VERSION_10_13_HEX 0x00000AD0
 #define MAC_OS_X_VERSION_10_14_HEX 0x00000AE0
 #define MAC_OS_X_VERSION_10_15_HEX 0x00000AF0
+#define MAC_OS_X_VERSION_11_00_HEX 0x00000B00
+#define MAC_OS_X_VERSION_12_00_HEX 0x00000C00
+#define MAC_OS_X_VERSION_13_00_HEX 0x00000D00
 
 char gOSVersionString[PATH_MAX] = {0};
 
@@ -191,6 +206,21 @@ bool macOS_Catalina()
   return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_10_15_HEX);
 }
 
+bool macOS_BigSur()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_11_00_HEX);
+}
+
+bool macOS_Monterey()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_12_00_HEX);
+}
+
+bool macOS_Ventura()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_13_00_HEX);
+}
+
 class nsAutoreleasePool {
 public:
     nsAutoreleasePool()
@@ -212,9 +242,13 @@ typedef struct _CSTypeRef {
 
 static CSTypeRef initializer = {0};
 
+#define STACK_MAX 256
+typedef uint64_t callstack_t[STACK_MAX];
+
 const char *GetOwnerName(void *address, CSTypeRef owner = initializer);
 const char *GetAddressString(void *address, CSTypeRef owner = initializer);
 void PrintAddress(void *address, CSTypeRef symbolicator = initializer);
+void PrintCallstack(callstack_t callstack);
 void PrintStackTrace();
 BOOL SwizzleMethods(Class aClass, SEL orgMethod, SEL posedMethod, BOOL classMethods);
 
@@ -233,6 +267,50 @@ static void GetThreadName(char *name, size_t size)
   pthread_getname_np(pthread_self(), name, size);
 }
 
+// It's sometimes useful to find out whether a hook is currently running
+// (on the current thread), or if it's been re-entered (and how many times
+// it's been re-entered). The following macro offers a safe, comprehensive
+// way to do this.
+
+#define GET_SET_IN_FUNCS(name)                       \
+pthread_key_t s_in_##name;                           \
+int32_t s_in_##name##_initialized = 0;               \
+bool get_in_##name()                                 \
+{                                                    \
+  if (!s_in_##name##_initialized) {                  \
+    OSAtomicIncrement32(&s_in_##name##_initialized); \
+    pthread_key_create(&s_in_##name, NULL);          \
+  }                                                  \
+  long value = (long)                                \
+    pthread_getspecific(s_in_##name);                \
+  return (value > 0);                                \
+}                                                    \
+long get_in_##name##_count()                         \
+{                                                    \
+  if (!s_in_##name##_initialized) {                  \
+    OSAtomicIncrement32(&s_in_##name##_initialized); \
+    pthread_key_create(&s_in_##name, NULL);          \
+  }                                                  \
+  return (long) pthread_getspecific(s_in_##name);    \
+}                                                    \
+void set_in_##name(bool flag)                        \
+{                                                    \
+  if (!s_in_##name##_initialized) {                  \
+    OSAtomicIncrement32(&s_in_##name##_initialized); \
+    pthread_key_create(&s_in_##name, NULL);          \
+  }                                                  \
+  long value = (long)                                \
+    pthread_getspecific(s_in_##name);                \
+  if (flag) {                                        \
+    ++value;                                         \
+  } else {                                           \
+    --value;                                         \
+  }                                                  \
+  pthread_setspecific(s_in_##name, (void *) value);  \
+}
+
+GET_SET_IN_FUNCS(LogWithFormatV)
+
 // Though Macs haven't included a serial port for ages, macOS and OSX still
 // support them.  Many kinds of VM software allow you to add a serial port to
 // their virtual machines.  When you do this, /dev/tty.serial1 and
@@ -250,6 +328,73 @@ bool g_serial1_checked = false;
 int g_serial1 = -1;
 FILE *g_serial1_FILE = NULL;
 
+// It's always been difficult to log output from hook libraries -- especially
+// from secondary processes. STDOUT and STDERR are often redirected to
+// /dev/null. And sometimes Apple even blocks system log output. As mentioned
+// above, a hardware serial port can be used for output. But it's tricky to
+// use if you're not running macOS in a VM. It's easier to create a virtual
+// serial port inside macOS and use that for logging output. You can do this
+// with https://github.com/steven-michaud/PySerialPortLogger. Install it and
+// run 'serialportlogger'. Observe the name of its virtual serial port, make
+// the definition of VIRTUAL_SERIAL_PORT match it, then uncomment it. If
+// you're loading your hook library from the command line, it's also possible
+// to redirect logging output (all of it) to your current Terminal session.
+// Run the "tty" command in it to find its tty name.
+//#define VIRTUAL_SERIAL_PORT "/dev/ttys003"
+bool g_virtual_serial_checked = false;
+int g_virtual_serial = -1;
+FILE *g_virtual_serial_FILE = NULL;
+
+// TTY pipes are *very* finicky. They don't like it when you write too much
+// data all at once, or perform sequences of writes too quickly. Doing either
+// will make fputs() return EAGAIN ("Resource temporarily unavailable"). To
+// avoid this, we break our data into reasonable sized chunks, and do
+// tcdrain() after each call to fputs(), to wait until each chunk of data has
+// been written to the TTY. _PC_PIPE_BUF is the maximum number of bytes that
+// can be written atomically to our TTY pipe. Note that breaking up a UTF-8
+// string like this can make parts of it invalid. The software that implements
+// our virtual serial port needs to suppress formatting errors to avoid
+// trouble from this.
+void tty_fputs(const char *s, FILE *stream)
+{
+  if (!s || !stream) {
+    return;
+  }
+
+  long pipe_max = fpathconf(fileno(stream), _PC_PIPE_BUF);
+  if (pipe_max == -1) {
+    return;
+  }
+  char *block = (char *) malloc(pipe_max + 1);
+  if (!block) {
+    return;
+  }
+
+  size_t total_length = strlen(s);
+  size_t to_do = pipe_max;
+  if (to_do > total_length) {
+    to_do = total_length;
+  }
+  for (size_t done = 0; done < total_length; done += to_do) {
+    if (to_do > total_length - done) {
+      to_do = total_length - done;
+    }
+    bzero(block, pipe_max + 1);
+    strncpy(block, s + done, to_do);
+    int rv = fputs(block, stream);
+    if (rv == EOF) {
+      break;
+    }
+    tcdrain(fileno(stream));
+  }
+
+  free(block);
+}
+
+#ifdef DEBUG_VIRTUAL_SERIAL_PORT
+static void LogWithFormat(bool decorate, const char *format, ...);
+#endif
+
 static void LogWithFormatV(bool decorate, const char *format, va_list args)
 {
   MaybeGetProcPath();
@@ -258,26 +403,32 @@ static void LogWithFormatV(bool decorate, const char *format, va_list args)
     return;
   }
 
+  set_in_LogWithFormatV(true);
+
   char *message;
+  long message_length;
   if (CanUseCF()) {
     CFStringRef formatCFSTR =
       CFStringCreateWithCString(kCFAllocatorDefault, format,
-                                kCFStringEncodingUTF8);
+                                kCFStringEncodingMacRoman);
     CFStringRef messageCFSTR =
       CFStringCreateWithFormatAndArguments(kCFAllocatorDefault, NULL,
                                            formatCFSTR, args);
     CFRelease(formatCFSTR);
-    int length =
+    message_length =
       CFStringGetMaximumSizeForEncoding(CFStringGetLength(messageCFSTR),
-                                        kCFStringEncodingUTF8);
-    message = (char *) calloc(length + 1, 1);
-    CFStringGetCString(messageCFSTR, message, length, kCFStringEncodingUTF8);
+                                        kCFStringEncodingMacRoman);
+    message = (char *) calloc(message_length + 1, 1);
+    CFStringGetBytes(messageCFSTR, CFRangeMake(0, message_length),
+                     kCFStringEncodingMacRoman, '?', true,
+                     (unsigned char *) message, message_length, NULL);
     CFRelease(messageCFSTR);
   } else {
     vasprintf(&message, format, args);
+    message_length = strlen(message);
   }
 
-  char *finished = (char *) calloc(strlen(message) + 1024, 1);
+  char *finished = (char *) calloc(message_length + 1024, 1);
   char timestamp[30] = {0};
   if (CanUseCF()) {
     const time_t currentTime = time(NULL);
@@ -301,15 +452,72 @@ static void LogWithFormatV(bool decorate, const char *format, va_list args)
 
   char stdout_path[PATH_MAX] = {0};
   fcntl(STDOUT_FILENO, F_GETPATH, stdout_path);
+#ifdef VIRTUAL_SERIAL_PORT
+  if (!g_virtual_serial_checked) {
+    g_virtual_serial_checked = true;
+    g_virtual_serial =
+      open(VIRTUAL_SERIAL_PORT, O_WRONLY | O_NONBLOCK | O_NOCTTY);
+    if (g_virtual_serial >= 0) {
+      g_virtual_serial_FILE = fdopen(g_virtual_serial, "w");
+    }
+#ifdef DEBUG_VIRTUAL_SERIAL_PORT
+    if (!g_virtual_serial_FILE) {
+      LogWithFormat(true, "Hook.mm: g_virtual_serial %i, g_virtual_serial_FILE %p, errno %i, stdout_path %s",
+             g_virtual_serial, g_virtual_serial_FILE, errno, stdout_path);
+    }
+#endif
+  }
+#endif
+  if (g_virtual_serial_FILE) {
+    tty_fputs(finished, g_virtual_serial_FILE);
+  } else {
+    if (!strcmp("/dev/console", stdout_path) ||
+        !strcmp("/dev/null", stdout_path))
+    {
+      if (CanUseCF()) {
+        aslclient asl = asl_open(NULL, "com.apple.console", ASL_OPT_NO_REMOTE);
+        aslmsg msg = asl_new(ASL_TYPE_MSG);
+        asl_set(msg, ASL_KEY_LEVEL, "3"); // kCFLogLevelError
+        asl_set(msg, ASL_KEY_MSG, finished);
+        asl_send(asl, msg);
+        asl_free(msg);
+        asl_close(asl);
+      } else {
+        if (!g_serial1_checked) {
+          g_serial1_checked = true;
+          g_serial1 =
+            open("/dev/tty.serial1", O_WRONLY | O_NONBLOCK | O_NOCTTY);
+          if (g_serial1 >= 0) {
+            g_serial1_FILE = fdopen(g_serial1, "w");
+          }
+        }
+        if (g_serial1_FILE) {
+          fputs(finished, g_serial1_FILE);
+        }
+      }
+    } else {
+      fputs(finished, stdout);
+    }
+  }
 
-  if (!strcmp("/dev/console", stdout_path) ||
-      !strcmp("/dev/null", stdout_path))
-  {
+#ifdef DEBUG_STDOUT
+  struct stat stdout_stat;
+  fstat(STDOUT_FILENO, &stdout_stat);
+  char *stdout_info = (char *) calloc(4096, 1);
+  sprintf(stdout_info, "stdout: pid \'%i\', path \"%s\", st_dev \'%i\', st_mode \'0x%x\', st_nlink \'%i\', st_ino \'%lli\', st_uid \'%i\', st_gid \'%i\', st_rdev \'%i\', st_size \'%lli\', st_blocks \'%lli\', st_blksize \'%i\', st_flags \'0x%x\', st_gen \'%i\'\n",
+          getpid(), stdout_path, stdout_stat.st_dev, stdout_stat.st_mode, stdout_stat.st_nlink,
+          stdout_stat.st_ino, stdout_stat.st_uid, stdout_stat.st_gid, stdout_stat.st_rdev,
+          stdout_stat.st_size, stdout_stat.st_blocks, stdout_stat.st_blksize,
+          stdout_stat.st_flags, stdout_stat.st_gen);
+
+  if (g_virtual_serial_FILE) {
+    fputs(finished, g_virtual_serial_FILE);
+  } else {
     if (CanUseCF()) {
       aslclient asl = asl_open(NULL, "com.apple.console", ASL_OPT_NO_REMOTE);
       aslmsg msg = asl_new(ASL_TYPE_MSG);
       asl_set(msg, ASL_KEY_LEVEL, "3"); // kCFLogLevelError
-      asl_set(msg, ASL_KEY_MSG, finished);
+      asl_set(msg, ASL_KEY_MSG, stdout_info);
       asl_send(asl, msg);
       asl_free(msg);
       asl_close(asl);
@@ -323,48 +531,15 @@ static void LogWithFormatV(bool decorate, const char *format, va_list args)
         }
       }
       if (g_serial1_FILE) {
-        fputs(finished, g_serial1_FILE);
+        fputs(stdout_info, g_serial1_FILE);
       }
-    }
-  } else {
-    fputs(finished, stdout);
-  }
-
-#ifdef DEBUG_STDOUT
-  struct stat stdout_stat;
-  fstat(STDOUT_FILENO, &stdout_stat);
-  char *stdout_info = (char *) calloc(4096, 1);
-  sprintf(stdout_info, "stdout: pid \'%i\', path \"%s\", st_dev \'%i\', st_mode \'0x%x\', st_nlink \'%i\', st_ino \'%lli\', st_uid \'%i\', st_gid \'%i\', st_rdev \'%i\', st_size \'%lli\', st_blocks \'%lli\', st_blksize \'%i\', st_flags \'0x%x\', st_gen \'%i\'\n",
-          getpid(), stdout_path, stdout_stat.st_dev, stdout_stat.st_mode, stdout_stat.st_nlink,
-          stdout_stat.st_ino, stdout_stat.st_uid, stdout_stat.st_gid, stdout_stat.st_rdev,
-          stdout_stat.st_size, stdout_stat.st_blocks, stdout_stat.st_blksize,
-          stdout_stat.st_flags, stdout_stat.st_gen);
-
-  if (CanUseCF()) {
-    aslclient asl = asl_open(NULL, "com.apple.console", ASL_OPT_NO_REMOTE);
-    aslmsg msg = asl_new(ASL_TYPE_MSG);
-    asl_set(msg, ASL_KEY_LEVEL, "3"); // kCFLogLevelError
-    asl_set(msg, ASL_KEY_MSG, stdout_info);
-    asl_send(asl, msg);
-    asl_free(msg);
-    asl_close(asl);
-  } else {
-    if (!g_serial1_checked) {
-      g_serial1_checked = true;
-      g_serial1 =
-        open("/dev/tty.serial1", O_WRONLY | O_NONBLOCK | O_NOCTTY);
-      if (g_serial1 >= 0) {
-        g_serial1_FILE = fdopen(g_serial1, "w");
-      }
-    }
-    if (g_serial1_FILE) {
-      fputs(stdout_info, g_serial1_FILE);
     }
   }
   free(stdout_info);
 #endif
 
   free(finished);
+  set_in_LogWithFormatV(false);
 }
 
 static void LogWithFormat(bool decorate, const char *format, ...)
@@ -373,6 +548,76 @@ static void LogWithFormat(bool decorate, const char *format, ...)
   va_start(args, format);
   LogWithFormatV(decorate, format, args);
   va_end(args);
+}
+
+// The hook for __CFGetConverter() works around a bug or design flaw in the
+// CoreFoundation framework's CFStringCreateWithFormatAndArguments() function,
+// called from LogWithFormatV(): It always uses the string encoding associated
+// with the "preferred language" setting (misleadingly called the "system
+// encoding").
+//
+// For languages that use Latin scripts the "system encoding" is
+// kCFStringEncodingMacRoman, which is appropriate for use in
+// LogWithFormatV(): It can handle strings that combine characters from many
+// different encodings (like Roman letters and Chinese characters). It's also
+// the encoding used by macOS itself at the most basic level (the
+// LC_C_LOCALE). But if your "preferred language" doesn't use a Latin script
+// (for example Chinese or Japanese) the "system encoding" is one specifically
+// associated with that language. It generally doesn't allow you to combine
+// characters from different encoding systems in a single string. If you try,
+// it replaces unrecognized characters with "?", or sometimes refuses to
+// process it at all. This happens in CFStringCreateWithFormatAndArguments()
+// when, for example, your "preferred language" is Russian, Greek,
+// "Traditional Chinese" or "Simplified Chinese", and one of the arguments is
+// a string that combines Roman letters and Chinese characters.
+//
+// Many CoreFoundation string functions allow you to specify the string
+// encoding -- for example CFStringCreateWithCString() and CFStringGetBytes().
+// CFStringCreateWithFormatAndArguments() really should, too. But for as long
+// as it doesn't, we can use the following hook to force it to use
+// kCFStringEncodingMacRoman when called from LogWithFormatV().
+//
+// This workaround isn't available for 32-bit hook libraries. This is because
+// __CFGetConverter() uses the "fastcc" calling convention in 32-bit system
+// libraries, which isn't supported by any compiler. It *is* supported in
+// LLVM intermediate language, but frankly it's not worth the trouble to use
+// that here.
+
+//#define DEBUG_GET_CONVERTER 1
+
+#ifdef DEBUG_GET_CONVERTER
+GET_SET_IN_FUNCS(__CFGetConverter)
+#endif
+
+void *(*__CFGetConverter_caller)(uint32_t encoding) = NULL;
+
+void *Hooked___CFGetConverter(uint32_t encoding)
+{
+#ifdef DEBUG_GET_CONVERTER
+  set_in___CFGetConverter(true);
+#endif
+
+  if (get_in_LogWithFormatV()) {
+    encoding = kCFStringEncodingMacRoman;
+  }
+
+  void *retval = __CFGetConverter_caller(encoding);
+
+#ifdef DEBUG_GET_CONVERTER
+  // The call to LogWithFormat() below can cause this function to be re-entered.
+  if (get_in___CFGetConverter_count() == 1) {
+    if (get_in_LogWithFormatV()) {
+      LogWithFormat(true, "Hook.mm: __CFGetConverter(): encoding %u, returning %p",
+                    encoding, retval);
+      //PrintStackTrace();
+    }
+  }
+#endif
+
+#ifdef DEBUG_GET_CONVERTER
+  set_in___CFGetConverter(false);
+#endif
+  return retval;
 }
 
 extern "C" void hooklib_LogWithFormatV(bool decorate, const char *format, va_list args)
@@ -512,9 +757,74 @@ void GetModuleHeaderAndSlide(const char *moduleName,
         strncpy(moduleName_local, moduleName, sizeof(moduleName_local));
       }
       close(fd);
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 110000
     } else {
       strncpy(moduleName_local, moduleName, sizeof(moduleName_local));
     }
+#else // __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 110000
+    // On macOS 11 (Big Sur), open() generally doesn't work on moduleName,
+    // because it generally isn't in the file system (only in the dyld shared
+    // cache). As best I can tell, there's no general workaround for this
+    // design flaw. But because all (or almost all) frameworks have a
+    // 'Resources' soft link in the same directory where there used to be a
+    // soft link to the framework binary, we can hack together a workaround
+    // for frameworks.
+    } else {
+      char holder[PATH_MAX];
+      strncpy(holder, moduleName, sizeof(holder));
+      size_t fixed_to = 0;
+      bool done = false;
+
+      while (!done) {
+        char proxy_path[PATH_MAX];
+        strncpy(proxy_path, holder, sizeof(proxy_path));
+        const char *subpath_tag = ".framework/";
+        char *subpath_ptr =
+          strnstr(proxy_path + fixed_to,
+                  subpath_tag, sizeof(proxy_path) - fixed_to);
+
+        if (subpath_ptr) {
+          subpath_ptr += strlen(subpath_tag);
+          char subpath[PATH_MAX];
+          strncpy(subpath, subpath_ptr, sizeof(subpath));
+          subpath_ptr[0] = 0;
+
+          const char *proxy_name = "Resources";
+          size_t proxy_name_len = strlen(proxy_name);
+          strncat(proxy_path, proxy_name,
+                  sizeof(proxy_path) - strlen(proxy_path) - 1);
+
+          fd = open(proxy_path, O_RDONLY);
+          if (fd > 0) {
+            if (fcntl(fd, F_GETPATH, holder) != -1) {
+              fixed_to = strlen(holder) - proxy_name_len;
+              holder[fixed_to] = 0;
+              strncat(holder, subpath, sizeof(holder) - fixed_to);
+
+              const char *frameworks_tag = "Frameworks";
+              if (strncmp(holder + fixed_to, frameworks_tag,
+                          strlen(frameworks_tag)) != 0)
+              {
+                strncpy(moduleName_local, holder, sizeof(moduleName_local));
+                done = true;
+              }
+            } else {
+              done = true;
+            }
+            close(fd);
+          } else {
+            done = true;
+          }
+        } else {
+          done = true;
+        }
+      }
+
+      if (!moduleName_local[0]) {
+        strncpy(moduleName_local, moduleName, sizeof(moduleName_local));
+      }
+    }
+#endif // __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 110000
   }
 
   for (uint32_t i = 0; i < _dyld_image_count(); ++i) {
@@ -772,6 +1082,49 @@ void *get_dynamic_caller(void *hook)
   return retval;
 }
 
+// Information collected by user_trap_hook() in HookCase.kext when a
+// watchpoint is hit, then passed back to user mode when config_watcher() is
+// called to unset the watchpoint (with 'set' == false).
+typedef struct _watcher_info {
+  // Stack trace of the code running when the watchpoint is hit.
+  callstack_t callstack;
+  // Exact address hit (inside the watchpoint's address range).
+  uint64_t hit;
+  // User-land equivalent of the thread (kernel-mode thread_t object) running
+  // when the watchpoint is hit. Use pthread_from_mach_thread_np() to convert
+  // it to a pthread object.
+  uint32_t mach_thread;
+  // Needed to make structure size the same in 64bit and 32bit modes.
+  uint32_t pad;
+} watcher_info_t;
+
+// (Re)set or unset a watchpoint on a range of memory. A watchpoint is "hit"
+// whenever something tries to write anywhere in its address range. When this
+// happens, information on it is collected in a watcher_info_t structure. This
+// includes a stack trace of the code running when the watchpoint was hit.
+// This information is passed back to user-land when config_watcher() is
+// called to unset the watchpoint (with 'set' == false). Watchpoints are
+// implemented by (temporarily) changing memory access permissions to prevent
+// writes. Writing to a watchpoint triggers a fault, which ends up being
+// processed in HookCase.kext's user_trap_hook(). user_trap_hook() restores
+// the original access permissions, records the requisite information, and
+// saves it to a watcher_info_t structure. Memory access permissions are for
+// a "page" of memory (usually 4096 bytes long). So calling config_watcher()
+// to set a "watchpoint" on a particular memory address actually ends up
+// setting a "watch range" on a particular page (block) of memory. To avoid
+// confusion, it's best to set watchpoints only in buffers that are page-
+// aligned.
+
+bool config_watcher(void *watchpoint, watcher_info_t *info, bool set)
+{
+  bool retval;
+  __asm__ volatile("int %0" :: "N" (0x35));
+  __asm__ volatile("movb %%al, %0" : "=r" (retval));
+  return retval;
+}
+
+Class ASBContainerClass = NULL;
+
 class loadHandler
 {
 public:
@@ -782,10 +1135,17 @@ public:
 loadHandler::loadHandler()
 {
   basic_init();
+  Initialize_CF_If_Needed();
 #if (0)
   LogWithFormat(true, "Hook.mm: loadHandler()");
   PrintStackTrace();
 #endif
+
+  ASBContainerClass = ::NSClassFromString(@"ASBContainer");
+  SwizzleMethods(ASBContainerClass,
+                 @selector(sandboxProfileDataValidationInfo),
+                 @selector(ASBContainer_sandboxProfileDataValidationInfo),
+                 NO);
 }
 
 loadHandler::~loadHandler()
@@ -795,6 +1155,12 @@ loadHandler::~loadHandler()
   }
   if (g_serial1) {
     close(g_serial1);
+  }
+  if (g_virtual_serial_FILE) {
+    fclose(g_virtual_serial_FILE);
+  }
+  if (g_virtual_serial) {
+    close(g_virtual_serial);
   }
 }
 
@@ -815,6 +1181,14 @@ static void InitSwizzling()
     SwizzleMethods(ExampleClass, @selector(doSomethingWith:),
                    @selector(Example_doSomethingWith:), NO);
 #endif
+
+    if (!ASBContainerClass) {
+      ASBContainerClass = ::NSClassFromString(@"ASBContainer");
+      SwizzleMethods(ASBContainerClass,
+                     @selector(sandboxProfileDataValidationInfo),
+                     @selector(ASBContainer_sandboxProfileDataValidationInfo),
+                     NO);
+    }
   }
 }
 
@@ -886,6 +1260,50 @@ static int Hooked_sub_123abc(char *arg)
   return retval;
 }
 
+// An example of setting a watchpoint at a particular memory address (actually
+// an address range), then unsetting it to collect information on whatever
+// code (if any) triggered the watchpoint (by writing to its address range).
+// Watchpoints are hit at most once between each pair of calls to
+// config_watcher(true) and config_watcher(false). If a watchpoint has been
+// triggered, it is already unset by the time config_watcher(false) is called
+// (and we collect information on it). To find the next hit one must hook the
+// method that triggered the first one, then set another watchpoint inside its
+// hook. This example is quite trivial -- it sets a watchpoint and also
+// triggers it. A more useful one would set a watchpoint to find out what
+// other code can trigger it.
+watcher_info_t s_watcher_info = {0};
+
+int (*watcher_example_caller)(char *arg) = NULL;
+
+static int Hooked_watcher_example(char *arg)
+{
+  int retval = watcher_example_caller(arg);
+  unsigned char *pages = (unsigned char *) valloc(PAGE_SIZE);
+  if (pages) {
+    bzero(pages, PAGE_SIZE);
+    void *watchpoint = pages;
+    if (config_watcher(watchpoint, &s_watcher_info, true)) {
+      pages[0] = 1;
+      config_watcher(watchpoint, &s_watcher_info, false);
+      if (s_watcher_info.hit) {
+        pthread_t thread =
+          pthread_from_mach_thread_np(s_watcher_info.mach_thread);
+        char thread_name[PROC_PIDPATHINFO_MAXSIZE] = {0};
+        if (thread) {
+          pthread_getname_np(thread, thread_name, sizeof(thread_name) - 1);
+        }
+        LogWithFormat(true, "Hook.mm: watcher_example(): arg \"%s\", returning \'%i\', pages[0] \'0x%x\', watchpoint \'%p\', hit \'0x%llx\', thread %s[%p], mach_thread \'0x%x\'\n",
+                      arg, retval, pages[0], watchpoint, s_watcher_info.hit, thread_name, thread, s_watcher_info.mach_thread);
+        PrintCallstack(s_watcher_info.callstack);
+      }
+    }
+    free(pages);
+  }
+  // Not always required, but using it when not required does no harm.
+  reset_hook(reinterpret_cast<void*>(Hooked_watcher_example));
+  return retval;
+}
+
 extern "C" int interpose_example(char *arg1, int (*arg2)(char *));
 
 static int Hooked_interpose_example(char *arg1, int (*arg2)(char *))
@@ -928,34 +1346,38 @@ char *get_data_as_string(const void *data, size_t length)
   if (!data || !length) {
     return NULL;
   }
-  char *retval = (char *) calloc((2 * length) + 1, 1);
+  size_t buffer_remaining = (4 * length);
+  char *retval = (char *) calloc(buffer_remaining + 1, 1);
   if (!retval) {
     return NULL;
   }
   for (int i = 0; i < length; ++i) {
     const unsigned char item = ((const unsigned char *)data)[i];
     char item_string[5] = {0};
-    if ((item >= 0x20) && (item <= 0x7e)) {
-      item_string[0] = item;
+    if (i % 32 == 31) {
+      snprintf(item_string, sizeof(item_string), "%02X|\n", item);
+    } else if (i % 8 == 7) {
+      snprintf(item_string, sizeof(item_string), "%02X|", item);
     } else {
-      snprintf(item_string, sizeof(item_string), "%02x", item);
+      snprintf(item_string, sizeof(item_string), "%02X:", item);
     }
-    strncat(retval, item_string, length);
+    strncat(retval, item_string, buffer_remaining);
+    buffer_remaining -= strlen(item_string);
   }
   return retval;
 }
 
+// Used both client-side and server-side
+
 // xpc_copy_entitlements_for_pid() is called from libsystem_secinit.dylib's
 // _libsecinit_setup_secinitd_client(), which is in turn called (indirectly)
-// from libSystem.dylib's libSystem_initializer().  So it's called (once) by
-// every application.  Nothing more happens if xpc_copy_entitlements_for_pid()
+// from libSystem.dylib's libSystem_initializer(). So it's called (once) by
+// every application. Nothing more happens if xpc_copy_entitlements_for_pid()
 // returns NULL, or if the entitlements it returns don't turn on the app
-// sandbox.  But otherwise the app sends its entitlements to secinitd to get
-// them compiled (for which see below), and uses the results to start up the
-// app sandbox.  (On Catalina the method called is
-// xpc_copy_entitlements_for_self().)
-
-extern "C" xpc_object_t xpc_create_from_plist(const void *ptr, size_t len);
+// sandbox. But otherwise the app sends its entitlements to secinitd (or in
+// secinitd's own case to some other daemon) to get them compiled (for which
+// see below), and uses the results to start up the app sandbox. (On Catalina
+// and above the method called is xpc_copy_entitlements_for_self().)
 
 extern "C" xpc_object_t xpc_copy_entitlements_for_pid(pid_t pid);
 
@@ -981,12 +1403,13 @@ static xpc_object_t Hooked_xpc_copy_entitlements_for_pid(pid_t pid)
   xpc_object_t retval = xpc_copy_entitlements_for_pid_caller(pid);
 #endif
   if (is_libsecinit) {
+    Initialize_CF_If_Needed();
 #if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101500
     char *retval_desc = NULL;
     if (retval) {
       retval_desc = xpc_copy_description((xpc_object_t) retval);
     }
-    LogWithFormat(true, "secinit: xpc_copy_entitlements_for_self(): returning %s (0x%lx)",
+    LogWithFormat(true, "Hook.mm: xpc_copy_entitlements_for_self(): returning %s (0x%lx)",
                   retval_desc ? retval_desc : "null", retval);
 #else
     char *retval_desc = NULL;
@@ -995,7 +1418,7 @@ static xpc_object_t Hooked_xpc_copy_entitlements_for_pid(pid_t pid)
       const void *bytes = xpc_data_get_bytes_ptr(retval);
       retval_desc = get_data_as_string(bytes, length);
     }
-    LogWithFormat(true, "secinit: xpc_copy_entitlements_for_pid(): pid \'%u\', returning %s",
+    LogWithFormat(true, "Hook.mm: xpc_copy_entitlements_for_pid(): pid \'%u\', returning %s",
                   pid, retval_desc ? retval_desc : "null");
 #endif
     if (retval_desc) {
@@ -1005,6 +1428,8 @@ static xpc_object_t Hooked_xpc_copy_entitlements_for_pid(pid_t pid)
 
   return retval;
 }
+
+// Client-side stuff
 
 // xpc_pipe_routine() is called from _libsecinit_setup_secinitd_client() to
 // send our app's entitlements to secinitd to get them compiled.
@@ -1039,7 +1464,7 @@ static int Hooked_xpc_pipe_routine(xpc_pipe_t pipe, xpc_object_t request,
     if (reply && *reply) {
       reply_desc = xpc_copy_description(*reply);
     }
-    LogWithFormat(true, "secinit: xpc_pipe_routine(): pipe %s, request %s, reply %s, returning %i",
+    LogWithFormat(true, "Hook.mm: xpc_pipe_routine(): pipe %s, request %s, reply %s, returning %i",
                   pipe_desc ? pipe_desc : "null", request_desc ? request_desc : "null",
                   reply_desc ? reply_desc : "null", retval);
     if (pipe_desc) {
@@ -1057,8 +1482,9 @@ static int Hooked_xpc_pipe_routine(xpc_pipe_t pipe, xpc_object_t request,
 }
 
 // __mac_syscall() is called from _libsecinit_setup_secinitd_client() to use
-// our compiled entitlements to set up an app sandbox.  'policy' is "Sandbox"
-// and 'call' is '0'.
+// our compiled entitlements to set up an app sandbox. 'policy' is "Sandbox"
+// and 'call' is '0'. Another symbol, __sandbox_ms, points to exactly the same
+// function.
 
 extern "C" int __mac_syscall(const char *policy, int call, user_addr_t arg);
 
@@ -1074,13 +1500,195 @@ static int Hooked___mac_syscall(const char *policy, int call, user_addr_t arg)
 
   int retval = __mac_syscall_caller(policy, call, arg);
   if (is_libsecinit) {
-    LogWithFormat(true, "secinit: __mac_syscall(): policy %s, call %u, returning %i",
+    LogWithFormat(true, "Hook.mm: __mac_syscall(): policy %s, call %u, returning %i",
                   policy, call, retval);
     PrintStackTrace();
   }
 
   return retval;
 }
+
+// Server-side stuff
+
+typedef struct _compiled {
+  char *builtin_name;
+  void *bytecode;
+  unsigned long bytecode_size;
+  char *trace_path;
+} compiled;
+
+typedef struct _sb_params {
+  char **params;          // Name/value pairs
+  unsigned long items;    // Number of string pointers, always even
+  unsigned long capacity; // Max number of string pointers
+} sb_params;
+
+// Sandbox-specific entitlements are compiled once and cached in app-specific
+// directories under ~/Library/Containers -- for example com.apple.calculator
+// the Calculator app.  If the app-specific cache is missing, it needs to be
+// re-created, which (among other things) involves calling
+// sandbox_compile_entitlements().
+extern "C" compiled *sandbox_compile_entitlements(const char **entitlement_paths,
+                                                  sb_params *sandbox_params,
+                                                  CFDictionaryRef entitlements,
+                                                  char **errorbuf);
+
+compiled *(*sandbox_compile_entitlements_caller)(const char **, sb_params *,
+                                                 CFDictionaryRef, char **) = NULL;
+
+static compiled *Hooked_sandbox_compile_entitlements(const char **entitlement_paths,
+                                                     sb_params *sandbox_params,
+                                                     CFDictionaryRef entitlements,
+                                                     char **errorbuf)
+{
+  compiled *retval =
+    sandbox_compile_entitlements_caller(entitlement_paths, sandbox_params,
+                                        entitlements, errorbuf);
+  LogWithFormat(true, "Hook.mm: sandbox_compile_entitlements(): entitlements %@, returning \'%p\'",
+                entitlements, retval);
+  PrintStackTrace();
+  return retval;
+}
+
+// The general format for block literals is documented in libclosure's
+// BlockImplementation.txt.
+typedef struct _xpc_handler_literal {
+  void *isa;
+  int flags;
+  int reserved;
+  void (*invoke)(struct _xpc_handler_literal *, xpc_object_t);
+  void *descriptor;
+  const xpc_connection_t connection;
+} xpc_handler_literal, *xpc_handler_literal_t;
+
+// This is our connection handler hook. If 'object' is a request for
+// information on sandbox-specific entitlements, the original handler calls
+// xpc_connection_send_message() (below) to send the requested information.
+// If the information hasn't already been cached (in the appropriate
+// subdirectory of ~/Library/Containers), the handler also (among other
+// things) calls sandbox_compile_entitlements() (above) to generate and store
+// the requested information.
+
+typedef void (*handler_block_invoke_caller)(xpc_handler_literal_t block,
+                                            xpc_object_t object);
+
+static void handler_block_invoke(xpc_handler_literal_t block,
+                                 xpc_object_t object)
+{
+  handler_block_invoke_caller caller = (handler_block_invoke_caller)
+    get_dynamic_caller(reinterpret_cast<void*>(handler_block_invoke));
+
+  xpc_connection_t connection = NULL;
+  if (block && block->connection) {
+    connection = block->connection;
+  }
+  pid_t connection_pid = -1;
+  uid_t connection_uid = -1;
+  if (connection) {
+    connection_pid = xpc_connection_get_pid(connection);
+    connection_uid = xpc_connection_get_euid(connection);
+  }
+
+  char *object_desc = NULL;
+  if (object) {
+    object_desc = xpc_copy_description(object);
+  }
+
+  LogWithFormat(true, "Hook.mm: handler_block_invoke(): invoke %p, connection pid %u, uid %i, object %s",
+                block->invoke, connection_pid, connection_uid, object_desc ? object_desc : "null");
+
+  if (object_desc) {
+    free(object_desc);
+  }
+
+  caller(block, object);
+}
+
+// xpc_connection_set_event_handler() is called by secinitd to handle messages
+// that it receives from client applications via libsystem_secinit.dylib's
+// initialization code.
+
+void (*xpc_connection_set_event_handler_caller)(xpc_connection_t connection,
+                                                xpc_handler_t handler) = NULL;
+
+static void Hooked_xpc_connection_set_event_handler(xpc_connection_t connection,
+                                                    xpc_handler_t handler)
+{
+  bool is_secinitd = false;
+  const char *owner_name = GetCallerOwnerName();
+  if (!strcmp(owner_name, "secinitd")) {
+    is_secinitd = true;
+  }
+
+  if (is_secinitd) {
+    xpc_handler_literal_t block = (xpc_handler_literal_t) handler;
+    if (block->connection) {
+      pid_t connection_pid = xpc_connection_get_pid(connection);
+      uid_t connection_uid = xpc_connection_get_euid(connection);
+      LogWithFormat(true, "Hook.mm: xpc_connection_set_event_handler(): invoke %p, connection pid %u, uid %i",
+                    block->invoke, connection_pid, connection_uid);
+      PrintStackTrace();
+      add_patch_hook(reinterpret_cast<void*>(block->invoke),
+                     reinterpret_cast<void*>(handler_block_invoke));
+    }
+  }
+
+  xpc_connection_set_event_handler_caller(connection, handler);
+}
+
+// Called by secinitd's connection handler (above) to send information on
+// sandbox-specific entitlements to a client application.
+
+void (*xpc_connection_send_message_caller)(xpc_connection_t connection,
+                                           xpc_object_t message) = NULL;
+
+static void Hooked_xpc_connection_send_message(xpc_connection_t connection,
+                                               xpc_object_t message)
+{
+  bool is_secinitd = false;
+  const char *owner_name = GetCallerOwnerName();
+  if (!strcmp(owner_name, "secinitd")) {
+    is_secinitd = true;
+  }
+
+  if (is_secinitd) {
+    pid_t connection_pid = xpc_connection_get_pid(connection);
+    uid_t connection_uid = xpc_connection_get_euid(connection);
+    char *message_desc = NULL;
+    if (message) {
+      message_desc = xpc_copy_description(message);
+    }
+    LogWithFormat(true, "Hook.mm: xpc_connection_send_message(): connection pid %i, uid %i, message %s",
+                  connection_pid, connection_uid, message_desc ? message_desc : "null");
+    if (message_desc) {
+      free(message_desc);
+    }
+  }
+
+  xpc_connection_send_message_caller(connection, message);
+}
+
+@interface NSObject (ASBContainerMethodSwizzling)
+- (NSDictionary *)ASBContainer_sandboxProfileDataValidationInfo;
+@end
+
+@implementation NSObject (ASBContainerMethodSwizzling)
+
+// If this method returns NULL, sandboxProfileDataValidationInfo needs to be
+// (re)generated, which (among other things) triggers a call to
+// compile_sandbox_entitlements() (above).
+- (NSDictionary *)ASBContainer_sandboxProfileDataValidationInfo
+{
+  NSDictionary *retval = [self ASBContainer_sandboxProfileDataValidationInfo];
+  if ([self isKindOfClass:ASBContainerClass]) {
+    LogWithFormat(true, "Hook.mm: [ASBContainer sandboxProfileDataValidationInfo]: returning '%@'",
+                  retval);
+    PrintStackTrace();
+  }
+  return retval;
+}
+
+@end
 
 #pragma mark -
 
@@ -1090,7 +1698,7 @@ typedef struct _hook_desc {
     // For interpose hooks
     const void *orig_function;
     // For patch hooks
-    const void *caller_func_ptr;
+    const void *func_caller_ptr;
   };
   const char *orig_function_name;
   const char *orig_module_name;
@@ -1113,14 +1721,23 @@ __attribute__((used)) static const hook_desc user_hooks[]
 {
   INTERPOSE_FUNCTION(NSPushAutoreleasePool),
   PATCH_FUNCTION(__CFInitialize, /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation),
+#ifndef __i386__
+  PATCH_FUNCTION(__CFGetConverter, /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation),
+#endif
 
+// Client and server side
 #if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101500
   PATCH_FUNCTION(xpc_copy_entitlements_for_self, /usr/lib/system/libxpc.dylib),
 #else
   PATCH_FUNCTION(xpc_copy_entitlements_for_pid, /usr/lib/system/libxpc.dylib),
 #endif
+// Client side only
   PATCH_FUNCTION(xpc_pipe_routine, /usr/lib/system/libxpc.dylib),
   PATCH_FUNCTION(__mac_syscall, /usr/lib/system/libsystem_kernel.dylib),
+// Server side only
+  PATCH_FUNCTION(sandbox_compile_entitlements, /usr/lib/libsandbox.1.dylib),
+  PATCH_FUNCTION(xpc_connection_set_event_handler, /usr/lib/system/libxpc.dylib),
+  PATCH_FUNCTION(xpc_connection_send_message, /usr/lib/system/libxpc.dylib),
 };
 
 // What follows are declarations of the CoreSymbolication APIs that we use to
@@ -1359,10 +1976,9 @@ void PrintAddress(void *address, CSTypeRef symbolicator)
     }
   }
 
-  if (!CSIsNull(owner)) {
-    ownerName = GetOwnerName(address, owner);
-    addressString = GetAddressString(address, owner);
-  }
+  ownerName = GetOwnerName(address, owner);
+  addressString = GetAddressString(address, owner);
+
   LogWithFormat(false, "    (%s) %s", ownerName, addressString);
 
   if (symbolicatorNeedsRelease) {
@@ -1370,9 +1986,7 @@ void PrintAddress(void *address, CSTypeRef symbolicator)
   }
 }
 
-#define STACK_MAX 256
-
-void PrintStackTrace()
+void PrintCallstack(callstack_t callstack)
 {
   if (!CanUseCF()) {
     return;
@@ -1380,27 +1994,40 @@ void PrintStackTrace()
 
   CreateGlobalSymbolicator();
 
-  void **addresses = (void **) calloc(STACK_MAX, sizeof(void *));
-  if (!addresses) {
-    return;
-  }
-
   CSSymbolicatorRef symbolicator = {0};
   bool symbolicatorNeedsRelease = GetSymbolicator(&symbolicator);
   if (CSIsNull(symbolicator)) {
-    free(addresses);
     return;
   }
 
-  uint32_t count = backtrace(addresses, STACK_MAX);
-  for (uint32_t i = 0; i < count; ++i) {
-    PrintAddress(addresses[i], symbolicator);
+  for (uint32_t i = 0; i < STACK_MAX; ++i) {
+    uint64_t item = callstack[i];
+    if (!item) {
+      break;
+    }
+    void *address = (void *) item;
+    PrintAddress(address, symbolicator);
   }
 
   if (symbolicatorNeedsRelease) {
     CSRelease(symbolicator);
   }
-  free(addresses);
+}
+
+void PrintStackTrace()
+{
+  if (!CanUseCF()) {
+    return;
+  }
+
+  callstack_t callstack = {0};
+  void *addresses[STACK_MAX] = {0};
+  uint32_t count = backtrace(addresses, STACK_MAX);
+  for (uint32_t i = 0; i < count; ++i) {
+    callstack[i] = (uint64_t) addresses[i];
+  }
+
+  PrintCallstack(callstack);
 }
 
 BOOL SwizzleMethods(Class aClass, SEL orgMethod, SEL posedMethod, BOOL classMethods)

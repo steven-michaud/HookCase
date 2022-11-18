@@ -29,27 +29,15 @@ else
 ARCHS=-arch i386 -arch x86_64
 endif
 
-all : diagnosticd-hook.dylib logger-hook.dylib
-
-diagnosticd-hook.dylib : diagnosticd-hook.o
-	$(CC) $(ARCHS) -o diagnosticd-hook.dylib diagnosticd-hook.o \
-		-lobjc -framework Cocoa -framework Carbon \
-		-Wl,-F/System/Library/PrivateFrameworks -framework CoreSymbolication \
-		-framework LoggingSupport -dynamiclib
-
-logger-hook.dylib : logger-hook.o
-	$(CC) $(ARCHS) -o logger-hook.dylib logger-hook.o \
+hook.dylib : hook.o
+	$(CC) $(ARCHS) -o hook.dylib hook.o \
 		-lobjc -framework Cocoa -framework Carbon \
 		-Wl,-F/System/Library/PrivateFrameworks -framework CoreSymbolication \
 		-dynamiclib
 
-diagnosticd-hook.o : diagnosticd-hook.mm
-	$(CC) $(ARCHS) -o diagnosticd-hook.o \
-		-Wno-deprecated-declarations -c diagnosticd-hook.mm
-
-logger-hook.o : logger-hook.mm
-	$(CC) $(ARCHS) -o logger-hook.o \
-		-Wno-deprecated-declarations -c logger-hook.mm
+hook.o : hook.mm
+	$(CC) $(ARCHS) -o hook.o \
+		-Wno-deprecated-declarations -c hook.mm
 
 clean :
-	rm diagnosticd-hook.o logger-hook.o diagnosticd-hook.dylib logger-hook.dylib
+	rm hook.o hook.dylib

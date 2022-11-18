@@ -1119,11 +1119,20 @@ bool hook_sysent_call(uint32_t offset, sy_call_t *hook, sy_call_t **orig)
 // process, and to set whatever hooks are specified in the __hook section of
 // its __DATA segment.
 
+// HC_ADDKIDS -- Colon-separated list of full paths to additional children
+//
+// These processes, if they start (or restart) while the main process is
+// running, are added to the list of that process's children. HookCase.kext
+// tries to load the parent process's hook library into each of them.
+// Overrides HC_NOKIDS for all the processes explicitly listed in HC_ADDKIDS,
+// but not for any of their children. If HC_NOKIDS isn't set, also effects the
+// children (including XPC children) of the processes in HC_ADDKIDS.
+
 // HC_NOKIDS -- Operate on a single process, excluding its children
 //
 // By default HookCase.kext operates on a parent process and all its child
 // processes, including XPC children.  Set this to make it only effect the
-// parent process.
+// parent process. Can be partially overridden by HC_ADDKIDS.
 
 // HC_NO_NUMERICAL_ADDRS -- Disable numerical address naming convention
 //
@@ -1137,6 +1146,7 @@ bool hook_sysent_call(uint32_t offset, sy_call_t *hook, sy_call_t **orig)
 // you'll need to set this environment variable.
 
 #define HC_INSERT_LIBRARY_ENV_VAR "HC_INSERT_LIBRARY"
+#define HC_ADDKIDS_ENV_VAR "HC_ADDKIDS"
 #define HC_NOKIDS_ENV_VAR "HC_NOKIDS"
 #define HC_NO_NUMERICAL_ADDRS_ENV_VAR "HC_NO_NUMERICAL_ADDRS"
 
@@ -1274,6 +1284,7 @@ typedef ipc_port_t (*convert_thread_to_port_t)(thread_t thread);
 typedef proc_t (*proc_parent_t)(proc_t);
 typedef task_t (*proc_task_t)(proc_t proc);
 typedef int (*vnode_istty_t)(vnode_t vp);
+typedef vnode_t (*proc_getexecutablevnode_t)(proc_t p);
 typedef void (*task_coalition_ids_t)(task_t task,
                                      uint64_t ids[2 /* COALITION_NUM_TYPES */]);
 typedef coalition_t (*coalition_find_by_id_t)(uint64_t coal_id);
@@ -1316,6 +1327,9 @@ static convert_thread_to_port_t convert_thread_to_port = NULL;
 static proc_parent_t proc_parent = NULL;
 static proc_task_t proc_task_ptr = NULL;
 static vnode_istty_t vnode_istty = NULL;
+// Only on Yosemite and up (begin)
+static proc_getexecutablevnode_t proc_getexecutablevnode = NULL;
+// Only on Yosemite and up (end)
 // Only on ElCapitan and up (begin)
 static task_coalition_ids_t task_coalition_ids = NULL;
 static coalition_find_by_id_t coalition_find_by_id = NULL;
@@ -1613,6 +1627,18 @@ bool find_kernel_private_functions()
       kernel_dlsym("__enable_preemption");
     if (!enable_preemption) {
       return false;
+    }
+  }
+  if (OSX_Yosemite() || OSX_ElCapitan() || macOS_Sierra() ||
+      macOS_HighSierra() || macOS_Mojave() || macOS_Catalina() ||
+      macOS_BigSur() || macOS_Monterey() || macOS_Ventura())
+  {
+    if (!proc_getexecutablevnode) {
+      proc_getexecutablevnode = (proc_getexecutablevnode_t)
+        kernel_dlsym("_proc_getexecutablevnode");
+      if (!proc_getexecutablevnode) {
+        return false;
+      }
     }
   }
   if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra() ||
@@ -8503,6 +8529,8 @@ typedef struct _hook {
   uint64_t unique_pid;
   hc_path_t proc_path;
   hc_path_t inserted_dylib_path;
+  hc_path_t add_kids_path;              // Only used in cast hook
+                                        // Not passed to children
   user_addr_t orig_addr;
   user_addr_t hook_addr;
   user_addr_t inserted_dylib_textseg;
@@ -8517,7 +8545,7 @@ typedef struct _hook {
   user_addr_t call_orig_func_block;     // Only used in cast hook
   hook_desc *patch_hooks;               // Only used in cast hook
   hook_desc *interpose_hooks;           // Only used in cast hook
-  pid_t hooked_parent;                  // Only used in cast hook
+  pid_t hooked_ancestor;                // Only used in cast hook
   uint32_t num_hooklib_initializers;    // Only used in cast hook
   uint32_t hooklib_initializers_run;    // Only used in cast hook
   uint16_t orig_dyld_afterInitMain;     // Only used in cast hook
@@ -8535,20 +8563,24 @@ typedef struct _hook {
 // be found when we need it (in methods that have been "called", indirectly,
 // from the hook function, like reset_hook() and get_dynamic_caller() below).
 // Now that we support dynamically added patch hooks, we can no longer depend
-// on being able to look up a patch hook using its hook address.  There's no
+// on being able to look up a patch hook using its hook address. There's no
 // reasonable way we can prevent a hook function from being used by more than
-// one dynamically added patch hook.  So the linked list of hook_t objects may
-// contain more than one with the same hook_addr.
+// one dynamically added patch hook. When hooking event handlers we're often
+// forced to do this. So the linked list (above) of hook_t objects may contain
+// more than one with the same hook_addr.
 typedef struct _hook_thread_info {
   LIST_ENTRY(_hook_thread_info) list_entry;
-  // A thread on which one or more patch hooks has recently executed.  The
-  // same hook_thread may appear more than once in this list per process, if
-  // two or more hooks are on a single thread's stack.  But each combination
-  // of hook_thread and patch_hook->hook_addr is unique per process.
+  // A thread on which patch_hook->hook_addr recently executed. The same
+  // hook_thread may appear more than once in this list per process, if two or
+  // more patch hooks can run on it. But each combination of hook_thread and
+  // patch_hook->hook_addr is kept unique per process.
   thread_t hook_thread;
-  // The patch hook that has executed most recently on hook_thread.  The same
-  // patch_hook may appear more than once in this list, per process.  This
-  // will happen if patch_hook runs on different threads.
+  // The patch hook that has executed most recently on hook_thread. The same
+  // patch_hook may appear more than once in this list, per process. This will
+  // happen if patch_hook->hook_addr runs on different threads. The value of
+  // patch_hook in a single list_entry may also need to change periodically,
+  // if multiple dynamic patch hooks with the same hook_addr (though with
+  // different orig_addr) run on the same thread.
   hook_t *patch_hook;
   uint64_t unique_pid;
 } hook_thread_info_t;
@@ -9264,10 +9296,38 @@ bool process_has_hooks(uint64_t unique_pid)
   return retval;
 }
 
-#if (0)
-// This is unsafe -- proc_find() sometimes hangs, possibly when its pid_t
-// parameter is itself a zombie process.  Until we find a safe way to do it,
-// we can't remove "dead" hooks.
+// Look for proc_path in the add_kids_path of every running hooked process.
+bool is_added_kid(hc_path_t proc_path, hc_path_t dylib_path,
+                  pid_t *hooked_ancestor, bool *no_numerical_addrs)
+{
+  if (!check_init_locks() || !proc_path || !proc_path[0] ||
+      !dylib_path || !hooked_ancestor || !no_numerical_addrs)
+  {
+    return false;
+  }
+  bool retval = false;
+  all_hooks_lock_read();
+  hook_t *hookp = NULL;
+  LIST_FOREACH(hookp, &g_all_hooks, list_entry) {
+    char *match = strnstr_ptr(hookp->add_kids_path, proc_path,
+                              sizeof(hc_path_t));
+    if (match) {
+      strncpy(dylib_path, hookp->inserted_dylib_path, HC_PATH_SIZE);
+      *hooked_ancestor = hookp->pid;
+      *no_numerical_addrs = hookp->no_numerical_addrs;
+      retval = true;
+      break;
+    }
+  }
+  all_hooks_unlock_read();
+  return retval;
+}
+
+// This is unsafe when called at process exit -- proc_find() sometimes hangs,
+// possibly when its pid_t parameter is itself a zombie process. But it works
+// fine when loading a process. Now that HookCase supports HC_ADDKIDS, it's
+// important that is_added_kid() (above) not be able to find the add_kids_path
+// of crashed or zombie hooked processes.
 void remove_zombie_hooks()
 {
   if (!check_init_locks()) {
@@ -9282,10 +9342,12 @@ void remove_zombie_hooks()
       LIST_REMOVE(hookp, list_entry);
       free_hook(hookp);
     }
+    if (proc) {
+      proc_rele(proc);
+    }
   }
   all_hooks_unlock_write();
 }
-#endif
 
 kern_hook_t *create_kern_hook()
 {
@@ -9711,19 +9773,54 @@ void do_kern_hook(x86_saved_state_t *intr_state)
   hook(intr_state, kern_hookp);
 }
 
-// Check if 'proc' (or its parent) has an HC_INSERT_LIBRARY, HC_NOKIDS or
-// HC_NO_NUMERICAL_ADDRS environment variable that we should pay attention to.
-bool get_cast_info(proc_t proc, hc_path_t proc_path, hc_path_t dylib_path,
-                   pid_t *hooked_parent, bool *no_numerical_addrs)
+// Now that HookCase supports HC_ADDKIDS, it's important that each process's
+// path be canonicalized, so that it can be used to search all hooked
+// process's add_kids_path (the contents of which are also canonicalized).
+void canonicalize_proc_path(proc_t proc, char *path, hc_path_t result)
 {
-  if (!proc || !proc_path || !dylib_path ||
-      !hooked_parent || !no_numerical_addrs)
+  if (!proc || !result) {
+    return;
+  }
+
+  // If possible, canonicalize path.
+  char result_local[PATH_MAX];
+  result_local[0] = 0;
+  // proc_getexecutablevnode() is only available on Yosemite and up.
+  if (!OSX_Mavericks()) {
+    vfs_context_t context = vfs_context_create(NULL);
+    if (context) {
+      vnode_t prog_vnode = proc_getexecutablevnode(proc);
+      if (prog_vnode) {
+        int len = sizeof(result_local);
+        vn_getpath(prog_vnode, result_local, &len);
+        vnode_put(prog_vnode);
+      }
+      vfs_context_rele(context);
+    }
+  }
+  if (result_local[0]) {
+    strncpy(result, result_local, HC_PATH_SIZE);
+  } else if (path) {
+    strncpy(result, path, HC_PATH_SIZE);
+  }
+}
+
+// Check if 'proc' (or its parent) has an HC_INSERT_LIBRARY, HC_ADDKIDS,
+// HC_NOKIDS or HC_NO_NUMERICAL_ADDRS environment variable that we should pay
+// attention to.
+bool get_cast_info(proc_t proc, hc_path_t proc_path, hc_path_t dylib_path,
+                   hc_path_t add_kids_path, pid_t *hooked_ancestor,
+                   bool *no_numerical_addrs)
+{
+  if (!proc || !proc_path || !dylib_path || !add_kids_path ||
+      !hooked_ancestor || !no_numerical_addrs)
   {
     return false;
   }
   proc_path[0] = 0;
   dylib_path[0] = 0;
-  *hooked_parent = 0;
+  add_kids_path[0] = 0;
+  *hooked_ancestor = 0;
   *no_numerical_addrs = false;
 
   char *path_ptr = NULL;
@@ -9738,9 +9835,7 @@ bool get_cast_info(proc_t proc, hc_path_t proc_path, hc_path_t dylib_path,
     return false;
   }
 
-  if (path_ptr) {
-    strncpy(proc_path, path_ptr, HC_PATH_SIZE);
-  }
+  canonicalize_proc_path(proc, path_ptr, proc_path);
 
   // Though it's very unlikely, we might have a process path and no
   // environment.
@@ -9748,6 +9843,9 @@ bool get_cast_info(proc_t proc, hc_path_t proc_path, hc_path_t dylib_path,
     IOFree(buffer, buf_size);
     return false;
   }
+
+  // This is safe to call here, but not at process exit.
+  remove_zombie_hooks();
 
   bool no_kids = false;
 
@@ -9766,13 +9864,18 @@ bool get_cast_info(proc_t proc, hc_path_t proc_path, hc_path_t dylib_path,
         strncpy(dylib_path, value, HC_PATH_SIZE);
         found_insert_file_variable = true;
         found_trigger_variable = true;
+      } else if (!strncmp(key, HC_ADDKIDS_ENV_VAR,
+                          strlen(HC_ADDKIDS_ENV_VAR) + 1))
+      {
+        strncpy(add_kids_path, value, HC_PATH_SIZE);
+        found_trigger_variable = true;
       } else if (!strncmp(key, HC_NOKIDS_ENV_VAR,
-                 strlen(HC_NOKIDS_ENV_VAR) + 1))
+                          strlen(HC_NOKIDS_ENV_VAR) + 1))
       {
         no_kids = true;
         found_trigger_variable = true;
       } else if (!strncmp(key, HC_NO_NUMERICAL_ADDRS_ENV_VAR,
-                 strlen(HC_NO_NUMERICAL_ADDRS_ENV_VAR) + 1))
+                          strlen(HC_NO_NUMERICAL_ADDRS_ENV_VAR) + 1))
       {
         *no_numerical_addrs = true;
         found_trigger_variable = true;
@@ -9792,6 +9895,8 @@ bool get_cast_info(proc_t proc, hc_path_t proc_path, hc_path_t dylib_path,
   bool is_child = false;
   bool done_with_ancestors = false;
 
+  hc_path_t parent_path;
+  parent_path[0] = 0;
   proc_t prev_proc = proc;
   proc_t parent_proc = proc_parent(prev_proc);
   pid_t parent_pid = proc_ppid(prev_proc);
@@ -9808,12 +9913,18 @@ bool get_cast_info(proc_t proc, hc_path_t proc_path, hc_path_t dylib_path,
     // and so if it should also be hooked.
     bool have_parent_info = false;
     bool have_xpc_parent_info = false;
+    // launchd has pid 1
     if (parent_pid != 1) {
       have_parent_info =
         get_proc_info(parent_pid, &path_ptr,
                       &envp, &envp_size, &buffer, &buf_size);
+      if (have_parent_info) {
+        canonicalize_proc_path(parent_proc, path_ptr, parent_path);
+      }
     }
 
+    // Look first at info for a "normal" parent (if present), then if
+    // necessary at info for an XPC parent (if present).
     int tries;
     bool done_with_parent = false;
     for (tries = 1; (tries <= 2) && !done_with_parent; ++tries) {
@@ -9826,13 +9937,18 @@ bool get_cast_info(proc_t proc, hc_path_t proc_path, hc_path_t dylib_path,
               if (key && value && value[0]) {
                 if (!strncmp(key, HC_INSERT_LIBRARY_ENV_VAR,
                              strlen(HC_INSERT_LIBRARY_ENV_VAR) + 1) ||
+                    !strncmp(key, HC_ADDKIDS_ENV_VAR,
+                             strlen(HC_ADDKIDS_ENV_VAR) + 1) ||
                     !strncmp(key, HC_NOKIDS_ENV_VAR,
                              strlen(HC_NOKIDS_ENV_VAR) + 1) ||
                     !strncmp(key, HC_NO_NUMERICAL_ADDRS_ENV_VAR,
                              strlen(HC_NO_NUMERICAL_ADDRS_ENV_VAR) + 1))
                 {
                   is_child = true;
-                  *hooked_parent = first_parent_pid;
+                  *hooked_ancestor = first_parent_pid;
+                  // Only return add_kids_path for a main process that sets
+                  // HC_ADDKIDS -- not for any of its children.
+                  add_kids_path[0] = 0;
                   done_with_parent = true;
                 }
               }
@@ -9853,29 +9969,33 @@ bool get_cast_info(proc_t proc, hc_path_t proc_path, hc_path_t dylib_path,
               char *value = envp[i];
               char *key = strsep(&value, "=");
               if (key && value && value[0]) {
+                // Since we only return add_kids_path for a main process that
+                // sets HC_ADDKIDS, we're not interested in tracking the value
+                // of HC_ADDKIDS in the ancestors of a process that doesn't
+                // set HC_ADDKIDS.
                 if (!strncmp(key, HC_INSERT_LIBRARY_ENV_VAR,
                              strlen(HC_INSERT_LIBRARY_ENV_VAR) + 1))
                 {
                   strncpy(dylib_path, value, HC_PATH_SIZE);
                   found_insert_file_variable = true;
                   is_child = true;
-                  *hooked_parent = first_parent_pid;
+                  *hooked_ancestor = first_parent_pid;
                   found_trigger_variable = true;
                   done_with_parent = true;
                 } else if (!strncmp(key, HC_NOKIDS_ENV_VAR,
-                           strlen(HC_NOKIDS_ENV_VAR) + 1))
+                                    strlen(HC_NOKIDS_ENV_VAR) + 1))
                 {
                   no_kids = true;
                   is_child = true;
-                  *hooked_parent = first_parent_pid;
+                  *hooked_ancestor = first_parent_pid;
                   found_trigger_variable = true;
                   done_with_parent = true;
                 } else if (!strncmp(key, HC_NO_NUMERICAL_ADDRS_ENV_VAR,
-                           strlen(HC_NO_NUMERICAL_ADDRS_ENV_VAR) + 1))
+                                    strlen(HC_NO_NUMERICAL_ADDRS_ENV_VAR) + 1))
                 {
                   *no_numerical_addrs = true;
                   is_child = true;
-                  *hooked_parent = first_parent_pid;
+                  *hooked_ancestor = first_parent_pid;
                   found_trigger_variable = true;
                   done_with_parent = true;
                 }
@@ -9893,6 +10013,7 @@ bool get_cast_info(proc_t proc, hc_path_t proc_path, hc_path_t dylib_path,
       }
 
       if (!done_with_parent && !have_xpc_parent_info) {
+        pid_t old_parent_pid = parent_pid;
         parent_pid = get_xpc_parent(proc_pid(prev_proc));
         if (parent_pid) {
           have_xpc_parent_info =
@@ -9903,6 +10024,37 @@ bool get_cast_info(proc_t proc, hc_path_t proc_path, hc_path_t dylib_path,
           done_with_parent = true;
         }
         have_parent_info = have_xpc_parent_info;
+        if (have_parent_info) {
+          proc_t old_parent_proc = parent_proc;
+          // parent_proc can end up NULL here. I don't know why.
+          parent_proc = proc_find(parent_pid);
+          if (parent_proc) {
+            proc_rele(old_parent_proc);
+            canonicalize_proc_path(parent_proc, path_ptr, parent_path);
+          } else {
+            parent_proc = old_parent_proc;
+            parent_pid = old_parent_pid;
+            if (envp) {
+              IOFree(envp, envp_size);
+              envp = NULL;
+            }
+            if (buffer) {
+              IOFree(buffer, buf_size);
+              buffer = NULL;
+            }
+            have_parent_info = false;
+            done_with_parent = true;
+          }
+        }
+      }
+    }
+
+    if (!found_trigger_variable) {
+      found_insert_file_variable =
+        is_added_kid(parent_path, dylib_path, hooked_ancestor, no_numerical_addrs);
+      if (found_insert_file_variable) {
+        found_trigger_variable = true;
+        is_child = true;
       }
     }
 
@@ -9910,6 +10062,7 @@ bool get_cast_info(proc_t proc, hc_path_t proc_path, hc_path_t dylib_path,
       proc_rele(parent_proc);
       done_with_ancestors = true;
     } else {
+      parent_path[0] = 0;
       prev_proc = parent_proc;
       parent_proc = proc_parent(prev_proc);
       parent_pid = proc_ppid(prev_proc);
@@ -9917,6 +10070,17 @@ bool get_cast_info(proc_t proc, hc_path_t proc_path, hc_path_t dylib_path,
       if (!parent_proc || !parent_pid) {
         done_with_ancestors = true;
       }
+    }
+  }
+
+  if (!found_insert_file_variable) {
+    found_insert_file_variable =
+      is_added_kid(proc_path, dylib_path, hooked_ancestor, no_numerical_addrs);
+    if (found_insert_file_variable) {
+      is_child = true;
+      // Override HC_NOKIDS if proc is listed explicitly in some other
+      // hooked process's HC_ADDKIDS.
+      no_kids = false;
     }
   }
 
@@ -9949,10 +10113,13 @@ bool maybe_cast_hook(proc_t proc)
   wait_interrupt_t old_state = thread_interrupt_level(THREAD_UNINT);
   hc_path_t proc_path;
   hc_path_t dylib_path;
-  pid_t hooked_parent;
+  // add_kids_path is only set for a main process that sets HC_ADDKIDS -- not
+  // for any of its children.
+  hc_path_t add_kids_path;
+  pid_t hooked_ancestor;
   bool no_numerical_addrs;
-  bool rv = get_cast_info(proc, proc_path, dylib_path,
-                          &hooked_parent, &no_numerical_addrs);
+  bool rv = get_cast_info(proc, proc_path, dylib_path, add_kids_path,
+                          &hooked_ancestor, &no_numerical_addrs);
   thread_interrupt_level(old_state);
   if (!rv) {
     return false;
@@ -9982,6 +10149,56 @@ bool maybe_cast_hook(proc_t proc)
   }
   if (fixed_dylib_path[0]) {
     strncpy(dylib_path, fixed_dylib_path, sizeof(dylib_path));
+  }
+
+  // If possible, canonicalize the elements in add_kids_path
+
+  char fixed_add_kids_path[PATH_MAX];
+  fixed_add_kids_path[0] = 0;
+  int fixed_to = 0;
+
+  hc_path_t holder;
+  strncpy(holder, add_kids_path, sizeof(holder));
+  char *remaining = holder;
+  while (remaining) {
+    char *path_element = strsep(&remaining, ":");
+    if (path_element && path_element[0]) {
+      if (path_element[0] != '/') {
+        printf("HookCase(%s[%d]): maybe_cast_hook(): HC_ADDKIDS (\"%s\") must contain full paths\n",
+               procname, proc_pid(proc), add_kids_path);
+        return false;
+      }
+
+      vfs_context_t context = vfs_context_create(NULL);
+      if (context) {
+        vnode_t path_element_vnode;
+        if (!vnode_lookup(path_element, 0, &path_element_vnode, context)) {
+          char fixed_path_element[PATH_MAX];
+          fixed_path_element[0] = 0;
+          int len = sizeof(fixed_path_element);
+          vn_getpath(path_element_vnode, fixed_path_element, &len);
+          vnode_put(path_element_vnode);
+          // len, as set by vn_getpath(), includes the terminal NULL.
+          len = (int) strlen(fixed_path_element);
+
+          if (fixed_path_element[0]) {
+            if (len <= sizeof(fixed_path_element) - 2) {
+              fixed_path_element[len] = ':';
+              ++len;
+              fixed_path_element[len] = 0;
+            }
+            strncat(fixed_add_kids_path, fixed_path_element,
+                    sizeof(fixed_add_kids_path) - fixed_to - 1);
+            fixed_to += len;
+          }
+        }
+        vfs_context_rele(context);
+      }
+    }
+  }
+
+  if (fixed_add_kids_path[0]) {
+    strncpy(add_kids_path, fixed_add_kids_path, sizeof(add_kids_path));
   }
 
   // We start setting hooks just before dyld::initializeMainExecutable() (or
@@ -10113,6 +10330,7 @@ bool maybe_cast_hook(proc_t proc)
   hookp->pid = proc_pid(proc);
   hookp->unique_pid = unique_pid;
   strncpy(hookp->proc_path, proc_path, sizeof(hc_path_t));
+  strncpy(hookp->add_kids_path, add_kids_path, sizeof(hc_path_t));
   strncpy(hookp->inserted_dylib_path, dylib_path, sizeof(hc_path_t));
   hookp->orig_addr = initializeMainExecutable;
   hookp->orig_code = orig_code;
@@ -10123,8 +10341,8 @@ bool maybe_cast_hook(proc_t proc)
   hookp->no_numerical_addrs = no_numerical_addrs;
   hookp->is_cast_hook = true;
 
-  if (hooked_parent) {
-    hookp->hooked_parent = hooked_parent;
+  if (hooked_ancestor) {
+    hookp->hooked_ancestor = hooked_ancestor;
   }
 
   uint16_t new_code = HC_INT1_OPCODE_SHORT;
@@ -12212,6 +12430,25 @@ void process_hook_set(hook_t *hookp, x86_saved_state_t *intr_state)
       infop->unique_pid = unique_pid;
       add_hook_thread_info(infop);
     }
+  // Since different patch hooks (with different orig_addr) may share the same
+  // hook_addr and run on the same thread, the value of infop->patch-hook may
+  // need to change over time. We update it here to prepare for possible calls
+  // to get_dynamic_caller() and reset_hook() in the hook -- to ensure they
+  // find the right patch hook, and get_dynamic_caller() returns the right
+  // caller. Since this hook_thread_info_t list_entry's patch_hook is only
+  // changed here, and can only be changed again on the same thread, the value
+  // returned by get_dynamic_caller() will remain correct for at least as long
+  // as the hook is running. We assume the patch hooks' original methods (at
+  // hookp->orig_addr) can't call each other, which is unlikely if they're
+  // event handlers for different events. The primary use for dynamic patch
+  // hooks is to hook event handlers, and only for event handlers do we
+  // sometimes need to make different hooks share the same hook_addr.
+  } else if (infop->patch_hook != hookp) {
+    if (check_init_locks()) {
+      all_hooks_lock_write();
+      infop->patch_hook = hookp;
+      all_hooks_unlock_write();
+    }
   }
 
   vm_map_deallocate(proc_map);
@@ -12468,10 +12705,14 @@ void add_patch_hook(x86_saved_state_t *intr_state)
   // don't allow this for a non-dynamically created hook.  An original
   // function can't be assigned more than one hook.
   if (orig_func_hook) {
-    if (orig_func_hook->is_dynamic_hook && check_init_locks()) {
-      all_hooks_lock_write();
-      orig_func_hook->hook_addr = hook_addr;
-      all_hooks_unlock_write();
+    if (orig_func_hook->is_dynamic_hook) {
+      printf("HookCase(%s[%d]): add_patch_hook(): Changing dynamic patch hook's (orig_addr \'0x%llx\') hook from \'0x%llx\' to \'0x%llx\'!\n",
+             procname, pid, orig_func_addr, orig_func_hook->hook_addr, hook_addr);
+      if (check_init_locks()) {
+        all_hooks_lock_write();
+        orig_func_hook->hook_addr = hook_addr;
+        all_hooks_unlock_write();
+      }
     }
     vm_map_deallocate(proc_map);
     return;
@@ -12783,7 +13024,6 @@ int hook_exit(proc_t p, struct exit_args *uap, int *retv)
   int retval = ENOENT;
   if (g_exit_orig) {
     remove_process_hooks(proc_uniqueid(current_proc()));
-    //remove_zombie_hooks();
     retval = g_exit_orig(p, uap, retv);
     /* NOTREACHED */
   }

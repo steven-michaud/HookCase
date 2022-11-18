@@ -1,13 +1,5 @@
 # secinit subsystem
 
-As mentioned earlier, this example won't work unless you disable
-system integrity protection (SIP) altogether (`csrutil disable`), or
-at least disable "filesystem protection" (`csrutil enable --without
-kext --without fs`).  On macOS 10.15 (Catalina) you also need to
-remount the partition that contains system files with read-write
-permissions (`sudo mount -uw /`).  As also mentioned earlier, this
-example doesn't work at all on macOS 11 (Big Sur) and up.
-
 The "secinit subsystem" (if we may call it that) has two parts:
 
   * `/usr/libexec/secinitd` -- a system daemon that (according to its
@@ -65,80 +57,61 @@ each named for an application that uses the App Sandbox (for example
 needs to (re)generate it.  Among other things this involves a call to
 `sandbox_compile_entitlements()`.
 
-[`Examples/secinit`](Examples/secinit/) includes two hook libraries,
-one ([`secinitd-hook.dylib`](Examples/secinit/secinitd-hook.mm)) for
-`secinitd` and the other ([`hook.dylib`](Examples/secinit/hook.mm))
-for its possible clients.
+The hook library in [`Examples/secinit`](Examples/secinit/) gets
+loaded into whichever application you're testing with, and also into
+`secinitd` (via `HC_ADDKIDS`). In this kind of environment it's best
+to configure it to redirect its output to a virtual serial port like
+[PySerialPortLogger](https://github.com/steven-michaud/PySerialPortLogger),
+[here](Examples/secinit/hook.mm#L343).
 
-As `secinitd` is a system daemon, making it load a hook library takes
-a bit of work:
+Multiple instances of `secinitd` may already be running, each serving
+a different purpose. So first you need to identify the one you'll use
+in these tests -- the one for the domain of the user you're currently
+logged in as. In the following we assume you're logged in as the
+primary admin user, whose `uid` is always `501`. If you have a
+non-standard configuration your `uid` may be different. One way to
+find your `uid` is to do `ps -f`. The "UIDS" in the first column
+should all belong to the user you're currently logged in as. We also
+assume you'll be testing the Calculator app.
 
-1. Copy `secinitd-hook.dylib` to an appropriate location:
+The first step is to (re)start `secinitd` for your domain. The command
+will return the `pid` of the new instance. Then you'll kill this
+instance, so that running Calculator will cause it to be restarted yet
+again with the hook library loaded.
 
-        sudo cp secinitd-hook.dylib /usr/libexec/
+```
+% launchctl kickstart -kp user/501/com.apple.secinitd
+service spawned with pid: [pid]
+% kill -9 [pid]
+```
 
-2. Make a backup copy of the `com.apple.secinitd.plist` file in
-   `/System/Library/LaunchAgents` that governs `secinitd`'s behavior
-   as an "agent" for the currently logged in user.
+Now run the Calculator app (or whichever app you're testing with):
 
-        sudo cp -p com.apple.secinitd.plist com.apple.secinitd.plist.org
-
-3. Create another copy of `com.apple.secinitd.plist` for use with
-   HookCase, then edit it as follows:
-
-        sudo cp com.apple.secinitd.plist com.apple.secinitd.plist.debug
-
-        sudo [emacs or vi] com.apple.secinitd.plist.debug
-
-4. In your editor, add the following section to the "debug" plist
-   file's top level `dict` structure, then copy it over the original
-   file.
-
-        <key>EnvironmentVariables</key>
-        <dict>
-          <key>HC_INSERT_LIBRARY</key>
-          <string>/usr/libexec/secinitd-hook.dylib</string>
-        </dict>
-
-        sudo cp com.apple.secinitd.plist.debug com.apple.secinitd.plist
-
-5. Unload and reload `secinitd` as a user agent, to make it pick up
-   `secinitd-hook.dylib`:
-
-        launchctl unload -S Background /System/Library/LaunchAgents/com.apple.secinitd.plist
-        launchctl load -S Background /System/Library/LaunchAgents/com.apple.secinitd.plist
-
-Now run applications that may or may not be `secinitd` clients, to see
-what happens.  Examples of applications that have entitlements and use
-the App Sandbox are Calculator and Notes.  Safari is an application
-that has entitlements but doesn't use the App Sandbox (instead its XPC
-children use Apple's sandbox at a lower level by calling
-`sandbox_init_with_parameters()`).  Google Chrome and Firefox don't
-have entitlements at all (though the children of both also use Apple's
-sandbox via `sandbox_init_with_parameters()`).
-
-A lot of the logging output will go to the Console, including
-everything from `secinitd-hook.dylib`.  If you're testing on macOS
-10.12 (Sierra) or above, run the Console before you run any `secinitd`
-client.  Use "secinit" to filter the Console app's output.
-
-For example:
-
-        HC_INSERT_LIBRARY=/full/path/to/hook.dylib /Applications/Calculator.app/Contents/MacOS/Calculator
+```
+HC_ADDKIDS=/usr/libexec/secinitd HC_INSERT_LIBRARY=/full/path/to/hook.dylib /System/Applications/Calculator.app/Contents/MacOS/Calculator
+```
 
 To see `sandbox_compile_entitlements()` in action, first delete the
-secinitd client's Containers directory.  For example:
+`secinitd` client's Containers directory. For example:
 
-        rm -rf ~/Library/Containers/com.apple.calculator
+```
+rm -rf ~/Library/Containers/com.apple.calculator
+```
 
-When you're done experimenting, do the following in
-`/System/Library/LaunchAgents` to unload `secinitd-hook.dylib`:
+Also test with other applications that may or may not be `secinitd`
+clients, to see what happens. Examples of applications that have
+entitlements and use the App Sandbox are Calculator and Notes. Firefox
+and Google Chrome have entitlements but don't use the App Sandbox --
+instead they use Apple's sandbox at a lower level by calling
+`sandbox_init_with_parameters()`. Safari also used to do this, but now
+uses the App Sandbox.
 
-        sudo cp -p com.apple.secinitd.plist.org com.apple.secinitd.plist
-        launchctl unload -S Background /System/Library/LaunchAgents/com.apple.secinitd.plist
-        launchctl load -S Background /System/Library/LaunchAgents/com.apple.secinitd.plist
+When you're done testing, quit all the applications containing the
+hook library and restart `secinitd` for your domain one more time by
+doing the following. This latest instance of `secinitd` will no longer
+have the hook library loaded into it.
 
-You should probably also restore system integrity protection (`csrutil
-enable --without kext`).  On Catalina, the partition that contains
-system files will automatically be remounted read-only after your
-computer is rebooted.
+```
+launchctl kickstart -kp	user/501/com.apple.secinitd
+```
+

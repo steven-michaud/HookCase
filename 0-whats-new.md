@@ -1,3 +1,25 @@
+# What's New in Version 7.1.0
+
+HookCase 7.1.0 now supports a powerful new feature -- the `HC_ADDKIDS`
+enviroment variable. Sometimes you're trying to debug the interaction
+between an application and some kind of server or daemon process. The
+daemon isn't a child of the application. So it would have been
+difficult or impossible to use previous versions of HookCase to load a
+hook library into it. But if you can arrange for the daemon to restart
+while the application is running, you can use `HC_ADDKIDS` to get
+`HookCase.kext` to count it as one of the application's children, and
+load into the daemon the same hook library as was loaded into the
+application.
+
+I've rewritten two of HookCase's examples to take advantage of this
+new feature -- the [secinitd subsystem example](examples-secinit.md)
+and the [kernel logging example](examples-kernel-logging.md). The
+previous versions of both examples had stopped working as of macOS 11.
+
+HookCase 7.1.0 is also significantly better at working with dynamic
+patch hooks and virtual serial ports (as provided by
+[PySerialPortLogger](https://github.com/steven-michaud/PySerialPortLogger)).
+
 # What's New in Version 7.0.0
 
 HookCase 7.0.0 now supports macOS 13 (Ventura).
@@ -22,7 +44,7 @@ Version 6.0.5 also makes minor changes to the code `HookCase.kext`
 uses to track the parentage of potentially "hookable" processes, to
 make it more resilient.
 
-Here's [more information on how to use PySerialPortLogger](HookLibraryTemplate/hook.mm#L322).
+Here's [more information on how to use PySerialPortLogger](HookLibraryTemplate/hook.mm#L329).
 
 # What's New in Version 6.0.4
 
@@ -99,14 +121,14 @@ information see
 
 This version of HookCase fixes a bug that caused intermittent
 instability, though not kernel panics. I fixed it by tweaking the
-[code at the heart of HookCase's watchpoint support](HookCase/HookCase/HookCase.cpp#L13411).
+[code at the heart of HookCase's watchpoint support](HookCase/HookCase/HookCase.cpp#L13651).
 See [Issue #26](https://github.com/steven-michaud/HookCase/issues/26)
 for more information.
 
 HookCase's watchpoint code is quite complex. So if you see any sort of
 instability short of kernel panics, especially if it resembles what's
 reported at Issue #26, you should try
-[disabling watchpoint support](HookCase/HookCase/HookCase.cpp#L14361)
+[disabling watchpoint support](HookCase/HookCase/HookCase.cpp#L14601)
 
 # What's New in Version 5.0.3
 
@@ -166,8 +188,8 @@ This version of HookCase supports watchpoints. You can now set a
 watchpoint on a location in memory and gather information (including a
 stack trace) about the code that writes to that location.  For more
 information see
-[config_watcher() in the hook library template](HookLibraryTemplate/hook.mm#L1049),
-[Hooked_watcher_example() in the hook library template](HookLibraryTemplate/hook.mm#L1195)
+[config_watcher() in the hook library template](HookLibraryTemplate/hook.mm#L1099),
+[Hooked_watcher_example() in the hook library template](HookLibraryTemplate/hook.mm#L1245)
 and [the watchpoints example](examples-watchpoints.md).
 
 # What's New in Version 4.0.5
@@ -230,7 +252,7 @@ HookCase now supports dynamically adding patch hooks for raw function
 pointers. This is useful in hooks for methods that use callbacks --
 for example CFMachPortCreate() and CFRunLoopObserverCreate(). For more
 information see
-[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L1139)
+[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L1189)
 and [the dynamic patch hooks example](examples-dynamic-hooking.md).
 
 # What's New in Version 3.2.1
@@ -310,16 +332,16 @@ instead of `int 0x22`, as follows:
 at a particular address in a given module.  This means that HookCase
 can now hook methods that aren't in their module's symbol table.  For
 more information see
-[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L1178).
+[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L1228).
 
-* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L11460) that
+* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L11678) that
 prevented interpose hooks from working outside the shared cache of
 system modules.
 
 * Version 2.0
-[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L13137)
+[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L13377)
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0
-[fixes a premature-release bug](Examples/events/hook.mm#L1543)
+[fixes a premature-release bug](Examples/events/hook.mm#L1593)
 in the "System Events" example's hook library.

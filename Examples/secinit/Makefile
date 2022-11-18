@@ -29,27 +29,15 @@ else
 ARCHS=-arch i386 -arch x86_64
 endif
 
-all : secinitd-hook.dylib hook.dylib
-
-secinitd-hook.dylib : secinitd-hook.o
-	$(CC) $(ARCHS) -o secinitd-hook.dylib secinitd-hook.o \
-		-lobjc -framework Cocoa -framework Carbon \
-		-Wl,-F/System/Library/PrivateFrameworks -framework CoreSymbolication \
-		-dynamiclib
-
 hook.dylib : hook.o
 	$(CC) $(ARCHS) -o hook.dylib hook.o \
 		-lobjc -framework Cocoa -framework Carbon \
 		-Wl,-F/System/Library/PrivateFrameworks -framework CoreSymbolication \
 		-dynamiclib
 
-secinitd-hook.o : secinitd-hook.mm
-	$(CC) $(ARCHS) -o secinitd-hook.o \
-		-Wno-deprecated-declarations -c secinitd-hook.mm
-
 hook.o : hook.mm
 	$(CC) $(ARCHS) -o hook.o \
 		-Wno-deprecated-declarations -c hook.mm
 
 clean :
-	rm secinitd-hook.o hook.o secinitd-hook.dylib hook.dylib
+	rm hook.o hook.dylib

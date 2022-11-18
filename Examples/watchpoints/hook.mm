@@ -61,6 +61,7 @@ extern "C" {
 #include <mach/vm_map.h>
 #include <libgen.h>
 #include <execinfo.h>
+#include <termios.h>
 
 pthread_t gMainThreadID = 0;
 
@@ -289,11 +290,60 @@ FILE *g_serial1_FILE = NULL;
 // serial port inside macOS and use that for logging output. You can do this
 // with https://github.com/steven-michaud/PySerialPortLogger. Install it and
 // run 'serialportlogger'. Observe the name of its virtual serial port, make
-// the definition of VIRTUAL_SERIAL_PORT match it, then uncomment it.
+// the definition of VIRTUAL_SERIAL_PORT match it, then uncomment it. If
+// you're loading your hook library from the command line, it's also possible
+// to redirect logging output (all of it) to your current Terminal session.
+// Run the "tty" command in it to find its tty name.
 //#define VIRTUAL_SERIAL_PORT "/dev/ttys003"
 bool g_virtual_serial_checked = false;
 int g_virtual_serial = -1;
 FILE *g_virtual_serial_FILE = NULL;
+
+// TTY pipes are *very* finicky. They don't like it when you write too much
+// data all at once, or perform sequences of writes too quickly. Doing either
+// will make fputs() return EAGAIN ("Resource temporarily unavailable"). To
+// avoid this, we break our data into reasonable sized chunks, and do
+// tcdrain() after each call to fputs(), to wait until each chunk of data has
+// been written to the TTY. _PC_PIPE_BUF is the maximum number of bytes that
+// can be written atomically to our TTY pipe. Note that breaking up a UTF-8
+// string like this can make parts of it invalid. The software that implements
+// our virtual serial port needs to suppress formatting errors to avoid
+// trouble from this.
+void tty_fputs(const char *s, FILE *stream)
+{
+  if (!s || !stream) {
+    return;
+  }
+
+  long pipe_max = fpathconf(fileno(stream), _PC_PIPE_BUF);
+  if (pipe_max == -1) {
+    return;
+  }
+  char *block = (char *) malloc(pipe_max + 1);
+  if (!block) {
+    return;
+  }
+
+  size_t total_length = strlen(s);
+  size_t to_do = pipe_max;
+  if (to_do > total_length) {
+    to_do = total_length;
+  }
+  for (size_t done = 0; done < total_length; done += to_do) {
+    if (to_do > total_length - done) {
+      to_do = total_length - done;
+    }
+    bzero(block, pipe_max + 1);
+    strncpy(block, s + done, to_do);
+    int rv = fputs(block, stream);
+    if (rv == EOF) {
+      break;
+    }
+    tcdrain(fileno(stream));
+  }
+
+  free(block);
+}
 
 #ifdef DEBUG_VIRTUAL_SERIAL_PORT
 static void LogWithFormat(bool decorate, const char *format, ...);
@@ -367,7 +417,7 @@ static void LogWithFormatV(bool decorate, const char *format, va_list args)
   }
 #endif
   if (g_virtual_serial_FILE) {
-    fputs(finished, g_virtual_serial_FILE);
+    tty_fputs(finished, g_virtual_serial_FILE);
   } else {
     if (!strcmp("/dev/console", stdout_path) ||
         !strcmp("/dev/null", stdout_path))

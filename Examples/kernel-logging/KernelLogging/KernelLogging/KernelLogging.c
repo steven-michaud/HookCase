@@ -20,8 +20,9 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-#include <AvailabilityMacros.h>
 #include <libkern/libkern.h>
+
+#include <AvailabilityMacros.h>
 #include <mach/mach_types.h>
 #include <IOKit/IOLib.h>
 #if (defined(MAC_OS_X_VERSION_10_12) || defined(MAC_OS_X_VERSION_10_13)) && \
