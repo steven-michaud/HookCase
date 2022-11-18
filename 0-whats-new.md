@@ -1,6 +1,6 @@
-# What's New in Version 7.1.0
+# What's New in Version 7.1
 
-HookCase 7.1.0 now supports a powerful new feature -- the `HC_ADDKIDS`
+HookCase 7.1 now supports a powerful new feature -- the `HC_ADDKIDS`
 enviroment variable. Sometimes you're trying to debug the interaction
 between an application and some kind of server or daemon process. The
 daemon isn't a child of the application. So it would have been
@@ -16,13 +16,13 @@ new feature -- the [secinitd subsystem example](examples-secinit.md)
 and the [kernel logging example](examples-kernel-logging.md). The
 previous versions of both examples had stopped working as of macOS 11.
 
-HookCase 7.1.0 is also significantly better at working with dynamic
+HookCase 7.1 is also significantly better at working with dynamic
 patch hooks and virtual serial ports (as provided by
 [PySerialPortLogger](https://github.com/steven-michaud/PySerialPortLogger)).
 
-# What's New in Version 7.0.0
+# What's New in Version 7.0
 
-HookCase 7.0.0 now supports macOS 13 (Ventura).
+HookCase 7.0 now supports macOS 13 (Ventura).
 
 It also makes some changes to better support
 [PySerialPortLogger](https://github.com/steven-michaud/PySerialPortLogger).
