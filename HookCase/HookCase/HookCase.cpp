@@ -7276,6 +7276,11 @@ typedef struct _symbol_table {
   vm_address_t lazy_ptr_table;
   vm_size_t lazy_ptr_table_size;
   user_addr_t lazy_ptr_table_addr;
+  uint64_t lazy_ptr_table_count; // Number of items in table
+  vm_address_t stubs_table;
+  user_addr_t stubs_table_addr;
+  vm_size_t stubs_table_size;
+  uint64_t stubs_table_count;    // Number of items in table
   vm_offset_t slide;
   vm_offset_t module_size;
   vm_offset_t pagezero_size;
@@ -7287,6 +7292,10 @@ typedef struct _symbol_table {
   symbol_type_t symbol_type;
   bool is_64bit;
   bool is_in_shared_cache;
+  // If false, browse the lazy pointer table directly when searching for
+  // interpose hooking targets. If true, browse it indirectly via the stubs
+  // table. Only meaningful if symbol_type == symbol_type_undefined.
+  bool use_stubs_table_proxy;
 } symbol_table_t;
 
 typedef struct _module_info {
@@ -7296,6 +7305,37 @@ typedef struct _module_info {
   bool libSystem_initialized;
   proc_t proc;
 } module_info_t;
+
+// As of macOS 13 (Ventura), some mach-o modules in the dyld shared cache
+// no longer have their own lazy (or non-lazy) pointer table. In such cases
+// it's been "optimized" away, and replaced by one that's not described in the
+// module's load commands, and which may be shared with other modules. In this
+// case our only access to it is via the "__stubs" section of the "__TEXT"
+// segment -- the stubs table. Each entry in the stubs table is a 'jmpq
+// *address(%rip)' instruction, where 'address' is an entry in the (otherwise
+// invisible) lazy pointer table. As this happens on Ventura (and up), we only
+// need to worry about it in 64-bit mode.
+
+// {0xFF, 0x25}
+#define STUBS_TABLE_ENTRY_OPCODE 0x25FF
+
+// Format of each entry in the stubs table, which is always a
+// 'jmpq *address(%rip)' instruction.
+#pragma pack(2)
+typedef struct _stubs_table_entry {
+  uint16_t opcode; // Should always be STUBS_TABLE_ENTRY_OPCODE
+  int32_t offset;  // Offset from address after end of instruction
+} stubs_table_entry;
+#pragma pack()
+
+// If some of our modules' lazy pointer tables have been optimized away (and
+// replaced by ones that are shared with other modules), they may not have
+// been fully initialized by the time we would normally call
+// set_interpose_hooks(). Uncomment this to delay our call until after the
+// hooked process has finished calling its initializers. Note that this
+// prevents interpose hooks from working in code called from these
+// initializers.
+//#define DELAY_SET_INTERPOSE_HOOKS 1
 
 // Copy the "interesting" part of a module's symbol table into kernel space.
 // We need to call free_symbol_table(symbol_table) after we're done.
@@ -7364,13 +7404,21 @@ bool copyin_symbol_table(module_info_t *module_info,
   vm_offset_t string_table_offset = 0;
   vm_size_t string_table_size = 0;
 
+  vm_offset_t text_sections_offset = 0;
+  uint32_t num_text_sections = 0;
   vm_offset_t data_sections_offset = 0;
   uint32_t num_data_sections = 0;
   vm_offset_t data_const_sections_offset = 0;
   uint32_t num_data_const_sections = 0;
   vm_offset_t lazy_ptr_table_offset = 0;
   vm_size_t lazy_ptr_table_size = 0;
+  uint64_t lazy_ptr_table_count = 0;
   uint32_t lazy_ptr_indirect_symbol_index = 0;
+  vm_offset_t stubs_table_offset = 0;
+  vm_size_t stubs_table_size = 0;
+  uint64_t stubs_table_count = 0;
+  uint32_t stubs_indirect_symbol_index = 0;
+  bool use_stubs_table_proxy = false;
 
   bool found_symbol_table = false;
   bool found_indirect_symbol_table = false;
@@ -7378,9 +7426,11 @@ bool copyin_symbol_table(module_info_t *module_info,
   bool found_symtab_segment = false;
   bool found_dysymtab_segment = false;
 
+  bool found_text_segment = false;
   bool found_data_segment = false;
   bool found_data_const_segment = false;
   bool found_lazy_ptr_table = false;
+  bool found_stubs_table = false;
 
   vm_offset_t module_size = mh_size + cmds_size;
   vm_offset_t pagezero_size = 0;
@@ -7440,12 +7490,17 @@ bool copyin_symbol_table(module_info_t *module_info,
             module_size = size_to_segment_end;
           }
         }
+        const char *text_segname = "__TEXT";
         const char *data_segname = "__DATA";
         // As of macOS Big Sur, the lazy pointers table is at least sometimes
         // in the __DATA_CONST segment.
         const char *data_const_segname = "__DATA_CONST";
         const char *linkedit_segname = "__LINKEDIT";
-        if (!strncmp(segname, data_segname, strlen(data_segname) + 1)) {
+        if (!strncmp(segname, text_segname, strlen(text_segname) + 1)) {
+          text_sections_offset = sections_offset;
+          num_text_sections = nsects;
+          found_text_segment = true;
+        } else if (!strncmp(segname, data_segname, strlen(data_segname) + 1)) {
           data_sections_offset = sections_offset;
           num_data_sections = nsects;
           found_data_segment = true;
@@ -7504,6 +7559,34 @@ bool copyin_symbol_table(module_info_t *module_info,
       ((vm_offset_t)load_command + load_command->cmdsize);
   }
 
+  if (is_64bit && found_text_segment && found_indirect_symbol_table &&
+      (symbol_type == symbol_type_undef))
+  {
+    vm_offset_t section_offset = text_sections_offset;
+    for (i = 1; i <= num_text_sections; ++i) {
+      struct section_64 *section = (struct section_64 *) section_offset;
+      uint64_t addr = section->addr;
+      uint64_t size = section->size;
+      bool expected_stubs_align = (section->align == 1);
+      uint8_t type = (section->flags & SECTION_TYPE);
+      uint32_t indirect_symbol_index = section->reserved1;
+      uint32_t entry_size = section->reserved2;
+
+      if ((type == S_SYMBOL_STUBS) && size && expected_stubs_align &&
+          (entry_size == sizeof(stubs_table_entry)))
+      {
+        stubs_table_offset = addr + slide;
+        stubs_table_size = size;
+        stubs_indirect_symbol_index = indirect_symbol_index;
+        stubs_table_count = size / entry_size;
+        found_stubs_table = true;
+        break;
+      }
+
+      section_offset += sizeof(struct section_64);
+    }
+  }
+
   if ((found_data_segment || found_data_const_segment) &&
       found_indirect_symbol_table && (symbol_type == symbol_type_undef))
   {
@@ -7528,7 +7611,7 @@ bool copyin_symbol_table(module_info_t *module_info,
 
       // On macOS Monterey and above, most dylibs no longer have a "lazy"
       // pointer table. When this happens, its place is taken by a single
-      // "non-lazy" pointer table (usually/always in the "__got" section). So
+      // "non-lazy" pointer table (usually/always in a "__got" section). So
       // first look for a lazy pointer table, then look for a non-lazy one. Do
       // this even on earlier versions of macOS. It's likely that dylibs
       // compiled on Monterey without a lazy pointer table will end up running
@@ -7573,6 +7656,7 @@ bool copyin_symbol_table(module_info_t *module_info,
               lazy_ptr_table_offset = addr + slide;
               lazy_ptr_table_size = size;
               lazy_ptr_indirect_symbol_index = indirect_symbol_index;
+              lazy_ptr_table_count = count;
               found_lazy_ptr_table = true;
               break;
             }
@@ -7598,13 +7682,40 @@ bool copyin_symbol_table(module_info_t *module_info,
     vm_map_deallocate(proc_map);
     return false;
   }
+
+  vm_map_offset_t stubs_table_local = 0;
   if (symbol_type == symbol_type_undef) {
-    if (!found_lazy_ptr_table) {
+    // If we're in 64-bit mode and haven't found our module's lazy pointer
+    // table, we've got to browse the stubs table when we're looking for
+    // interpose hooking targets.
+    if (is_64bit && !found_lazy_ptr_table) {
+      if (!found_stubs_table) {
+        vm_map_deallocate(proc_map);
+        return false;
+      }
+      if (!proc_mapin(proc_map, stubs_table_offset, &stubs_table_local,
+                      stubs_table_size))
+      {
+        vm_map_deallocate(proc_map);
+        return false;
+      }
+      use_stubs_table_proxy = true;
+    }
+    if (!use_stubs_table_proxy && !found_lazy_ptr_table) {
+      if (stubs_table_local) {
+        vm_deallocate(kernel_map, stubs_table_local, stubs_table_size);
+      }
       vm_map_deallocate(proc_map);
       return false;
     }
-    interesting_symbol_index += lazy_ptr_indirect_symbol_index;
-    interesting_symbol_count -= lazy_ptr_indirect_symbol_index;
+
+    if (use_stubs_table_proxy) {
+      interesting_symbol_index += stubs_indirect_symbol_index;
+      interesting_symbol_count -= stubs_indirect_symbol_index;
+    } else {
+      interesting_symbol_index += lazy_ptr_indirect_symbol_index;
+      interesting_symbol_count -= lazy_ptr_indirect_symbol_index;
+    }
   }
 
   vm_size_t nlist_size;
@@ -7619,6 +7730,9 @@ bool copyin_symbol_table(module_info_t *module_info,
   if (!proc_mapin(proc_map, symbol_table_offset, &symbol_table_local,
                   symbol_table_size))
   {
+    if (stubs_table_local) {
+      vm_deallocate(kernel_map, stubs_table_local, stubs_table_size);
+    }
     vm_map_deallocate(proc_map);
     return false;
   }
@@ -7626,6 +7740,9 @@ bool copyin_symbol_table(module_info_t *module_info,
   if (!proc_mapin(proc_map, string_table_offset, &string_table_local,
                   string_table_size))
   {
+    if (stubs_table_local) {
+      vm_deallocate(kernel_map, stubs_table_local, stubs_table_size);
+    }
     vm_deallocate(kernel_map, symbol_table_local, symbol_table_size);
     vm_map_deallocate(proc_map);
     return false;
@@ -7636,6 +7753,9 @@ bool copyin_symbol_table(module_info_t *module_info,
     if (!proc_mapin(proc_map, indirect_symbol_table_offset,
                     &indirect_symbol_table_local, indirect_symbol_table_size))
     {
+      if (stubs_table_local) {
+        vm_deallocate(kernel_map, stubs_table_local, stubs_table_size);
+      }
       vm_deallocate(kernel_map, symbol_table_local, symbol_table_size);
       vm_deallocate(kernel_map, string_table_local, string_table_size);
       vm_map_deallocate(proc_map);
@@ -7645,6 +7765,9 @@ bool copyin_symbol_table(module_info_t *module_info,
       if (!proc_mapin(proc_map, lazy_ptr_table_offset, &lazy_ptr_table_local,
                       lazy_ptr_table_size))
       {
+        if (stubs_table_local) {
+          vm_deallocate(kernel_map, stubs_table_local, stubs_table_size);
+        }
         vm_deallocate(kernel_map, symbol_table_local, symbol_table_size);
         vm_deallocate(kernel_map, string_table_local, string_table_size);
         vm_deallocate(kernel_map, indirect_symbol_table_local,
@@ -7667,6 +7790,11 @@ bool copyin_symbol_table(module_info_t *module_info,
   symbol_table->lazy_ptr_table = (vm_address_t) lazy_ptr_table_local;
   symbol_table->lazy_ptr_table_size = lazy_ptr_table_size;
   symbol_table->lazy_ptr_table_addr = lazy_ptr_table_offset;
+  symbol_table->lazy_ptr_table_count = lazy_ptr_table_count;
+  symbol_table->stubs_table = (vm_address_t) stubs_table_local;
+  symbol_table->stubs_table_size = stubs_table_size;
+  symbol_table->stubs_table_addr = stubs_table_offset;
+  symbol_table->stubs_table_count = stubs_table_count;
   symbol_table->slide = slide;
   symbol_table->module_size = module_size;
   symbol_table->pagezero_size = pagezero_size;
@@ -7675,6 +7803,7 @@ bool copyin_symbol_table(module_info_t *module_info,
   symbol_table->symbol_type = symbol_type;
   symbol_table->is_64bit = is_64bit;
   symbol_table->is_in_shared_cache = is_in_shared_cache;
+  symbol_table->use_stubs_table_proxy = use_stubs_table_proxy;
   return true;
 }
 
@@ -7698,6 +7827,10 @@ void free_symbol_table(symbol_table_t *symbol_table)
   if (symbol_table->lazy_ptr_table) {
     vm_deallocate(kernel_map, symbol_table->lazy_ptr_table,
                   symbol_table->lazy_ptr_table_size);
+  }
+  if (symbol_table->stubs_table) {
+    vm_deallocate(kernel_map, symbol_table->stubs_table,
+                  symbol_table->stubs_table_size);
   }
 }
 
@@ -8554,6 +8687,7 @@ typedef struct _hook {
   uint32_t num_patch_hooks;             // Only used in cast hook
   uint32_t num_interpose_hooks;         // Only used in cast hook
   bool no_numerical_addrs;              // Only used in cast hook
+  bool set_interpose_hooks_delayed;     // Only used in cast hook
   bool is_dynamic_hook;                 // Only used in patch hook
   bool is_cast_hook;
   uint16_t orig_code;
@@ -11597,6 +11731,7 @@ void set_patch_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
 }
 
 //#define DEBUG_LAZY_POINTERS 1
+//#define DEBUG_LAZY_POINTER_TYPES 1
 
 void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
                                     module_info_t *module_info,
@@ -11633,18 +11768,101 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
     }
 
     char *string_table_item;
+#ifdef DEBUG_LAZY_POINTER_TYPES
+    uint8_t n_type;
+    uint8_t n_sect;
+    uint16_t n_desc;
+    uint64_t n_value;
+#endif
     if (symbol_table.is_64bit) {
       struct nlist_64 *symbol_table_item = (struct nlist_64 *)
         (symbol_table.symbol_table +
           *indirectSymbolTableItem * sizeof(struct nlist_64));
       string_table_item = (char *)
         (symbol_table.string_table + symbol_table_item->n_un.n_strx);
+#ifdef DEBUG_LAZY_POINTER_TYPES
+      n_type = symbol_table_item->n_type;
+      n_sect = symbol_table_item->n_sect;
+      n_desc = symbol_table_item->n_desc;
+      n_value = symbol_table_item->n_value;
+#endif
     } else {
       struct nlist *symbol_table_item = (struct nlist *)
         (symbol_table.symbol_table +
           *indirectSymbolTableItem * sizeof(struct nlist));
       string_table_item = (char *)
         (symbol_table.string_table + symbol_table_item->n_un.n_strx);
+#ifdef DEBUG_LAZY_POINTER_TYPES
+      n_type = symbol_table_item->n_type;
+      n_sect = symbol_table_item->n_sect;
+      n_desc = symbol_table_item->n_desc;
+      n_value = symbol_table_item->n_value;
+#endif
+    }
+
+    uint64_t target_index = i - symbol_table.symbol_index;
+#ifdef DEBUG_LAZY_POINTER_TYPES
+    pid_t pid = proc_pid(proc);
+    char procname[PATH_MAX];
+    proc_name(pid, procname, sizeof(procname));
+    printf("HookCase(%s[%d]): set_interpose_hooks_for_module(0x%x:0x%llx): module %s, string_table_item %s, n_type 0x%x, n_sect 0x%x, n_desc 0x%x, n_value 0x%llx\n",
+           procname, pid, i, target_index, module_info->path,
+           string_table_item, n_type, n_sect, n_desc, n_value);
+#endif
+
+    // If 'symbol_table.use_stubs_table_proxy' == true, we find entries in the
+    // lazy pointer table by browsing the stubs table. Otherwise we browse the
+    // lazy pointer table directly. If we're browsing the stubs table, we
+    // haven't loaded the lazy pointer table into kernel memory -- so each
+    // entry we find in the lazy pointer table will need to be copied in
+    // individually.
+
+    uint32_t lazy_ptr_size;
+    if (is_64bit) {
+      lazy_ptr_size = sizeof(uint64_t);
+    } else {
+      lazy_ptr_size = sizeof(uint32_t);
+    }
+    uint64_t old_lazy_ptr = 0;
+    user_addr_t old_lazy_ptr_addr;
+    bool old_lazy_ptr_needs_copyin = false;
+
+    if (symbol_table.use_stubs_table_proxy) {
+      if (target_index >= symbol_table.stubs_table_count) {
+        break;
+      }
+      stubs_table_entry instr =
+        ((stubs_table_entry *)(symbol_table.stubs_table))
+          [target_index];
+      // Sanity check
+      if ((instr.opcode != STUBS_TABLE_ENTRY_OPCODE) ||
+          (instr.offset == 0))
+      {
+        break;
+      }
+      user_addr_t entry_offset =
+        symbol_table.stubs_table_addr +
+          target_index * sizeof(stubs_table_entry);
+      user_addr_t next_entry_offset =
+        entry_offset + sizeof(stubs_table_entry);
+      old_lazy_ptr_addr =
+        (int64_t) next_entry_offset + (int64_t) instr.offset;
+      old_lazy_ptr_needs_copyin = true;
+    } else {
+      if (target_index >= symbol_table.lazy_ptr_table_count) {
+        break;
+      }
+      old_lazy_ptr_addr =
+        symbol_table.lazy_ptr_table_addr + target_index * lazy_ptr_size;
+      if (is_64bit) {
+        uint64_t old_lazy_ptr_64 =
+          ((uint64_t *)(symbol_table.lazy_ptr_table))[target_index];
+        old_lazy_ptr = old_lazy_ptr_64;
+      } else {
+        uint32_t old_lazy_ptr_32 =
+          ((uint32_t *)(symbol_table.lazy_ptr_table))[target_index];
+        old_lazy_ptr = old_lazy_ptr_32;
+      }
     }
 
     for (j = 0; j < num_interpose_hooks; ++j) {
@@ -11667,89 +11885,91 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
       {
         user_addr_t module_begin = module_info->load_address;
         user_addr_t module_end = module_begin + symbol_table.module_size;
-        uint32_t target_index = i - symbol_table.symbol_index;
-        if (symbol_table.lazy_ptr_table) {
-          if (is_64bit) {
-            uint64_t new_lazy_ptr = interpose_hooks[j].hook_function;
-            uint64_t old_lazy_ptr =
-              ((uint64_t *)(symbol_table.lazy_ptr_table))[target_index];
-            user_addr_t old_lazy_ptr_offset = symbol_table.lazy_ptr_table_addr +
-              target_index * sizeof(old_lazy_ptr);
-            // Don't change 'old_lazy_ptr' if it's already been changed --
-            // presumably via DYLD_INSERT_LIBRARIES. But note that it won't
-            // be NULL if it's not yet been initialized. It will point to a
-            // local method for lazily setting it to the correct (external)
-            // value -- a small block in the __stub_helper section of the
-            // __TEXT, containing a PUSH instruction and a JMP instruction.
-            // We assume that if a module is in the dyld shared cache it
-            // doesn't contain any uninitialized lazy pointers.
-            bool uninitialized = (!symbol_table.is_in_shared_cache &&
-                                  (old_lazy_ptr > module_begin) &&
-                                  (old_lazy_ptr < module_end));
+        if (is_64bit) {
+          if (old_lazy_ptr_needs_copyin) {
+            if (!proc_copyin(proc_map, old_lazy_ptr_addr, &old_lazy_ptr,
+                lazy_ptr_size))
+            {
+              continue;
+            }
+          }
+          uint64_t new_lazy_ptr = interpose_hooks[j].hook_function;
+          // Don't change 'old_lazy_ptr' if it's already been changed --
+          // presumably via DYLD_INSERT_LIBRARIES. But note that it won't
+          // be NULL if it's not yet been initialized. It will point to a
+          // local method for lazily setting it to the correct (external)
+          // value -- a small block in the __stub_helper section of the
+          // __TEXT, containing a PUSH instruction and a JMP instruction.
+          // We assume that if a module is in the dyld shared cache it
+          // doesn't contain any uninitialized lazy pointers.
+          bool uninitialized = (!symbol_table.is_in_shared_cache &&
+                                (old_lazy_ptr > module_begin) &&
+                                (old_lazy_ptr < module_end));
 #ifdef DEBUG_LAZY_POINTERS
-            bool interesting =
-              ((old_lazy_ptr != interpose_hooks[j].orig_function) &&
-               !symbol_table.is_in_shared_cache);
-            // On macOS Monterey and above, most (if not all) "lazy" pointers
-            // are already initialized. Supposedly this makes applications
-            // load faster.
-            if (macOS_Monterey() || macOS_Ventura()) {
-              interesting = true;
-            }
-            if (interesting) {
-              pid_t pid = proc_pid(proc);
-              char procname[PATH_MAX];
-              proc_name(pid, procname, sizeof(procname));
-              vm_offset_t slide = symbol_table.slide;
-              printf("HookCase(%s[%d]): set_interpose_hooks_for_module(): module %s, string_table_item %s, new_lazy_ptr 0x%llx, old_lazy_ptr 0x%llx, orig_function 0x%llx, module_begin 0x%llx, module_end 0x%llx, uninitialized %d\n",
-                     procname, pid, module_info->path, string_table_item, new_lazy_ptr - slide,
-                     old_lazy_ptr - slide, interpose_hooks[j].orig_function - slide,
-                     module_begin - slide, module_end - slide, uninitialized);
-            }
+          bool interesting =
+            ((old_lazy_ptr != interpose_hooks[j].orig_function) &&
+              !symbol_table.is_in_shared_cache);
+          // On macOS Monterey and above, most (if not all) "lazy" pointers
+          // are already initialized. Supposedly this makes applications
+          // load faster.
+          if (macOS_Monterey() || macOS_Ventura()) {
+            interesting = true;
+          }
+          if (interesting) {
+#ifndef DEBUG_LAZY_POINTER_TYPES
+            pid_t pid = proc_pid(proc);
+            char procname[PATH_MAX];
+            proc_name(pid, procname, sizeof(procname));
 #endif
-            if (!interpose_hooks[j].orig_function || uninitialized ||
-                (old_lazy_ptr == interpose_hooks[j].orig_function))
-            {
-              proc_copyout(proc_map, &new_lazy_ptr, old_lazy_ptr_offset,
-                           sizeof(new_lazy_ptr));
-            }
-          } else {
-            uint32_t new_lazy_ptr =
-              (uint32_t) interpose_hooks[j].hook_function;
-            uint32_t old_lazy_ptr =
-              ((uint32_t *)(symbol_table.lazy_ptr_table))[target_index];
-            user_addr_t old_lazy_ptr_offset = symbol_table.lazy_ptr_table_addr +
-              target_index * sizeof(old_lazy_ptr);
-            // Don't change 'old_lazy_ptr' if it's already been changed --
-            // presumably via DYLD_INSERT_LIBRARIES.  But note that it won't
-            // be NULL if it's not yet been initialized.  It will point to a
-            // local method for lazily setting it to the correct (external)
-            // value -- a small block in the __stub_helper section of the
-            // __TEXT, containing a PUSH instruction and a JMP instruction.
-            // We assume that if a module is in the dyld shared cache it
-            // doesn't contain any uninitialized lazy pointers.
-            bool uninitialized = (!symbol_table.is_in_shared_cache &&
-                                  (old_lazy_ptr > module_begin) &&
-                                  (old_lazy_ptr < module_end));
+            vm_offset_t slide = symbol_table.slide;
+            printf("HookCase(%s[%d]): set_interpose_hooks_for_module(0x%x:0x%llx): module %s, string_table_item %s, new_lazy_ptr 0x%llx, old_lazy_ptr 0x%.08llx%.08llx, orig_function 0x%llx, module_begin 0x%llx, module_end 0x%llx, uninitialized %d\n",
+                   procname, pid, i, target_index, module_info->path, string_table_item,
+                   new_lazy_ptr - slide, (old_lazy_ptr - slide) >> 32,
+                   (old_lazy_ptr - slide) & 0xffffffff,
+                   interpose_hooks[j].orig_function - slide,
+                   module_begin - slide, module_end - slide, uninitialized);
+          }
+#endif
+          if (!interpose_hooks[j].orig_function || uninitialized ||
+              (old_lazy_ptr == interpose_hooks[j].orig_function))
+          {
+            proc_copyout(proc_map, &new_lazy_ptr, old_lazy_ptr_addr,
+                         sizeof(new_lazy_ptr));
+          }
+        } else {
+          uint32_t new_lazy_ptr =
+            (uint32_t) interpose_hooks[j].hook_function;
+          // Don't change 'old_lazy_ptr' if it's already been changed --
+          // presumably via DYLD_INSERT_LIBRARIES.  But note that it won't
+          // be NULL if it's not yet been initialized.  It will point to a
+          // local method for lazily setting it to the correct (external)
+          // value -- a small block in the __stub_helper section of the
+          // __TEXT, containing a PUSH instruction and a JMP instruction.
+          // We assume that if a module is in the dyld shared cache it
+          // doesn't contain any uninitialized lazy pointers.
+          bool uninitialized = (!symbol_table.is_in_shared_cache &&
+                                (old_lazy_ptr > module_begin) &&
+                                (old_lazy_ptr < module_end));
 #ifdef DEBUG_LAZY_POINTERS
-            if ((old_lazy_ptr != interpose_hooks[j].orig_function) &&
-                !symbol_table.is_in_shared_cache)
-            {
-              pid_t pid = proc_pid(proc);
-              char procname[PATH_MAX];
-              proc_name(pid, procname, sizeof(procname));
-              vm_offset_t slide = symbol_table.slide;
-              printf("HookCase(%s[%d]): set_interpose_hooks_for_module(): module %s, new_lazy_ptr 0x%x, old_lazy_ptr 0x%x, module_begin 0x%llx, module_end 0x%llx, uninitialized %d\n",
-                     procname, pid, module_info->path, new_lazy_ptr - (uint32_t) slide,
-                     old_lazy_ptr - (uint32_t) slide, module_begin - slide, module_end - slide, uninitialized);
-            }
+          if ((old_lazy_ptr != interpose_hooks[j].orig_function) &&
+              !symbol_table.is_in_shared_cache)
+          {
+#ifndef DEBUG_LAZY_POINTER_TYPES
+            pid_t pid = proc_pid(proc);
+            char procname[PATH_MAX];
+            proc_name(pid, procname, sizeof(procname));
 #endif
-            if (!interpose_hooks[j].orig_function || uninitialized ||
-                (old_lazy_ptr == (uint32_t) interpose_hooks[j].orig_function))
-            {
-              proc_copyout(proc_map, &new_lazy_ptr, old_lazy_ptr_offset,
-                           sizeof(new_lazy_ptr));
-            }
+            vm_offset_t slide = symbol_table.slide;
+            printf("HookCase(%s[%d]): set_interpose_hooks_for_module(): module %s, new_lazy_ptr 0x%x, old_lazy_ptr 0x%llx, module_begin 0x%llx, module_end 0x%llx, uninitialized %d\n",
+                   procname, pid, module_info->path, new_lazy_ptr - (uint32_t) slide,
+                   old_lazy_ptr - slide, module_begin - slide, module_end - slide, uninitialized);
+          }
+#endif
+          if (!interpose_hooks[j].orig_function || uninitialized ||
+              (old_lazy_ptr == (uint32_t) interpose_hooks[j].orig_function))
+          {
+            proc_copyout(proc_map, &new_lazy_ptr, old_lazy_ptr_addr,
+                         sizeof(new_lazy_ptr));
           }
         }
       }
@@ -11913,8 +12133,19 @@ bool set_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
   bool retval = true;
 
   if (interpose_hooks) {
+#ifdef DELAY_SET_INTERPOSE_HOOKS
+    // On macOS Ventura we delay calling set_interpose_hooks() until our
+    // shared "__got" sections, if any, have been initialized.
+    if (macOS_Ventura()) {
+      cast_hookp->set_interpose_hooks_delayed = true;
+    } else {
+      set_interpose_hooks(proc, proc_map, cast_hookp,
+                          interpose_hooks, num_interpose_hooks);
+    }
+#else
     set_interpose_hooks(proc, proc_map, cast_hookp,
                         interpose_hooks, num_interpose_hooks);
+#endif
     cast_hookp->interpose_hooks = interpose_hooks;
     cast_hookp->num_interpose_hooks = num_interpose_hooks;
   }
@@ -12229,10 +12460,14 @@ void process_hook_flying(hook_t *hookp, x86_saved_state_t *intr_state)
     if (setup_register_for_add_image(hookp, intr_state, proc_map)) {
       hookp->state = hook_state_landed;
     }
-  } else if (hookp->hooklib_initializers) {
+  } else if (hookp->hooklib_initializers ||
+             hookp->set_interpose_hooks_delayed)
+  {
     // Our hook library's initializers must be called after our main
     // executable has been initialized. So shift our breakpoint and wait
-    // for the new breakpoint to be hit.
+    // for the new breakpoint to be hit. Likewise if we've delayed calling
+    // set_interpose_hooks(), to make sure our shared "__got" sections, if
+    // any, have been initialized.
     if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
                      sizeof(hookp->orig_code)))
     {
@@ -12283,13 +12518,26 @@ void process_hook_landed(hook_t *hookp, x86_saved_state_t *intr_state)
   // dyld::initializeMainExecutable() breakpoint for the first time.
   memcpy(intr_state, &hookp->orig_intr_state, sizeof(x86_saved_state_t));
 
-  if (hookp->hooklib_initializers &&
+  // If we've delayed our call to set_interpose_hooks() until after our
+  // process has called its initializers, make the call here.
+  if (hookp->set_interpose_hooks_delayed &&
+      (hookp->orig_addr == hookp->dyld_afterInitMain))
+  {
+    hookp->set_interpose_hooks_delayed = false;
+    set_interpose_hooks(proc, proc_map, hookp,
+                        hookp->interpose_hooks,
+                        hookp->num_interpose_hooks);
+  }
+
+  if (hookp->set_interpose_hooks_delayed ||
       (hookp->hooklib_initializers_run < hookp->num_hooklib_initializers))
   {
     // Our hook library's initializers must be called after our main
     // executable has been initialized. So (if we haven't already done so in
     // process_hook_flying()) shift our breakpoint and wait for the new
-    // breakpoint to be hit.
+    // breakpoint to be hit. Do the same if we've delayed calling
+    // set_interpose_hooks(), to make sure our shared "__got" sections, if
+    // any, have been initialized.
     if (hookp->orig_addr != hookp->dyld_afterInitMain) {
       if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
                        sizeof(hookp->orig_code)))
@@ -12310,10 +12558,10 @@ void process_hook_landed(hook_t *hookp, x86_saved_state_t *intr_state)
           hookp->state = hook_state_landed;
         }
       }
-    } else {
-      if (setup_initializer(hookp, intr_state, proc_map)) {
-        hookp->state = hook_state_landed;
-      }
+    } else if (setup_initializer(hookp, intr_state, proc_map) ||
+               hookp->set_interpose_hooks_delayed)
+    {
+      hookp->state = hook_state_landed;
     }
   } else {
     if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,

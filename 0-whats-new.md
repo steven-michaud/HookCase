@@ -1,3 +1,27 @@
+# What's New in Version 7.1.1
+
+macOS 13 (Ventura) made changes to some system dylibs and frameworks
+that break HookCase's support for setting interpose hooks on methods
+called from them. I didn't notice this at first, since interpose hooks
+still worked in some system modules. But the bug was reported at
+[Issue #40](https://github.com/steven-michaud/HookCase/issues/40),
+and I've now implemented a workaround in HookCase 7.1.1.
+
+As of macOS 12 (Monterey), HookCase uses a mach-o module's "__got"
+section to implement interpose hooks. "GOT" stands for "global offset
+table". It's also called the lazy pointer table. It contains the
+addresses of functions in other modules. It's used to resolve calls to
+these functions. Interpose hooks are set by overwriting entries in the
+lazy pointer table.
+
+As of macOS 13 (Ventura), some modules' "__got" sections have been
+"optimized" away, and no longer contain usable information. The lazy
+pointer tables haven't disappeared: They've just been moved to new
+locations, where they can be shared by more than one module. But
+they're now only (indirectly) accessible via something called the
+stubs table. HookCase 7.1.1 knows how to use the stubs table to
+implement interpose hooks.
+
 # What's New in Version 7.1
 
 HookCase 7.1 now supports a powerful new feature -- the `HC_ADDKIDS`
@@ -121,14 +145,14 @@ information see
 
 This version of HookCase fixes a bug that caused intermittent
 instability, though not kernel panics. I fixed it by tweaking the
-[code at the heart of HookCase's watchpoint support](HookCase/HookCase/HookCase.cpp#L13651).
+[code at the heart of HookCase's watchpoint support](HookCase/HookCase/HookCase.cpp#L13899).
 See [Issue #26](https://github.com/steven-michaud/HookCase/issues/26)
 for more information.
 
 HookCase's watchpoint code is quite complex. So if you see any sort of
 instability short of kernel panics, especially if it resembles what's
 reported at Issue #26, you should try
-[disabling watchpoint support](HookCase/HookCase/HookCase.cpp#L14601)
+[disabling watchpoint support](HookCase/HookCase/HookCase.cpp#L14849)
 
 # What's New in Version 5.0.3
 
@@ -334,12 +358,12 @@ can now hook methods that aren't in their module's symbol table.  For
 more information see
 [Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L1228).
 
-* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L11678) that
+* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L11897) that
 prevented interpose hooks from working outside the shared cache of
 system modules.
 
 * Version 2.0
-[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L13377)
+[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L13625)
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0
