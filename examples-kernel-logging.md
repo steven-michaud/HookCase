@@ -17,7 +17,7 @@ kernel extensions whose `start()` method fails.
 
 Note that there's a workaround, which involves installing a serial
 port and using `kprintf()` to write to it. For more information see
-[HookCase_start()](HookCase/HookCase/HookCase.cpp#L14983).
+[HookCase_start()](HookCase/HookCase/HookCase.cpp#L15290).
 
 The root of the problem is that the messages received by Apple's new
 logging subsystem no longer contain any strings. Each message is
@@ -92,7 +92,7 @@ sudo cp -R KernelLogging.kext /usr/local/sbin/
 Then build the hook library. You'll first need to configure it to
 redirect its output to a virtual serial port like
 [PySerialPortLogger](https://github.com/steven-michaud/PySerialPortLogger),
-[here](Examples/kernel-logging/hook.mm#L344). Otherwise you won't see
+[here](Examples/kernel-logging/hook.mm#L337). Otherwise you won't see
 any output from `diagnosticd`.
 
 To load this example's hook library into both the application you're
@@ -101,7 +101,7 @@ first restart the daemon and then kill it. Then running Console will
 cause it to be restarted yet again with the hook library loaded.
 
 ```
-% sudo kickstart -kp system/com.apple.diagnosticd
+% sudo launchctl kickstart -kp system/com.apple.diagnosticd
 service spawned with pid: [pid]
 % sudo kill -9 [pid]
 ```
@@ -109,7 +109,7 @@ service spawned with pid: [pid]
 Now run the Console app:
 
 ```
-HC_ADDKIDS=/usr/libexec/diagnosticd HC_INSERT_LIBRARY=/full/path/to/logger-hook.dylib /System/Applications/Utilities/Console.app/Contents/MacOS/Console
+HC_ADDKIDS=/usr/libexec/diagnosticd HC_INSERT_LIBRARY=/full/path/to/hook.dylib /System/Applications/Utilities/Console.app/Contents/MacOS/Console
 ```
 
 Before you click "Start Streaming" in the Console window, set the
@@ -132,6 +132,6 @@ again by doing the following. This latest instance of `diagnosticd`
 will no longer have the hook library loaded into it.
 
 ```
-sudo kickstart -kp system/com.apple.diagnosticd
+sudo launchctl kickstart -kp system/com.apple.diagnosticd
 ```
 

@@ -840,5 +840,15 @@ CALLER(mac_file_check_mmap)
 
 CALLER(mac_vnode_check_open_ptr)
 
+CALLER(mac_vnode_check_ioctl_ptr)
+
+CALLER(mac_proc_check_syscall_unix_ptr)
+
+CALLER(proc_check_syscall_mach_ptr)
+
+CALLER(proc_check_migroutine_invoke_ptr)
+
+CALLER(io_filter_applier_ptr)
+
 CALLER(user_trap)
 

@@ -1,3 +1,29 @@
+# What's New in Version 7.1.2
+
+As of macOS 12 (Monterey) Apple supports two new kinds of sandboxing
+-- system call filtering and message filtering. These can interfere
+with hook library logging and the production of stack traces. So
+HookCase 7.1.2 disables them for processes that contain a hook
+library.
+
+macOS Monterey changed how `dyld` calls C++ and Objective-C
+initializers, such that initializers for the hook library and its
+dependents are no longer called automatically. HookCase 6.0 introduced
+a workaround -- call the hook library's initializers explicitly. But
+doing this doesn't also trigger calls to all of its dependent
+frameworks' initializers. HookCase 7.1.2 introduces a different
+workaround, which does ensure that all the relevant initializers are
+called. This resolves
+[Issue #44](https://github.com/steven-michaud/HookCase/issues/44).
+
+HookCase 7.1.2 fixes issues with `execv()` and `fork()`. This resolves
+[Issue #45](https://github.com/steven-michaud/HookCase/issues/45).
+
+As best I can tell system call filtering and message filtering aren't
+(yet) documented. But the `*.sb` file syntax can be seen in a
+[WebKit file](https://opensource.apple.com/source/WebKit2/WebKit2-7611.3.10.1.3/WebProcess/com.apple.WebProcess.sb.in.auto.html)
+Search on "syscall-unix", "syscall-mach" and "apply-message-filter".
+
 # What's New in Version 7.1.1
 
 macOS 13 (Ventura) made changes to some system dylibs and frameworks
@@ -145,14 +171,14 @@ information see
 
 This version of HookCase fixes a bug that caused intermittent
 instability, though not kernel panics. I fixed it by tweaking the
-[code at the heart of HookCase's watchpoint support](HookCase/HookCase/HookCase.cpp#L13899).
+[code at the heart of HookCase's watchpoint support](HookCase/HookCase/HookCase.cpp#L14200).
 See [Issue #26](https://github.com/steven-michaud/HookCase/issues/26)
 for more information.
 
 HookCase's watchpoint code is quite complex. So if you see any sort of
 instability short of kernel panics, especially if it resembles what's
 reported at Issue #26, you should try
-[disabling watchpoint support](HookCase/HookCase/HookCase.cpp#L14849)
+[disabling watchpoint support](HookCase/HookCase/HookCase.cpp#L15151)
 
 # What's New in Version 5.0.3
 
@@ -212,8 +238,8 @@ This version of HookCase supports watchpoints. You can now set a
 watchpoint on a location in memory and gather information (including a
 stack trace) about the code that writes to that location.  For more
 information see
-[config_watcher() in the hook library template](HookLibraryTemplate/hook.mm#L1099),
-[Hooked_watcher_example() in the hook library template](HookLibraryTemplate/hook.mm#L1245)
+[config_watcher() in the hook library template](HookLibraryTemplate/hook.mm#L1118),
+[Hooked_watcher_example() in the hook library template](HookLibraryTemplate/hook.mm#L1263)
 and [the watchpoints example](examples-watchpoints.md).
 
 # What's New in Version 4.0.5
@@ -276,7 +302,7 @@ HookCase now supports dynamically adding patch hooks for raw function
 pointers. This is useful in hooks for methods that use callbacks --
 for example CFMachPortCreate() and CFRunLoopObserverCreate(). For more
 information see
-[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L1189)
+[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L1207)
 and [the dynamic patch hooks example](examples-dynamic-hooking.md).
 
 # What's New in Version 3.2.1
@@ -356,16 +382,16 @@ instead of `int 0x22`, as follows:
 at a particular address in a given module.  This means that HookCase
 can now hook methods that aren't in their module's symbol table.  For
 more information see
-[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L1228).
+[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L1246).
 
-* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L11897) that
+* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L11905) that
 prevented interpose hooks from working outside the shared cache of
 system modules.
 
 * Version 2.0
-[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L13625)
+[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L13642)
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0
-[fixes a premature-release bug](Examples/events/hook.mm#L1593)
+[fixes a premature-release bug](Examples/events/hook.mm#L1611)
 in the "System Events" example's hook library.

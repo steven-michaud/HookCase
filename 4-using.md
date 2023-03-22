@@ -61,7 +61,7 @@ and the [kernel logging example](examples-kernel-logging.md).
 Recent versions of HookCase support creating a patch hook for an
 (un-named) method at a particular address in a given module.  (For
 more information see
-[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L1228).)
+[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L1246).)
 So, for example, creating a patch hook for a function named
 "sub_123abc" would (by default) specify that the hook should be
 inserted at offset 0x123abc (hexadecimal notation) in the module.  But
@@ -77,7 +77,7 @@ best to patch callbacks in their "create" methods, before they start
 being used. Otherwise there's some danger of a race condition,
 especially if the callback can be used on different threads from the
 one that calls add_patch_hook(). For more information see
-[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L1189)
+[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L1207)
 and [the dynamic patch hooks example](examples-dynamic-hooking.md).
 
 HookCase now supports watchpoints. You can set a watchpoint on a range
@@ -88,6 +88,6 @@ certain buffers in memory, for example the "sideband buffer" that's
 used by OpenGL accelerated graphics. Watchpoints are per page of
 memory. So to avoid confusion, it's best to set them in buffers that
 are page-aligned. For more information see
-[config_watcher() in the hook library template](HookLibraryTemplate/hook.mm#L1099),
-[Hooked_watcher_example() in the hook library template](HookLibraryTemplate/hook.mm#L1245)
+[config_watcher() in the hook library template](HookLibraryTemplate/hook.mm#L1118),
+[Hooked_watcher_example() in the hook library template](HookLibraryTemplate/hook.mm#L1263)
 and [the watchpoints example](examples-watchpoints.md).

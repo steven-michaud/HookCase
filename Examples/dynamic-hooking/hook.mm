@@ -102,13 +102,6 @@ bool CanUseCF()
   return sCFInitialized;
 }
 
-void Initialize_CF_If_Needed()
-{
-  if (!sCFInitialized && __CFInitialize_caller) {
-    Hooked___CFInitialize();
-  }
-}
-
 #define MAC_OS_X_VERSION_10_9_HEX  0x00000A90
 #define MAC_OS_X_VERSION_10_10_HEX 0x00000AA0
 #define MAC_OS_X_VERSION_10_11_HEX 0x00000AB0
@@ -313,6 +306,8 @@ void tty_fputs(const char *s, FILE *stream)
 
   long pipe_max = fpathconf(fileno(stream), _PC_PIPE_BUF);
   if (pipe_max == -1) {
+    fputs(s, stream);
+    tcdrain(fileno(stream));
     return;
   }
   char *block = (char *) malloc(pipe_max + 1);
@@ -332,10 +327,10 @@ void tty_fputs(const char *s, FILE *stream)
     bzero(block, pipe_max + 1);
     strncpy(block, s + done, to_do);
     int rv = fputs(block, stream);
+    tcdrain(fileno(stream));
     if (rv == EOF) {
       break;
     }
-    tcdrain(fileno(stream));
   }
 
   free(block);
@@ -501,6 +496,23 @@ extern "C" void hooklib_LogWithFormatV(bool decorate, const char *format, va_lis
 extern "C" void hooklib_PrintStackTrace()
 {
   PrintStackTrace();
+}
+
+const struct dyld_all_image_infos *get_all_image_infos()
+{
+  static dyld_all_image_infos *retval = NULL;
+
+  if (!retval) {
+    task_dyld_info_data_t info;
+    mach_msg_type_number_t count = TASK_DYLD_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_DYLD_INFO,
+                  (task_info_t) &info, &count) == KERN_SUCCESS)
+    {
+      retval = (dyld_all_image_infos *) info.all_image_info_addr;
+    }
+  }
+
+  return retval;
 }
 
 const struct dyld_all_image_infos *(*_dyld_get_all_image_infos)() = NULL;
@@ -788,6 +800,9 @@ extern "C" void *module_dlsym(const char *module_name, const char *symbol)
     s_dyld_get_all_image_infos_initialized = true;
     _dyld_get_all_image_infos = (const struct dyld_all_image_infos *(*)())
       module_dlsym("/usr/lib/system/libdyld.dylib", "__dyld_get_all_image_infos");
+    if (!_dyld_get_all_image_infos) {
+      _dyld_get_all_image_infos = get_all_image_infos;
+    }
   }
 
 #ifdef __LP64__
@@ -891,7 +906,11 @@ int dyld_dladdr(const void *addr, Dl_info *info)
     dyld_dladdr_caller = (int (*)(const void*, Dl_info *))
       module_dlsym("dyld", "_dladdr");
     if (!dyld_dladdr_caller) {
-      return 0;
+      // But fall back to "normal" dladdr() if we can't find dladdr() in dyld.
+      dyld_dladdr_caller = dladdr;
+      if (!dyld_dladdr_caller) {
+        return 0;
+      }
     }
   }
   return dyld_dladdr_caller(addr, info);
@@ -965,7 +984,6 @@ public:
 loadHandler::loadHandler()
 {
   basic_init();
-  Initialize_CF_If_Needed();
 #if (0)
   LogWithFormat(true, "Hook.mm: loadHandler()");
   PrintStackTrace();
@@ -1278,6 +1296,7 @@ typedef unsigned long long CSArchitecture;
 #define kCSNow LONG_MAX
 
 extern "C" {
+uint32_t CSSymbolicatorGetFlagsForNListOnlyData(void);
 CSSymbolicatorRef CSSymbolicatorCreateWithTaskFlagsAndNotification(task_t task,
                                                                    uint32_t flags,
                                                                    uint32_t notification);
@@ -1315,14 +1334,13 @@ CSSymbolicatorRef gSymbolicator = {0};
 void CreateGlobalSymbolicator()
 {
   if (CSIsNull(gSymbolicator)) {
-    // 0x40e0000 is the value returned by
-    // uint32_t CSSymbolicatorGetFlagsForNListOnlyData(void).  We don't use
-    // this method directly because it doesn't exist on OS X 10.6.  Unless
-    // we limit ourselves to NList data, it will take too long to get a
+    // Unless we limit ourselves to NList data, it will take too long to get a
     // stack trace where Dwarf debugging info is available (about 15 seconds
     // with Firefox).
     gSymbolicator =
-      CSSymbolicatorCreateWithTaskFlagsAndNotification(mach_task_self(), 0x40e0000, 0);
+      CSSymbolicatorCreateWithTaskFlagsAndNotification(mach_task_self(),
+                                                       CSSymbolicatorGetFlagsForNListOnlyData(),
+                                                       0);
   }
 }
 
@@ -1425,8 +1443,11 @@ const char *GetAddressString(void *address, CSTypeRef owner)
   if (!CSIsNull(owner)) {
     CSSymbolRef symbol =
       CSSymbolOwnerGetSymbolWithAddress(owner, (unsigned long long) address);
-    if (!CSIsNull(symbol)) {
+    bool symbol_is_null = CSIsNull(symbol);
+    if (!symbol_is_null) {
       addressName = CSSymbolGetName(symbol);
+    }
+    if (!symbol_is_null && addressName) {
       CSRange range = CSSymbolGetRange(symbol);
       addressOffset = (unsigned long long) address;
       if (range.location <= addressOffset) {
@@ -1442,12 +1463,19 @@ const char *GetAddressString(void *address, CSTypeRef owner)
       } else {
         addressOffsetIsBaseAddress = true;
       }
+      if (!addressName) {
+        addressOffsetIsBaseAddress = true;
+      }
     }
   }
 
   if (addressOffsetIsBaseAddress) {
-    snprintf(holder, sizeof(holder), "%s 0x%llx",
-             addressName, addressOffset);
+    if (addressName) {
+      snprintf(holder, sizeof(holder), "%s 0x%llx",
+               addressName, addressOffset);
+    } else {
+      snprintf(holder, sizeof(holder), "0x%llx", addressOffset);
+    }
   } else {
     snprintf(holder, sizeof(holder), "%s + 0x%llx",
              addressName, addressOffset);
@@ -1514,6 +1542,7 @@ void PrintStackTrace()
   CSSymbolicatorRef symbolicator = {0};
   bool symbolicatorNeedsRelease = GetSymbolicator(&symbolicator);
   if (CSIsNull(symbolicator)) {
+    LogWithFormat(true, "Hook.mm: PrintStackTrace(): symbolicator not found.");
     free(addresses);
     return;
   }

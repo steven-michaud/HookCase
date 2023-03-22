@@ -625,6 +625,37 @@ extern "C" Boolean OSCompareAndSwapPtr_fixed(void *oldValue, void *newValue,
 extern "C" Boolean OSCompareAndSwap128(__uint128_t oldValue, __uint128_t newValue,
                                        volatile __uint128_t *address);
 
+// From bsd/sys/proc.h (begin)
+typedef int (*syscall_filter_cbfunc_t)(proc_t p, int num);
+typedef int (*kobject_filter_cbfunc_t)(proc_t p, int msgid, int idx);
+struct syscall_filter_callbacks {
+  int version;
+  const syscall_filter_cbfunc_t unix_filter_cbfunc;
+  const syscall_filter_cbfunc_t mach_filter_cbfunc;
+  const kobject_filter_cbfunc_t kobj_filter_cbfunc;
+};
+typedef struct syscall_filter_callbacks *syscall_filter_cbs_t;
+// From bsd/sys/proc.h (end)
+
+// From iokit/IOKit/IOUserClient.h (begin)
+typedef uintptr_t io_filter_policy_t;
+enum io_filter_type_t {
+  io_filter_type_external_method       = 1,
+  io_filter_type_external_async_method = 2,
+  io_filter_type_trap                  = 3,
+};
+typedef IOReturn (*io_filter_resolver_t)(task_t task, void *client, uint32_t type,
+                                         io_filter_policy_t *filterp);
+typedef IOReturn (*io_filter_applier_t)(void *client, io_filter_policy_t filter,
+                                        io_filter_type_t type, uint32_t selector);
+typedef void (*io_filter_release_t)(io_filter_policy_t filter);
+struct io_filter_callbacks {
+  const io_filter_resolver_t      io_filter_resolver;
+  const io_filter_applier_t       io_filter_applier;
+  const io_filter_release_t       io_filter_release;
+};
+// From iokit/IOKit/IOUserClient.h (end)
+
 typedef struct vm_page *vm_page_t;
 extern "C" void vm_page_validate_cs_caller(vm_page_t page);
 struct fileglob;
@@ -638,6 +669,13 @@ extern "C" int mac_file_check_mmap_caller(struct ucred *cred, struct fileglob *f
                                           int *maxprot);
 extern "C" int mac_vnode_check_open_ptr_caller(vfs_context_t ctx, struct vnode *vp,
                                                int acc_mode);
+extern "C" int mac_vnode_check_ioctl_ptr_caller(vfs_context_t ctx, struct vnode *vp,
+                                                u_long cmd);
+extern "C" int mac_proc_check_syscall_unix_ptr_caller(proc_t proc, int scnum);
+extern "C" int proc_check_syscall_mach_ptr_caller(proc_t proc, int num);
+extern "C" int proc_check_migroutine_invoke_ptr_caller(proc_t proc, int msgid, int idx);
+extern "C" int io_filter_applier_ptr_caller(void *client, io_filter_policy_t filter,
+                                            io_filter_type_t type, uint32_t selector);
 extern "C" void user_trap_caller(x86_saved_state_t *state);
 
 #endif /* #ifndef __ASSEMBLER__ */
