@@ -94,7 +94,7 @@ Version 6.0.5 also makes minor changes to the code `HookCase.kext`
 uses to track the parentage of potentially "hookable" processes, to
 make it more resilient.
 
-Here's [more information on how to use PySerialPortLogger](HookLibraryTemplate/hook.mm#L329).
+Here's [more information on how to use PySerialPortLogger](HookLibraryTemplate/hook.mm#L322).
 
 # What's New in Version 6.0.4
 
