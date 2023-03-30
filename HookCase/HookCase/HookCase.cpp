@@ -428,6 +428,24 @@ bool macOS_Ventura()
   return ((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_13_HEX);
 }
 
+bool macOS_Ventura_less_than_3()
+{
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_13_HEX)) {
+    return false;
+  }
+  // The output of "uname -r" for macOS 13.3 is actually "22.4.0".
+  return ((OSX_Version() & 0xFF) < 0x40);
+}
+
+bool macOS_Ventura_3_or_greater()
+{
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_13_HEX)) {
+    return false;
+  }
+  // The output of "uname -r" for macOS 13.3 is actually "22.4.0".
+  return ((OSX_Version() & 0xFF) >= 0x40);
+}
+
 bool OSX_Version_Unsupported()
 {
   return (((OSX_Version() & 0xFF00) < MAC_OS_X_VERSION_10_9_HEX) ||
@@ -4334,6 +4352,42 @@ typedef struct _proc_fake_ventura_dev {
   u_short p_acflag;       // Offset 0x4a4
 } *proc_fake_ventura_dev_t;
 
+typedef struct _proc_fake_ventura_3 {
+  uint32_t pad1[4];
+  task_t task;            // Offset 0x10 (Not valid on Ventura and up?)
+  uint32_t pad2[12];
+  uint64_t p_uniqueid;    // Offset 0x48 (Not valid on 12.1 and up?)
+  uint32_t pad3[4];
+  pid_t p_pid;            // Offset 0x60
+  uint32_t pad4[268];
+  unsigned int p_flag;    // P_* flags (offset 0x494)
+  unsigned int p_lflag;   // Offset 0x498
+  uint32_t pad5[75];
+  uint32_t p_argslen;     // Length of "string area" at beginning of user stack (offset 0x5c8)
+  int32_t p_argc;         // Offset 0x5cc
+  user_addr_t user_stack; // Where user stack was allocated (offset 0x5d0)
+  uint32_t pad6[47];
+  u_short p_acflag;       // Offset 0x694
+} *proc_fake_ventura_3_t;
+
+typedef struct _proc_fake_ventura_dev_3 {
+  uint32_t pad1[4];
+  task_t task;            // Offset 0x10 (Not valid on Ventura and up?)
+  uint32_t pad2[12];
+  uint64_t p_uniqueid;    // Offset 0x48 (Not valid on 12.1 and up?)
+  uint32_t pad3[4];
+  pid_t p_pid;            // Offset 0x60
+  uint32_t pad4[270];
+  unsigned int p_flag;    // P_* flags (offset 0x49c)
+  unsigned int p_lflag;   // Offset 0x4a0
+  uint32_t pad5[75];
+  uint32_t p_argslen;     // Length of "string area" at beginning of user stack (offset 0x5d0)
+  int32_t p_argc;         // Offset 0x5d4
+  user_addr_t user_stack; // Where user stack was allocated (offset 0x5d8)
+  uint32_t pad6[47];
+  u_short p_acflag;       // Offset 0x69c
+} *proc_fake_ventura_dev_3_t;
+
 static uint64_t proc_uniqueid(proc_t proc)
 {
   if (!proc) {
@@ -4384,7 +4438,15 @@ static bool IS_64BIT_PROCESS(proc_t proc)
   if (!proc) {
     return false;
   }
-  if (macOS_Ventura()) {
+  if (macOS_Ventura_3_or_greater()) {
+    if (kernel_type_is_release()) {
+      proc_fake_ventura_3_t p = (proc_fake_ventura_3_t) proc;
+      return (p && (p->p_flag & P_LP64));
+    } else if (kernel_type_is_development()) {
+      proc_fake_ventura_dev_3_t p = (proc_fake_ventura_dev_3_t) proc;
+      return (p && (p->p_flag & P_LP64));
+    }
+  } else if (macOS_Ventura()) {
     if (kernel_type_is_release()) {
       proc_fake_ventura_t p = (proc_fake_ventura_t) proc;
       return (p && (p->p_flag & P_LP64));
@@ -4440,7 +4502,15 @@ u_short get_acflag(proc_t proc)
   if (!proc) {
     return 0;
   }
-  if (macOS_Ventura()) {
+  if (macOS_Ventura_3_or_greater()) {
+    if (kernel_type_is_release()) {
+      proc_fake_ventura_3_t p = (proc_fake_ventura_3_t) proc;
+      return p->p_acflag;
+    } else if (kernel_type_is_development()) {
+      proc_fake_ventura_dev_3_t p = (proc_fake_ventura_dev_3_t) proc;
+      return p->p_acflag;
+    }
+  } else if (macOS_Ventura()) {
     if (kernel_type_is_release()) {
       proc_fake_ventura_t p = (proc_fake_ventura_t) proc;
       return p->p_acflag;
@@ -4501,7 +4571,15 @@ unsigned int get_lflag(proc_t proc)
   if (!proc) {
     return 0;
   }
-  if (macOS_Ventura()) {
+  if (macOS_Ventura_3_or_greater()) {
+    if (kernel_type_is_release()) {
+      proc_fake_ventura_3_t p = (proc_fake_ventura_3_t) proc;
+      return p->p_lflag;
+    } else if (kernel_type_is_development()) {
+      proc_fake_ventura_dev_3_t p = (proc_fake_ventura_dev_3_t) proc;
+      return p->p_lflag;
+    }
+  } else if (macOS_Ventura()) {
     if (kernel_type_is_release()) {
       proc_fake_ventura_t p = (proc_fake_ventura_t) proc;
       return p->p_lflag;
@@ -4557,7 +4635,15 @@ unsigned int get_flag(proc_t proc)
   if (!proc) {
     return 0;
   }
-  if (macOS_Ventura()) {
+  if (macOS_Ventura_3_or_greater()) {
+    if (kernel_type_is_release()) {
+      proc_fake_ventura_3_t p = (proc_fake_ventura_3_t) proc;
+      return p->p_flag;
+    } else if (kernel_type_is_development()) {
+      proc_fake_ventura_dev_3_t p = (proc_fake_ventura_dev_3_t) proc;
+      return p->p_flag;
+    }
+  } else if (macOS_Ventura()) {
     if (kernel_type_is_release()) {
       proc_fake_ventura_t p = (proc_fake_ventura_t) proc;
       return p->p_flag;
@@ -6264,7 +6350,23 @@ bool get_proc_info(int32_t pid, char **path,
   uint32_t p_argslen = 0;
   int32_t p_argc = 0;
   user_addr_t user_stack = 0;
-  if (macOS_Ventura()) {
+  if (macOS_Ventura_3_or_greater()) {
+    if (kernel_type_is_release()) {
+      proc_fake_ventura_3_t p = (proc_fake_ventura_3_t) our_proc;
+      if (p) {
+        p_argslen = p->p_argslen;
+        p_argc = p->p_argc;
+        user_stack = p->user_stack;
+      }
+    } else if (kernel_type_is_development()) {
+      proc_fake_ventura_dev_3_t p = (proc_fake_ventura_dev_3_t) our_proc;
+      if (p) {
+        p_argslen = p->p_argslen;
+        p_argc = p->p_argc;
+        user_stack = p->user_stack;
+      }
+    }
+  } else if (macOS_Ventura()) {
     if (kernel_type_is_release()) {
       proc_fake_ventura_t p = (proc_fake_ventura_t) our_proc;
       if (p) {
