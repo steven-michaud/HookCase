@@ -8538,6 +8538,90 @@ void unsign_user_pages(vm_map_t map, vm_map_offset_t start,
   vm_map_iterate_entries(map, start, end, sign_user_pages_iterator, (void *) false);
 }
 
+typedef struct user_region_prot_info {
+  uint32_t prot_none_count;
+  uint32_t prot_read_count;
+  uint32_t prot_write_count;
+  uint32_t prot_exec_count;
+  uint32_t entry_count;
+} *user_region_prot_info_t;
+
+void user_region_prot_iterator(vm_map_t map, vm_map_entry_t entry,
+                               uint32_t submap_level, void *info)
+{
+  if (!map || !entry || !info) {
+    return;
+  }
+  user_region_prot_info_t info_local = (user_region_prot_info_t) info;
+  ++info_local->entry_count;
+
+  vm_map_entry_fake_t an_entry = (vm_map_entry_fake_t) entry;
+  vm_prot_t protection = an_entry->protection;
+
+  if (protection == VM_PROT_NONE) {
+    ++info_local->prot_none_count;
+  } else {
+    if (protection & VM_PROT_READ) {
+      ++info_local->prot_read_count;
+    }
+    if (protection & VM_PROT_WRITE) {
+      ++info_local->prot_write_count;
+    }
+    if (protection & VM_PROT_EXECUTE) {
+      ++info_local->prot_exec_count;
+    }
+  }
+}
+
+// retval == -1 indicates an invalid value. Either vm_map_iterate_entries()
+// failed or the region has multiple pages with different permissions.
+vm_prot_t user_region_protection(vm_map_t map, vm_map_offset_t start,
+                                 vm_map_offset_t end)
+{
+  if (!map || (map == kernel_map)) {
+    return -1;
+  }
+
+  struct user_region_prot_info info;
+  bzero(&info, sizeof(info));
+
+  vm_map_iterate_entries(map, start, end,
+                         user_region_prot_iterator, &info);
+
+  vm_prot_t retval = -1;
+  if (info.entry_count) {
+    for (;;) {
+      if (info.prot_none_count == info.entry_count) {
+        retval = VM_PROT_NONE;
+        break;
+      } else if (info.prot_none_count != 0) {
+        break;
+      }
+      retval = VM_PROT_NONE;
+      if (info.prot_read_count == info.entry_count) {
+        retval |= VM_PROT_READ;
+      } else if (info.prot_read_count != 0) {
+        retval = -1;
+        break;
+      }
+      if (info.prot_write_count == info.entry_count) {
+        retval |= VM_PROT_WRITE;
+      } else if (info.prot_write_count != 0) {
+        retval = -1;
+        break;
+      }
+      if (info.prot_exec_count == info.entry_count) {
+        retval |= VM_PROT_EXECUTE;
+      } else if (info.prot_exec_count != 0) {
+        retval = -1;
+        break;
+      }
+      break;
+    }
+  }
+  return retval;
+}
+
 // At the heart of HookCase.kext's infrastructure is a lock-protected linked
 // list of hook_t structures.  Think of these as something like fish hooks.
 // There are "cast hooks" and "user hooks".  There are also two different
@@ -8839,9 +8923,19 @@ typedef struct _watcher_info {
   // when the watchpoint is hit. Use pthread_from_mach_thread_np() to convert
   // it to a pthread object.
   uint32_t mach_thread;
-  // Needed to make structure size the same in 64bit and 32bit modes.
-  uint32_t pad;
+  // Trap code for page fault that happens when the watchpoint is hit.
+  uint32_t page_fault_code;
 } watcher_info_t;
+
+typedef enum {
+  watcher_state_unset                  = 0,
+  // Set a watchpoint without changing memory access permissions -- for
+  // pageable memory blocks.
+  watcher_state_set_no_write_protect   = 1,
+  // Set a watchpoint and make its memory range read-only -- for wired memory
+  // blocks, though it can also be used (cautiously) with pageable blocks.
+  watcher_state_set_with_write_protect = 2,
+} watcher_state;
 
 typedef struct _watcher {
   LIST_ENTRY(_watcher) list_entry;
@@ -8851,7 +8945,7 @@ typedef struct _watcher {
   uint64_t unique_pid;
   watcher_info_t info;
   user_addr_t info_addr;
-  uint32_t set;
+  watcher_state status;
 } watcher_t;
 
 #define CALL_ORIG_FUNC_SIZE 0x20
@@ -9817,7 +9911,7 @@ void remove_watcher(watcher_t *watcherp)
   all_watchers_unlock_write();
 }
 
-watcher_t *find_watcher(user_addr_t addr, uint64_t unique_pid)
+watcher_t *find_watcher_by_addr(user_addr_t addr, uint64_t unique_pid)
 {
   if (!check_init_locks() || !addr || !unique_pid) {
     return NULL;
@@ -9827,7 +9921,7 @@ watcher_t *find_watcher(user_addr_t addr, uint64_t unique_pid)
   LIST_FOREACH(watcherp, &g_all_watchers, list_entry) {
     if ((unique_pid == watcherp->unique_pid) &&
         (addr >= watcherp->range_start) &&
-        (addr <= watcherp->range_end))
+        (addr < watcherp->range_end))
     {
       break;
     }
@@ -9836,11 +9930,103 @@ watcher_t *find_watcher(user_addr_t addr, uint64_t unique_pid)
   return watcherp;
 }
 
-bool set_watcher(vm_map_t proc_map, user_addr_t watchpoint,
-                 user_addr_t info_addr)
+typedef enum {
+  would_overlap_state_not =   0,
+  would_overlap_state_unset = 1,
+  would_overlap_state_set =   2,
+} would_overlap_state;
+
+watcher_t *find_watcher_by_range(user_addr_t range_start,
+                                 user_addr_t range_end,
+                                 would_overlap_state *would_overlap,
+                                 uint64_t unique_pid)
 {
-  if (!proc_map || !watchpoint) {
+  if (!check_init_locks() || !unique_pid || (range_start >= range_end)) {
+    return NULL;
+  }
+
+  would_overlap_state would_overlap_local = would_overlap_state_not;
+  watcher_t *retval = NULL;
+
+  all_watchers_lock_read();
+  watcher_t *watcherp = NULL;
+  LIST_FOREACH(watcherp, &g_all_watchers, list_entry) {
+    if (unique_pid != watcherp->unique_pid) {
+      continue;
+    }
+    if ((range_start == watcherp->range_start) &&
+        (range_end == watcherp->range_end))
+    {
+      retval = watcherp;
+      continue;
+    }
+    if (((range_start >= watcherp->range_start) &&
+          (range_start < watcherp->range_end)) ||
+        ((range_end > watcherp->range_start) &&
+          (range_end <= watcherp->range_end)))
+    {
+      if (would_overlap_local != would_overlap_state_set) {
+        if (watcherp->status == watcher_state_unset) {
+          would_overlap_local = would_overlap_state_unset;
+        } else {
+          would_overlap_local = would_overlap_state_set;
+        }
+      }
+    }
+  }
+  all_watchers_unlock_read();
+
+  if (would_overlap) {
+    *would_overlap = would_overlap_local;
+  }
+  return retval;
+}
+
+void remove_would_overlap(user_addr_t range_start,
+                          user_addr_t range_end,
+                          uint64_t unique_pid)
+{
+  if (!check_init_locks() || !unique_pid || (range_start >= range_end)) {
+    return;
+  }
+
+  proc_t proc = current_proc();
+  pid_t pid = proc_pid(proc);
+  char procname[PATH_MAX];
+  proc_name(pid, procname, sizeof(procname));
+
+  all_watchers_lock_write();
+  watcher_t *watcherp = NULL;
+  watcher_t *tmp_watcherp = NULL;
+  LIST_FOREACH_SAFE(watcherp, &g_all_watchers, list_entry, tmp_watcherp) {
+    if (watcherp->unique_pid != unique_pid) {
+     continue;
+    }
+    if (((range_start >= watcherp->range_start) &&
+          (range_start < watcherp->range_end)) ||
+        ((range_end > watcherp->range_start) &&
+          (range_end <= watcherp->range_end)))
+    {
+      if (watcherp->status != watcher_state_unset) {
+        printf("HookCase(%s[%d]): remove_would_overlap(): removing active watchpoint with range \'0x%lx\' to \'0x%lx\'\n",
+               procname, pid, watcherp->range_start, watcherp->range_end);
+      }
+      LIST_REMOVE(watcherp, list_entry);
+      free_watcher(watcherp);
+    }
+  }
+  all_watchers_unlock_write();
+}
+
+bool set_watcher(vm_map_t proc_map, user_addr_t watchpoint,
+                 size_t watchpoint_length, user_addr_t info_addr,
+                 watcher_state status, watcher_t **watcher_result)
+{
+  if (!proc_map || !watchpoint || !watchpoint_length || !status) {
     return false;
+  }
+  if (watcher_result) {
+    *watcher_result = NULL;
   }
 
   proc_t proc = current_proc();
@@ -9849,69 +10035,91 @@ bool set_watcher(vm_map_t proc_map, user_addr_t watchpoint,
   char procname[PATH_MAX];
   proc_name(pid, procname, sizeof(procname));
 
-  unsigned int page_size = vm_map_page_size(proc_map);
   user_addr_t range_start =
-    (watchpoint & ~((signed)(vm_map_page_mask(proc_map))));
-  user_addr_t range_end = range_start + page_size;
+    vm_map_trunc_page(watchpoint, vm_map_page_mask(proc_map));
+  user_addr_t range_end =
+    vm_map_round_page(watchpoint + watchpoint_length,
+                      vm_map_page_mask(proc_map));
 
-  vm_region_submap_info_data_64_t info;
-  bzero(&info, sizeof(info));
-  if (vm_region_get_info(proc_map, range_start, &info) != KERN_SUCCESS) {
-    printf("HookCase(%s[%d]): set_watcher(): watchpoint address \'0x%llx\' is invalid\n",
-           procname, pid, watchpoint);
-    return false;
-  }
-  if (info.protection == VM_PROT_NONE) {
-    printf("HookCase(%s[%d]): set_watcher(): Unexpected VM_PROT_NONE permission at watchpoint \'0x%llx\'\n",
-           procname, pid, watchpoint);
-    return false;
+  vm_prot_t prev_prot = 0;
+  if (status == watcher_state_set_with_write_protect) {
+    prev_prot = user_region_protection(proc_map, range_start, range_end);
+    if (prev_prot == -1) {
+      printf("HookCase(%s[%d]): set_watcher(): watchpoint \'0x%llx\' with length \'0x%lx\' is invalid\n",
+             procname, pid, watchpoint, watchpoint_length);
+      return false;
+    }
+    if (prev_prot == VM_PROT_NONE) {
+      printf("HookCase(%s[%d]): set_watcher(): Unexpected VM_PROT_NONE permission at watchpoint \'0x%llx\' with length \'0x%lx\'\n",
+             procname, pid, watchpoint, watchpoint_length);
+      return false;
+    }
   }
 
   bool have_old_watcher = true;
-  watcher_t *watcherp = find_watcher(watchpoint, unique_pid);
+  would_overlap_state would_overlap = would_overlap_state_not;
+  watcher_t *watcherp =
+    find_watcher_by_range(range_start, range_end,
+                          &would_overlap, unique_pid);
   if (!watcherp) {
     have_old_watcher = false;
+    if (would_overlap == would_overlap_state_unset) {
+      remove_would_overlap(range_start, range_end, unique_pid);
+    } else if (would_overlap == would_overlap_state_set) {
+      printf("HookCase(%s[%d]): set_watcher(): watchpoint \'0x%llx\' with length \'0x%lx\' would overlap existing active watchpoint(s)\n",
+             procname, pid, watchpoint, watchpoint_length);
+      return false;
+    }
     watcherp = create_watcher();
     if (!watcherp) {
       return false;
     }
-  // Don't do anything if the watchpoint is already set. Without this check we
-  // can end up setting watcherp->orig_prot to a value without VM_PROT_WRITE.
-  } else if (watcherp->set) {
+  // Don't do anything if the watchpoint's status is already what we want
+  } else if (watcherp->status == status) {
+    if (watcher_result) {
+      *watcher_result = watcherp;
+    }
     return true;
   }
 
-  vm_prot_t new_prot = (info.protection & ~VM_PROT_WRITE);
-  kern_return_t rv =
-    vm_map_protect(proc_map, range_start, range_end, new_prot, false);
+  if ((status == watcher_state_set_with_write_protect) &&
+      (prev_prot & VM_PROT_WRITE))
+  {
+    vm_prot_t new_prot = (prev_prot & ~VM_PROT_WRITE);
+    kern_return_t rv =
+      vm_map_protect(proc_map, range_start, range_end, new_prot, false);
 
-  if (rv != KERN_SUCCESS) {
-    printf("HookCase(%s[%d]): set_watcher(): vm_map_protect() failed at watchpoint \'0x%llx\' and returned 0x%x\n",
-           procname, pid, watchpoint, rv);
-    if (have_old_watcher) {
-      remove_watcher(watcherp);
-    } else {
-      free_watcher(watcherp);
+    if (rv != KERN_SUCCESS) {
+      printf("HookCase(%s[%d]): set_watcher(): vm_map_protect() failed at watchpoint \'0x%llx\' with length \'0x%lx\' and returned 0x%x\n",
+             procname, pid, watchpoint, watchpoint_length, rv);
+      if (have_old_watcher) {
+        remove_watcher(watcherp);
+      } else {
+        free_watcher(watcherp);
+      }
+      return false;
     }
-    return false;
   }
 
   if (have_old_watcher) {
     all_watchers_lock_write();
-    bzero(&watcherp->info, sizeof(watcher_info_t));
   }
   watcherp->range_start = range_start;
   watcherp->range_end = range_end;
-  watcherp->orig_prot = info.protection;
+  // prev_prot will be 0 if status == watcher_state_set_no_write_protect
+  watcherp->orig_prot = prev_prot;
   watcherp->unique_pid = unique_pid;
   watcherp->info_addr = info_addr; // May be 0
-  OSCompareAndSwap(watcherp->set, 1, &watcherp->set);
+  OSCompareAndSwap(watcherp->status, status, (UInt32 *) &watcherp->status);
   if (have_old_watcher) {
     all_watchers_unlock_write();
   } else {
     add_watcher(watcherp);
   }
 
+  if (watcher_result) {
+    *watcher_result = watcherp;
+  }
   return true;
 }
 
@@ -9922,34 +10130,45 @@ bool unset_watcher(vm_map_t proc_map, watcher_t *watcherp)
   }
 
   // Don't do anything if the watchpoint is already unset
-  if (!watcherp->set) {
+  if (!watcherp->status) {
     return true;
   }
 
-  unsigned int page_size = vm_map_page_size(proc_map);
-  if (page_size > PAGE_SIZE) {
-    page_size = PAGE_SIZE;
-  }
   pid_t pid = proc_pid(current_proc());
   char procname[PATH_MAX];
   proc_name(pid, procname, sizeof(procname));
 
-  unsigned char range[PAGE_SIZE];
-  if (!proc_copyin(proc_map, watcherp->range_start, &range, page_size)) {
-    printf("HookCase(%s[%d]): unset_watcher(): range \'0x%lx\' to \'0x%lx\' is invalid\n",
-           procname, pid, watcherp->range_start, watcherp->range_end);
-    return false;
+#if (0)
+  unsigned int page_size = vm_map_page_size(proc_map);
+  vm_size_t copy_size = page_size;
+  if (copy_size > PAGE_SIZE) {
+    copy_size = PAGE_SIZE;
   }
+  user_addr_t page = watcherp->range_start;
+  while (page < watcherp->range_end) {
+    unsigned char page_holder[PAGE_SIZE];
+    if (!proc_copyin(proc_map, page, &page_holder, copy_size)) {
+      printf("HookCase(%s[%d]): unset_watcher(): page \'0x%llx\' in watchpoint range is invalid\n",
+             procname, pid, page);
+      OSCompareAndSwap(watcherp->status, 0, (UInt32 *) &watcherp->status);
+      return false;
+    }
+    page += page_size;
+  }
+#endif
 
-  vm_prot_t new_prot = watcherp->orig_prot;
-  kern_return_t rv = vm_map_protect(proc_map, watcherp->range_start,
-                                    watcherp->range_end, new_prot, false);
+  kern_return_t rv = KERN_SUCCESS;
+  vm_prot_t orig_prot = watcherp->orig_prot;
+  if (watcherp->status == watcher_state_set_with_write_protect) {
+    rv = vm_map_protect(proc_map, watcherp->range_start,
+                        watcherp->range_end, orig_prot, false);
+  }
 
   if (rv != KERN_SUCCESS) {
     printf("HookCase(%s[%d]): unset_watcher(): vm_map_protect() failed (\'0x%x\') at \'0x%lx\' with protection \'0x%x\'\n",
-           procname, pid, rv, watcherp->range_start, new_prot);
+           procname, pid, rv, watcherp->range_start, orig_prot);
   } else {
-    OSCompareAndSwap(watcherp->set, 0, &watcherp->set);
+    OSCompareAndSwap(watcherp->status, 0, (UInt32 *) &watcherp->status);
   }
 
   return (rv == KERN_SUCCESS);
@@ -13123,7 +13342,7 @@ void get_dynamic_caller(x86_saved_state_t *intr_state)
 }
 
 // A hook has called config_watcher() in a hook library. This method sets or
-// unsets a watchpoint (actually a "watch range" of page length). On unsetting
+// unsets a watchpoint (actually a "watch range"). On re-setting or unsetting
 // a watchpoint it also copies information back to 'info_addr' (in user-land)
 // on whatever code may have hit the watchpoint. It creates or destroys
 // "watcher" objects, which are used to keep track of various watchpoints and
@@ -13150,19 +13369,22 @@ void config_watcher(x86_saved_state_t *intr_state)
   wait_interrupt_t old_state = thread_interrupt_level(THREAD_UNINT);
 
   user_addr_t watchpoint = 0;
+  user_addr_t watchpoint_length = 0;
   user_addr_t info_addr = 0;
-  bool set = false;
+  watcher_state status = watcher_state_unset;
   if (intr_state->flavor == x86_SAVED_STATE64) {
     watchpoint = intr_state->ss_64.rdi;
-    info_addr = intr_state->ss_64.rsi;
-    set = (bool) intr_state->ss_64.rdx;
+    watchpoint_length = intr_state->ss_64.rsi;
+    info_addr = intr_state->ss_64.rdx;
+    status = (watcher_state) intr_state->ss_64.rcx;
   } else { // flavor == x86_SAVED_STATE32
-    uint32_t stack[5];
+    uint32_t stack[6];
     bzero(stack, sizeof(stack));
     proc_copyin(proc_map, intr_state->ss_32.ebp, stack, sizeof(stack));
     watchpoint = stack[2];
-    info_addr = stack[3];
-    set = stack[4];
+    watchpoint_length = stack[3];
+    info_addr = stack[4];
+    status = (watcher_state) stack[5];
   }
 
   uint64_t unique_pid = proc_uniqueid(proc);
@@ -13185,48 +13407,61 @@ void config_watcher(x86_saved_state_t *intr_state)
     info_addr = 0;
   }
 
+  if (!watchpoint_length) {
+    watchpoint_length = PAGE_SIZE;
+  }
+
   bool retval = false;
 
   if (watchpoint) {
-    if (set) {
-      retval = set_watcher(proc_map, watchpoint, info_addr);
+    watcher_t *watcherp = NULL;
+    if (status) {
+      retval = set_watcher(proc_map, watchpoint, watchpoint_length,
+                           info_addr, status, &watcherp);
     } else {
-      watcher_t *watcherp = find_watcher(watchpoint, unique_pid);
+      user_addr_t range_start =
+        vm_map_trunc_page(watchpoint, vm_map_page_mask(proc_map));
+      user_addr_t range_end =
+        vm_map_round_page(watchpoint + watchpoint_length,
+                          vm_map_page_mask(proc_map));
+      watcherp =
+        find_watcher_by_range(range_start, range_end,
+                              NULL, unique_pid);
       if (watcherp) {
         retval = unset_watcher(proc_map, watcherp);
-        if (retval) {
-          bool bad_watcherp_info_addr = true;
-          if (watcherp->info_addr) {
-            if (proc_copyin(proc_map, watcherp->info_addr, &user_watcher_info,
-                            sizeof(watcher_info_t)))
-            {
-              bad_watcherp_info_addr = false;
-            }
-          }
+      }
+    }
 
-          if ((info_addr != watcherp->info_addr) && !bad_info_addr) {
-            all_watchers_lock_write();
-            watcherp->info_addr = info_addr;
-            all_watchers_unlock_write();
-            bad_watcherp_info_addr = false;
-          }
-
-          if (!bad_watcherp_info_addr) {
-            if (watcherp->info.hit) {
-              retval = proc_copyout(proc_map, &watcherp->info,
-                                    watcherp->info_addr, sizeof(watcher_info_t));
-              if (retval) {
-                all_watchers_lock_write();
-                bzero(&watcherp->info, sizeof(watcher_info_t));
-                all_watchers_unlock_write();
-              }
-            } else {
-              retval = true;
-            }
-          } else {
-            retval = false;
-          }
+    if (retval && watcherp) {
+      bool bad_watcherp_info_addr = true;
+      if (watcherp->info_addr) {
+        if (proc_copyin(proc_map, watcherp->info_addr, &user_watcher_info,
+                        sizeof(watcher_info_t)))
+        {
+          bad_watcherp_info_addr = false;
         }
+      }
+
+      if ((info_addr != watcherp->info_addr) && !bad_info_addr) {
+        OSCompareAndSwap64(watcherp->info_addr, info_addr,
+                           &watcherp->info_addr);
+        bad_watcherp_info_addr = false;
+      }
+
+      if (!bad_watcherp_info_addr) {
+        if (watcherp->info.hit) {
+          retval = proc_copyout(proc_map, &watcherp->info,
+                                watcherp->info_addr, sizeof(watcher_info_t));
+          if (retval) {
+            all_watchers_lock_write();
+            bzero(&watcherp->info, sizeof(watcher_info_t));
+            all_watchers_unlock_write();
+          }
+        } else {
+          retval = true;
+        }
+      } else {
+        retval = false;
       }
     }
   }
@@ -14305,10 +14540,7 @@ void user_trap_hook(x86_saved_state_t *intr_state, kern_hook_t *hookp)
   pal_sti();
 
   // Check to see if our fault was triggered by hitting a watchpoint. If so,
-  // unset the watchpoint and store information on the code that hit it. For
-  // reasons that aren't completely clear, when we unset a watchpoint we
-  // must still fall through to the original user_trap() method. Returning
-  // early produces very bad results.
+  // unset the watchpoint and store information on the code that hit it.
   if (type == T_PAGE_FAULT) {
     proc_t proc = current_proc();
     uint64_t unique_pid = 0;
@@ -14316,7 +14548,7 @@ void user_trap_hook(x86_saved_state_t *intr_state, kern_hook_t *hookp)
       unique_pid = proc_uniqueid(proc);
     }
 
-    watcher_t *watcherp = find_watcher(cr2, unique_pid);
+    watcher_t *watcherp = find_watcher_by_addr(cr2, unique_pid);
     if (watcherp) {
       mach_port_name_t mach_thread = 0;
       thread_t thread = current_thread();
@@ -14333,6 +14565,7 @@ void user_trap_hook(x86_saved_state_t *intr_state, kern_hook_t *hookp)
       }
       watcherp->info.mach_thread = mach_thread;
       watcherp->info.hit = cr2;
+      watcherp->info.page_fault_code = code;
 
       vm_map_t proc_map = current_map();
       if (proc_map) {

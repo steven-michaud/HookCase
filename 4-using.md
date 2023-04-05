@@ -61,7 +61,7 @@ and the [kernel logging example](examples-kernel-logging.md).
 Recent versions of HookCase support creating a patch hook for an
 (un-named) method at a particular address in a given module.  (For
 more information see
-[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L1246).)
+[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L1269).)
 So, for example, creating a patch hook for a function named
 "sub_123abc" would (by default) specify that the hook should be
 inserted at offset 0x123abc (hexadecimal notation) in the module.  But
@@ -77,17 +77,21 @@ best to patch callbacks in their "create" methods, before they start
 being used. Otherwise there's some danger of a race condition,
 especially if the callback can be used on different threads from the
 one that calls add_patch_hook(). For more information see
-[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L1207)
+[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L1230)
 and [the dynamic patch hooks example](examples-dynamic-hooking.md).
 
 HookCase now supports watchpoints. You can set a watchpoint on a range
 of memory and get information on the code that writes to it -- for
-example a stack trace of the write operation and the id of the thread
-on which it ran. This is useful for reverse engineering the use of
-certain buffers in memory, for example the "sideband buffer" that's
-used by OpenGL accelerated graphics. Watchpoints are per page of
-memory. So to avoid confusion, it's best to set them in buffers that
-are page-aligned. For more information see
+example a stack trace of the write access and the id of the thread on
+which it ran. Sometimes this also works for read accesses. Watchpoint
+support is imprecise: You set one on a page of memory (typically 4096
+bytes), not on a particular byte. So it won't catch all memory
+accesses to that page -- only the first one. And it has limitations:
+It's only appropriate for page-aligned blocks of memory -- for example
+those shared between processes, or between the kernel and a
+process. But it can be useful for reverse engineering the use of
+shared memory blocks -- for example the "sideband buffer" that's used
+by OpenGL accelerated graphics. For more information see
 [config_watcher() in the hook library template](HookLibraryTemplate/hook.mm#L1118),
-[Hooked_watcher_example() in the hook library template](HookLibraryTemplate/hook.mm#L1263)
+[Hooked_watcher_example() in the hook library template](HookLibraryTemplate/hook.mm#L1286)
 and [the watchpoints example](examples-watchpoints.md).

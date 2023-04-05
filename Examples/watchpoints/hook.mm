@@ -980,7 +980,7 @@ void *get_dynamic_caller(void *hook)
 
 // Information collected by user_trap_hook() in HookCase.kext when a
 // watchpoint is hit, then passed back to user mode when config_watcher() is
-// called to unset the watchpoint (with 'set' == false).
+// called to unset or re-set the watchpoint.
 typedef struct _watcher_info {
   // Stack trace of the code running when the watchpoint is hit.
   callstack_t callstack;
@@ -990,27 +990,51 @@ typedef struct _watcher_info {
   // when the watchpoint is hit. Use pthread_from_mach_thread_np() to convert
   // it to a pthread object.
   uint32_t mach_thread;
-  // Needed to make structure size the same in 64bit and 32bit modes.
-  uint32_t pad;
+  // Trap code for page fault that happens when the watchpoint is hit.
+  uint32_t page_fault_code;
 } watcher_info_t;
 
 // (Re)set or unset a watchpoint on a range of memory. A watchpoint is "hit"
-// whenever something tries to write anywhere in its address range. When this
-// happens, information on it is collected in a watcher_info_t structure. This
-// includes a stack trace of the code running when the watchpoint was hit.
-// This information is passed back to user-land when config_watcher() is
-// called to unset the watchpoint (with 'set' == false). Watchpoints are
-// implemented by (temporarily) changing memory access permissions to prevent
-// writes. Writing to a watchpoint triggers a fault, which ends up being
-// processed in HookCase.kext's user_trap_hook(). user_trap_hook() restores
-// the original access permissions, records the requisite information, and
-// saves it to a watcher_info_t structure. Memory access permissions are for
-// a "page" of memory (usually 4096 bytes long). So calling config_watcher()
-// to set a "watchpoint" on a particular memory address actually ends up
-// setting a "watch range" on a particular page (block) of memory. To avoid
-// confusion, it's best to set watchpoints only in buffers that are page-
-// aligned.
-bool config_watcher(void *watchpoint, watcher_info_t *info, bool set)
+// whenever a page fault happens in its address range. This can be triggered
+// by something reading or writing memory in this range (though not all such
+// memory accesses trigger a page fault). When this happens, information on
+// it is collected in a watcher_info_t structure. This includes a stack trace
+// of the code running when the watchpoint was hit. This information is passed
+// back to user-land when config_watcher() is called to unset or re-set the
+// watchpoint. Watchpoints are implemented using "watchers", which "catch"
+// page faults that happen in a range of memory. Page faults are processed in
+// user_trap_hook(), which records the requisite information and unsets the
+// watchpoint. If a block of memory is pageable (if it can be paged in and
+// out of physical memory), use watcher_state_set_no_write_protect to set a
+// watchpoint on it. With wired memory, page faults won't happen unless you
+// trigger them by (temporarily) changing memory access permissions to prevent
+// writes. Do this using watcher_state_set_with_write_protect. Only write
+// accesses will trigger page faults. Unsetting the watchpoint restores the
+// original access permissions.
+//
+// HookCase's watchpoints are imprecise. They don't catch all memory accesses
+// inside their address range. They're also only appropriate for page-aligned
+// memory blocks -- for example those shared between processes, or between the
+// kernel and a process. Page faults (and memory access permissions) are per
+// page -- usually 4096 bytes of memory. They can be triggered by memory
+// accesses anywhere inside the page. And once the kernel's fault handling
+// code has mapped in the page (possibly after HookCase has restored its
+// original permissions), further accesses won't trigger new page faults until
+// the kernel has mapped the page out again or config_watcher() has made it
+// read-only again.
+
+typedef enum {
+  watcher_state_unset                  = 0,
+  // Set a watchpoint without changing memory access permissions -- for
+  // pageable memory blocks.
+  watcher_state_set_no_write_protect   = 1,
+  // Set a watchpoint and make its memory range read-only -- for wired memory
+  // blocks, though it can also be used (cautiously) with pageable blocks.
+  watcher_state_set_with_write_protect = 2,
+} watcher_state;
+
+bool config_watcher(void *watchpoint, size_t watchpoint_length,
+                    watcher_info_t *info, watcher_state status)
 {
   bool retval;
   __asm__ volatile("int %0" :: "N" (0x35));
@@ -1145,17 +1169,15 @@ static int Hooked_sub_123abc(char *arg)
   return retval;
 }
 
-// An example of setting a watchpoint at a particular memory address (actually
-// an address range), then unsetting it to collect information on whatever
-// code (if any) triggered the watchpoint (by writing to its address range).
-// Watchpoints are hit at most once between each pair of calls to
-// config_watcher(true) and config_watcher(false). If a watchpoint has been
-// triggered, it is already unset by the time config_watcher(false) is called
-// (and we collect information on it). To find the next hit one must hook the
-// method that triggered the first one, then set another watchpoint inside its
-// hook. This example is quite trivial -- it sets a watchpoint and also
-// triggers it. A more useful one would set a watchpoint to find out what
-// other code can trigger it.
+// An example of setting a watchpoint on a range of memory, then unsetting it
+// to collect information on whatever code (if any) triggered it (by reading
+// from or writing to its address range). If a watchpoint has been hit, it is
+// already unset by the time config_watcher() is called again on it (and
+// collects information on it). To find the next hit, hook the method that
+// triggered the first one, then set another watchpoint inside its hook. This
+// example is quite trivial -- it sets a watchpoint and also triggers it. A
+// more useful one would set a watchpoint to find out what other code can
+// trigger it.
 watcher_info_t s_watcher_info = {0};
 
 int (*watcher_example_caller)(char *arg) = NULL;
@@ -1165,11 +1187,13 @@ static int Hooked_watcher_example(char *arg)
   int retval = watcher_example_caller(arg);
   unsigned char *pages = (unsigned char *) valloc(PAGE_SIZE);
   if (pages) {
-    bzero(pages, PAGE_SIZE);
     void *watchpoint = pages;
-    if (config_watcher(watchpoint, &s_watcher_info, true)) {
+    if (config_watcher(watchpoint, PAGE_SIZE, &s_watcher_info,
+        watcher_state_set_no_write_protect))
+    {
       pages[0] = 1;
-      config_watcher(watchpoint, &s_watcher_info, false);
+      config_watcher(watchpoint, PAGE_SIZE, &s_watcher_info,
+                     watcher_state_unset);
       if (s_watcher_info.hit) {
         pthread_t thread =
           pthread_from_mach_thread_np(s_watcher_info.mach_thread);
@@ -1177,9 +1201,10 @@ static int Hooked_watcher_example(char *arg)
         if (thread) {
           pthread_getname_np(thread, thread_name, sizeof(thread_name) - 1);
         }
-        LogWithFormat(true, "Hook.mm: watcher_example(): arg \"%s\", returning \'%i\', pages[0] \'0x%x\', watchpoint \'%p\', hit \'0x%llx\', thread %s[%p], mach_thread \'0x%x\'\n",
-                      arg, retval, pages[0], watchpoint, s_watcher_info.hit, thread_name, thread, s_watcher_info.mach_thread);
+        LogWithFormat(true, "Hook.mm: watcher_example(): arg \"%s\", returning \'%i\', pages[0] \'0x%x\', watchpoint \'%p\', hit \'0x%llx\', code \'0x%x\', thread %s[%p], mach_thread \'0x%x\'\n",
+                      arg, retval, pages[0], watchpoint, s_watcher_info.hit, s_watcher_info.page_fault_code, thread_name, thread, s_watcher_info.mach_thread);
         PrintCallstack(s_watcher_info.callstack);
+        bzero(&s_watcher_info, sizeof(s_watcher_info));
       }
     }
     free(pages);
@@ -1236,14 +1261,16 @@ static CFStringRef Hooked_CFBundleGetIdentifier(CFBundleRef bundle)
 {
   CFStringRef retval = CFBundleGetIdentifier_caller(bundle);
 
-  if (CanUseCF()) {
+  if (CanUseCF() && IsMainThread()) {
     unsigned char *pages = (unsigned char *) valloc(PAGE_SIZE);
     if (pages) {
-      bzero(pages, PAGE_SIZE);
       void *watchpoint = pages;
-      if (config_watcher(watchpoint, &s_watcher_info, true)) {
+      if (config_watcher(watchpoint, PAGE_SIZE, &s_watcher_info,
+                         watcher_state_set_no_write_protect))
+      {
         pages[0] = 1;
-        config_watcher(watchpoint, &s_watcher_info, false);
+        config_watcher(watchpoint, PAGE_SIZE, &s_watcher_info,
+                       watcher_state_unset);
         if (s_watcher_info.hit) {
           pthread_t thread =
             pthread_from_mach_thread_np(s_watcher_info.mach_thread);
@@ -1251,9 +1278,11 @@ static CFStringRef Hooked_CFBundleGetIdentifier(CFBundleRef bundle)
           if (thread) {
             pthread_getname_np(thread, thread_name, sizeof(thread_name) - 1);
           }
-          LogWithFormat(true, "Hook.mm: CFBundleGetIdentifier(): returning %@, pages[0] 0x%x, watchpoint %p, hit 0x%llx, thread %s[%p], mach_thread 0x%x\n",
-                        retval, pages[0], watchpoint, s_watcher_info.hit, thread_name, thread, s_watcher_info.mach_thread);
+          LogWithFormat(true, "Hook.mm: CFBundleGetIdentifier(): returning %@, pages[0] 0x%x, watchpoint %p, hit 0x%llx, code 0x%x, thread %s[%p], mach_thread 0x%x\n",
+                        retval, pages[0], watchpoint, s_watcher_info.hit, s_watcher_info.page_fault_code,
+                        thread_name, thread, s_watcher_info.mach_thread);
           PrintCallstack(s_watcher_info.callstack);
+          bzero(&s_watcher_info, sizeof(s_watcher_info));
         }
       }
       free(pages);
@@ -1276,7 +1305,11 @@ static CFStringRef Hooked_CFBundleGetIdentifier(CFBundleRef bundle)
 // sideband buffer -- something that's otherwise quite difficult to find out.
 // A comprehensive investigation would involve creating a hook for each new
 // function we find writing to the sideband buffer, and setting a new
-// watchpoint in it to catch subsequent writes to the sideband buffer.
+// watchpoint in it to catch subsequent writes to the sideband buffer. One
+// such function is gpusSubmitDataBuffers() itself, for which we have a hook
+// below. The others, though, are all hardware-specific, and differ from one
+// Mac to another. The sideband buffer is wired, so we use
+// watcher_state_set_with_write_protect when setting a watchpoint on it.
 
 static CFMutableDictionaryRef sideband_buffers = NULL;
 
@@ -1290,17 +1323,22 @@ static void ensure_sideband_buffers()
   }
 }
 
+typedef struct _sideband_buffer_info {
+  vm_offset_t addr;
+  vm_size_t size;
+} sideband_buffer_info;
+
 static void add_sideband_buffer(CFTypeRef context,
-                                unsigned long sideband_buffer)
+                                sideband_buffer_info *info)
 {
-  if (!context || !sideband_buffer) {
+  if (!context || !info) {
     return;
   }
   ensure_sideband_buffers();
   CFNumberRef key =
     CFNumberCreate(kCFAllocatorDefault, kCFNumberLongType, &context);
   CFNumberRef value =
-    CFNumberCreate(kCFAllocatorDefault, kCFNumberLongType, &sideband_buffer);
+    CFNumberCreate(kCFAllocatorDefault, kCFNumberLongType, &info);
   if (CFDictionaryContainsKey(sideband_buffers, key)) {
     CFDictionaryReplaceValue(sideband_buffers, key, value);
   } else {
@@ -1318,11 +1356,20 @@ static void remove_context(CFTypeRef context)
   ensure_sideband_buffers();
   CFNumberRef key =
     CFNumberCreate(kCFAllocatorDefault, kCFNumberLongType, &context);
-  CFDictionaryRemoveValue(sideband_buffers, key);
+  CFNumberRef value = (CFNumberRef)
+    CFDictionaryGetValue(sideband_buffers, key);
+  if (value) {
+    sideband_buffer_info *info = NULL;
+    CFNumberGetValue(value, kCFNumberLongType, &info);
+    if (info) {
+      free(info);
+    }
+    CFDictionaryRemoveValue(sideband_buffers, key);
+  }
   CFRelease(key);
 }
 
-static unsigned long get_sideband_buffer(CFTypeRef context)
+static vm_offset_t get_sideband_buffer_addr(CFTypeRef context)
 {
   if (!context) {
     return 0;
@@ -1337,9 +1384,38 @@ static unsigned long get_sideband_buffer(CFTypeRef context)
     return 0;
   }
   vm_offset_t retval = 0;
-  CFNumberGetValue(value, kCFNumberLongType, &retval);
+  sideband_buffer_info *info = NULL;
+  CFNumberGetValue(value, kCFNumberLongType, &info);
+  if (info) {
+    retval = info->addr;
+  }
   return retval;
 }
+
+static vm_size_t get_sideband_buffer_size(CFTypeRef context)
+{
+  if (!context) {
+    return 0;
+  }
+  ensure_sideband_buffers();
+  CFNumberRef key =
+    CFNumberCreate(kCFAllocatorDefault, kCFNumberLongType, &context);
+  CFNumberRef value = (CFNumberRef)
+    CFDictionaryGetValue(sideband_buffers, key);
+  CFRelease(key);
+  if (!value) {
+    return 0;
+  }
+  vm_size_t retval = 0;
+  sideband_buffer_info *info = NULL;
+  CFNumberGetValue(value, kCFNumberLongType, &info);
+  if (info) {
+    retval = info->size;
+  }
+  return retval;
+}
+
+static CFTypeRef current_context = NULL;
 
 kern_return_t
 (*IOAccelContextSubmitDataBuffersExt2_caller)(CFTypeRef context, unsigned int arg1,
@@ -1351,11 +1427,15 @@ Hooked_IOAccelContextSubmitDataBuffersExt2(CFTypeRef context, unsigned int arg1,
                                            unsigned int *arg2, unsigned int *arg3,
                                            unsigned int *arg4, unsigned int *arg5)
 {
-  void *watchpoint = (void *) get_sideband_buffer(context);
+  current_context = context;
 
-  if (watchpoint) {
+  void *watchpoint = (void *) get_sideband_buffer_addr(context);
+  unsigned long watchpoint_length = get_sideband_buffer_size(context);
+
+  if (watchpoint && watchpoint_length) {
     watcher_info_t watcher_info = {0};
-    config_watcher(watchpoint, &watcher_info, false);
+    config_watcher(watchpoint, watchpoint_length, &watcher_info,
+                   watcher_state_unset);
     if (watcher_info.hit) {
       pthread_t thread =
         pthread_from_mach_thread_np(watcher_info.mach_thread);
@@ -1363,9 +1443,10 @@ Hooked_IOAccelContextSubmitDataBuffersExt2(CFTypeRef context, unsigned int arg1,
       if (thread) {
         pthread_getname_np(thread, thread_name, sizeof(thread_name) - 1);
       }
-      LogWithFormat(true, "Hook.mm: IOAccelContextSubmitDataBuffersExt2(): context %@, watchpoint %p, hit 0x%llx on thread %s[%p]",
-                    context, watchpoint, watcher_info.hit, thread_name, thread);
+      LogWithFormat(true, "Hook.mm: IOAccelContextSubmitDataBuffersExt2(): context %@, watchpoint %p, hit 0x%llx, code 0x%x, on thread %s[%p]",
+                    context, watchpoint, watcher_info.hit, watcher_info.page_fault_code, thread_name, thread);
       PrintCallstack(watcher_info.callstack);
+      bzero(&watcher_info, sizeof(watcher_info));
     }
   }
 
@@ -1378,12 +1459,22 @@ Hooked_IOAccelContextSubmitDataBuffersExt2(CFTypeRef context, unsigned int arg1,
     IOAccelContextGetSidebandBuffer_ptr(context, &sideband_buffer_addr,
                                         &sideband_buffer_size);
     if (sideband_buffer_addr) {
-      add_sideband_buffer(context, sideband_buffer_addr);
+      sideband_buffer_info *info = (sideband_buffer_info *)
+        calloc(1, sizeof(sideband_buffer_info));
+      if (info) {
+        info->addr = sideband_buffer_addr;
+        info->size = sideband_buffer_size;
+        add_sideband_buffer(context, info);
+      }
     }
   }
 
-  if (watchpoint) {
-    config_watcher(watchpoint, NULL, true);
+  watchpoint = (void *) get_sideband_buffer_addr(context);
+  watchpoint_length = get_sideband_buffer_size(context);
+
+  if (watchpoint && watchpoint_length) {
+    config_watcher(watchpoint, watchpoint_length, NULL,
+                   watcher_state_set_with_write_protect);
   }
 
   return retval;
@@ -1393,11 +1484,13 @@ void (*ioAccelContextFinalize_caller)(CFTypeRef context) = NULL;
 
 void Hooked_ioAccelContextFinalize(CFTypeRef context)
 {
-  void *watchpoint = (void *) get_sideband_buffer(context);
+  void *watchpoint = (void *) get_sideband_buffer_addr(context);
+  unsigned long watchpoint_length = get_sideband_buffer_size(context);
 
-  if (watchpoint) {
+  if (watchpoint && watchpoint_length) {
     watcher_info_t watcher_info = {0};
-    config_watcher(watchpoint, &watcher_info, false);
+    config_watcher(watchpoint, watchpoint_length, &watcher_info,
+                   watcher_state_unset);
     if (watcher_info.hit) {
       pthread_t thread =
         pthread_from_mach_thread_np(watcher_info.mach_thread);
@@ -1405,15 +1498,48 @@ void Hooked_ioAccelContextFinalize(CFTypeRef context)
       if (thread) {
         pthread_getname_np(thread, thread_name, sizeof(thread_name) - 1);
       }
-      LogWithFormat(true, "Hook.mm: ioAccelContextFinalize(): context %@, watchpoint %p, hit 0x%llx on thread %s[%p]",
-                    context, watchpoint, watcher_info.hit, thread_name, thread);
+      LogWithFormat(true, "Hook.mm: ioAccelContextFinalize(): context %@, watchpoint %p, hit 0x%llx, code 0x%x, on thread %s[%p]",
+                    context, watchpoint, watcher_info.hit, watcher_info.page_fault_code, thread_name, thread);
       PrintCallstack(watcher_info.callstack);
+      bzero(&watcher_info, sizeof(watcher_info));
     }
   }
 
   remove_context(context);
 
   ioAccelContextFinalize_caller(context);
+}
+
+kern_return_t (*gpusSubmitDataBuffers_caller)(void *arg0) = NULL;
+
+kern_return_t Hooked_gpusSubmitDataBuffers(void *arg0)
+{
+  kern_return_t retval = gpusSubmitDataBuffers_caller(arg0);
+
+  void *watchpoint = (void *) get_sideband_buffer_addr(current_context);
+  unsigned long watchpoint_length = get_sideband_buffer_size(current_context);
+
+  if (watchpoint && watchpoint_length) {
+    watcher_info_t watcher_info = {0};
+    config_watcher(watchpoint, watchpoint_length, &watcher_info,
+                   watcher_state_unset);
+    if (watcher_info.hit) {
+      pthread_t thread =
+        pthread_from_mach_thread_np(watcher_info.mach_thread);
+      char thread_name[PROC_PIDPATHINFO_MAXSIZE] = {0};
+      if (thread) {
+        pthread_getname_np(thread, thread_name, sizeof(thread_name) - 1);
+      }
+      LogWithFormat(true, "Hook.mm: gpusSubmitDataBuffers(): context %@, watchpoint %p, hit 0x%llx, code 0x%x, on thread %s[%p]",
+                    current_context, watchpoint, watcher_info.hit, watcher_info.page_fault_code, thread_name, thread);
+      PrintCallstack(watcher_info.callstack);
+      bzero(&watcher_info, sizeof(watcher_info));
+      config_watcher(watchpoint, watchpoint_length, NULL,
+                     watcher_state_set_with_write_protect);
+    }
+  }
+
+  return retval;
 }
 
 #pragma mark -
@@ -1452,6 +1578,7 @@ __attribute__((used)) static const hook_desc user_hooks[]
 
   PATCH_FUNCTION(IOAccelContextSubmitDataBuffersExt2, /System/Library/PrivateFrameworks/IOAccelerator.framework/IOAccelerator),
   PATCH_FUNCTION(ioAccelContextFinalize, /System/Library/PrivateFrameworks/IOAccelerator.framework/IOAccelerator),
+  PATCH_FUNCTION(gpusSubmitDataBuffers, /System/Library/PrivateFrameworks/GPUSupport.framework/Libraries/libGPUSupportMercury.dylib),
 };
 
 // What follows are declarations of the CoreSymbolication APIs that we use to

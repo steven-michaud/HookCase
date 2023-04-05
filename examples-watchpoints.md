@@ -6,13 +6,13 @@ memory -- for example the "sideband buffer" that's used to implement
 accelerated OpenGL graphics.
 
 The watchpoint example [`Examples/watchpoints`](Examples/watchpoints/)
-contains two hooks. One implements a trivial example of watchpoint
-use, for purposes of illustration and testing. The other shows how
-watchpoints can be used to reverse engineer the sideband buffer. The
-first hook works on any system with any application. The second (and
-more interesting) hook only works on systems with hardware
-acceleration, and in applications that use OpenGL (for example Firefox
-and Chrome, but not Safari).
+contains two sets of hooks. One implements a trivial example of
+watchpoint use, for purposes of illustration and testing. The other
+shows how watchpoints can be used to reverse engineer the sideband
+buffer. The first hook works on any system with any application. The
+second (and more interesting) set of hooks only works on systems with
+hardware acceleration, and in applications that use OpenGL (for
+example Firefox and Chrome, but not Safari).
 
 Build the example using `make`, then use it with a recent Firefox
 Nightly to see how it works. (Firefox and Chrome releases have their
