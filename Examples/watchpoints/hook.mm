@@ -995,22 +995,30 @@ typedef struct _watcher_info {
 } watcher_info_t;
 
 // (Re)set or unset a watchpoint on a range of memory. A watchpoint is "hit"
-// whenever a page fault happens in its address range. This can be triggered
-// by something reading or writing memory in this range (though not all such
-// memory accesses trigger a page fault). When this happens, information on
-// it is collected in a watcher_info_t structure. This includes a stack trace
-// of the code running when the watchpoint was hit. This information is passed
-// back to user-land when config_watcher() is called to unset or re-set the
-// watchpoint. Watchpoints are implemented using "watchers", which "catch"
-// page faults that happen in a range of memory. Page faults are processed in
-// user_trap_hook(), which records the requisite information and unsets the
-// watchpoint. If a block of memory is pageable (if it can be paged in and
-// out of physical memory), use watcher_state_set_no_write_protect to set a
-// watchpoint on it. With wired memory, page faults won't happen unless you
-// trigger them by (temporarily) changing memory access permissions to prevent
-// writes. Do this using watcher_state_set_with_write_protect. Only write
-// accesses will trigger page faults. Unsetting the watchpoint restores the
-// original access permissions.
+// whenever a non-fatal page fault happens in its address range. This can be
+// triggered by something reading or writing memory in this range (though not
+// all such memory accesses trigger a page fault). When this happens,
+// information on it is collected in a watcher_info_t structure. This includes
+// a stack trace of the code running when the watchpoint was hit. This
+// information is passed back to user-land when config_watcher() is called to
+// unset or re-set the watchpoint. Watchpoints are implemented using
+// "watchers", which "catch" non-fatal page faults that happen in a range of
+// memory. Page faults are processed in user_trap_hook(), which records the
+// requisite information and unsets the watchpoint.
+//
+// To catch only write accesses, use watcher_state_set_write_protect. This
+// temporarily changes memory access permissions to prevent writes. It works
+// on all kinds of memory, but is the only kind of watchpoint that works on
+// wired memory. Unsetting the watchpoint restores the original access
+// permissions. If your block of memory is pageable (if it can be paged in
+// and out of physical memory), you can also use the other two kinds. They
+// catch both read and write accesses. A watcher_state_set_plain watchpoint is
+// entirely passive. Unlike the other two kinds, it doesn't do anything to
+// trigger additional page faults. Use it to observe non-fatal page faults
+// that would happen anyway. watcher_state_set_pageout pages out all the
+// memory in the watchpoint's memory range. Use it to catch as many hits as
+// possible. Reads and writes anywhere in the range will trigger page faults,
+// which the kernel will process to load each page back into physical memory.
 //
 // HookCase's watchpoints are imprecise. They don't catch all memory accesses
 // inside their address range. They're also only appropriate for page-aligned
@@ -1020,17 +1028,24 @@ typedef struct _watcher_info {
 // accesses anywhere inside the page. And once the kernel's fault handling
 // code has mapped in the page (possibly after HookCase has restored its
 // original permissions), further accesses won't trigger new page faults until
-// the kernel has mapped the page out again or config_watcher() has made it
-// read-only again.
+// something (the kernel or config_watcher()) has mapped the page out again,
+// or config_watcher() has made it read-only again.
 
 typedef enum {
   watcher_state_unset                  = 0,
-  // Set a watchpoint without changing memory access permissions -- for
-  // pageable memory blocks.
-  watcher_state_set_no_write_protect   = 1,
+  // Set a watchpoint without changing memory access permissions or paging
+  // anything out -- for pageable memory blocks, has no effect on wired blocks.
+  watcher_state_set_plain              = 1,
   // Set a watchpoint and make its memory range read-only -- for wired memory
   // blocks, though it can also be used (cautiously) with pageable blocks.
-  watcher_state_set_with_write_protect = 2,
+  watcher_state_set_write_protect      = 2,
+  // Set a watchpoint without changing memory access permissions, but page out
+  // its memory range -- for pageable memory blocks, forbidden for wired blocks.
+  watcher_state_set_pageout            = 3,
+  watcher_state_set_max                = 3,
+  // Old usage
+  watcher_state_set_no_write_protect   = watcher_state_set_plain,
+  watcher_state_set_with_write_protect = watcher_state_set_write_protect,
 } watcher_state;
 
 bool config_watcher(void *watchpoint, size_t watchpoint_length,
@@ -1189,7 +1204,7 @@ static int Hooked_watcher_example(char *arg)
   if (pages) {
     void *watchpoint = pages;
     if (config_watcher(watchpoint, PAGE_SIZE, &s_watcher_info,
-        watcher_state_set_no_write_protect))
+        watcher_state_set_pageout))
     {
       pages[0] = 1;
       config_watcher(watchpoint, PAGE_SIZE, &s_watcher_info,
@@ -1254,19 +1269,16 @@ static int Hooked_interpose_example(char *arg1, int (*arg2)(char *))
 watcher_info_t s_watcher_info = {0};
 
 // A trivial example of watchpoint use: It sets a watchpoint and triggers it.
-
-CFStringRef (*CFBundleGetIdentifier_caller)(CFBundleRef bundle) = NULL;
-
 static CFStringRef Hooked_CFBundleGetIdentifier(CFBundleRef bundle)
 {
-  CFStringRef retval = CFBundleGetIdentifier_caller(bundle);
+  CFStringRef retval = CFBundleGetIdentifier(bundle);
 
   if (CanUseCF() && IsMainThread()) {
     unsigned char *pages = (unsigned char *) valloc(PAGE_SIZE);
     if (pages) {
       void *watchpoint = pages;
       if (config_watcher(watchpoint, PAGE_SIZE, &s_watcher_info,
-                         watcher_state_set_no_write_protect))
+                         watcher_state_set_pageout))
       {
         pages[0] = 1;
         config_watcher(watchpoint, PAGE_SIZE, &s_watcher_info,
@@ -1474,7 +1486,7 @@ Hooked_IOAccelContextSubmitDataBuffersExt2(CFTypeRef context, unsigned int arg1,
 
   if (watchpoint && watchpoint_length) {
     config_watcher(watchpoint, watchpoint_length, NULL,
-                   watcher_state_set_with_write_protect);
+                   watcher_state_set_write_protect);
   }
 
   return retval;
@@ -1535,7 +1547,7 @@ kern_return_t Hooked_gpusSubmitDataBuffers(void *arg0)
       PrintCallstack(watcher_info.callstack);
       bzero(&watcher_info, sizeof(watcher_info));
       config_watcher(watchpoint, watchpoint_length, NULL,
-                     watcher_state_set_with_write_protect);
+                     watcher_state_set_write_protect);
     }
   }
 
@@ -1574,7 +1586,7 @@ __attribute__((used)) static const hook_desc user_hooks[]
   INTERPOSE_FUNCTION(NSPushAutoreleasePool),
   PATCH_FUNCTION(__CFInitialize, /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation),
 
-  //PATCH_FUNCTION(CFBundleGetIdentifier, /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation),
+  //INTERPOSE_FUNCTION(CFBundleGetIdentifier),
 
   PATCH_FUNCTION(IOAccelContextSubmitDataBuffersExt2, /System/Library/PrivateFrameworks/IOAccelerator.framework/IOAccelerator),
   PATCH_FUNCTION(ioAccelContextFinalize, /System/Library/PrivateFrameworks/IOAccelerator.framework/IOAccelerator),

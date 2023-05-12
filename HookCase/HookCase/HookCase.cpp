@@ -1192,10 +1192,19 @@ typedef struct vm_map_version {
 // From the xnu kernel's osfmk/i386/locks.h.  This struct is the same size
 // as struct _IOLock, with which it seems interchangeable.
 struct __lck_mtx_t__ {
- unsigned long opaque[2];
+  unsigned long opaque[2];
 };
 
+// Defined in osfmk/i386/pmap_internal.h
+typedef struct pv_rooted_entry {
+  queue_head_t    qlink;
+  vm_map_offset_t va_and_flags; /* virtual address for mapping */
+  pmap_t          pmap;         /* pmap where mapping lies */
+} *pv_rooted_entry_t;
+
 // Kernel private globals (begin)
+
+pv_rooted_entry_t *g_pv_head_table = NULL;
 
 // Only used on Sierra (and up).
 vm_page_t *g_vm_pages = NULL;
@@ -1290,6 +1299,7 @@ typedef kern_return_t (*pmap_enter_t)(pmap_t pmap,
                                       vm_prot_t fault_type,
                                       unsigned int flags,
                                       boolean_t wired);
+typedef unsigned int (*pmap_disconnect_t)(ppnum_t phys);
 typedef vm_page_t (*vm_page_lookup_t)(vm_object_t object,
                                       vm_object_offset_t offset);
 typedef void (*vm_object_lock_t)(vm_object_t object);
@@ -1335,6 +1345,7 @@ static vm_map_lookup_entry_t vm_map_lookup_entry = NULL;
 static vm_map_protect_t vm_map_protect = NULL;
 static pmap_protect_t pmap_protect = NULL;
 static pmap_enter_t pmap_enter = NULL;
+static pmap_disconnect_t pmap_disconnect = NULL;
 static vm_page_lookup_t vm_page_lookup = NULL;
 static vm_object_lock_t vm_object_lock = NULL;
 static pmap_sync_page_attributes_phys_t pmap_sync_page_attributes_phys = NULL;
@@ -1367,6 +1378,14 @@ bool find_kernel_private_functions()
 {
   if (s_kernel_private_functions_found) {
     return true;
+  }
+
+  if (!g_pv_head_table) {
+    g_pv_head_table = (pv_rooted_entry_t *)
+      kernel_dlsym("_pv_head_table");
+    if (!g_pv_head_table) {
+      return false;
+    }
   }
 
   if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
@@ -1560,6 +1579,13 @@ bool find_kernel_private_functions()
     pmap_enter = (pmap_enter_t)
       kernel_dlsym("_pmap_enter");
     if (!pmap_enter) {
+      return false;
+    }
+  }
+  if (!pmap_disconnect) {
+    pmap_disconnect = (pmap_disconnect_t)
+      kernel_dlsym("_pmap_disconnect");
+    if (!pmap_disconnect) {
       return false;
     }
   }
@@ -1771,6 +1797,15 @@ bool get_task_thread_info(task_t task, task_thread_info_t info)
   bzero(info, sizeof(task_thread_info));
   task_act_iterate_wth_args(task, thread_info_iterator, info);
   return true;
+}
+
+// Returns the virtual address corresponding to a physical page number
+// (ppnum_t).
+uintptr_t ppnum_to_vaddr(ppnum_t phys)
+{
+  pv_rooted_entry_t pv_entry = &(*g_pv_head_table)[phys];
+  uintptr_t retval = ((pv_entry->va_and_flags) & ~PAGE_MASK);
+  return retval;
 }
 
 // From the xnu kernel's osfmk/i386/locks.h
@@ -2551,10 +2586,12 @@ vm_prot_t vm_region_get_protection(vm_map_t map, user_addr_t start)
 
 // "struct vm_page" is defined in the xnu kernel's osfmk/vm/vm_page.h.
 typedef struct vm_page_fake_mavericks {
-  uint64_t pad1[5];
+  uint64_t pad1[2];
+  queue_chain_t listq;  /* all pages in same object (O) */
+  uint64_t pad2[1];
   vm_object_t object;  /* which object am I in (O&P) */ // Offset 0x28
   vm_object_offset_t offset; /* offset into that object (O,P) */
-  uint32_t pad2;
+  uint32_t pad3;
   ppnum_t  phys_page; /* Offset 0x3c */ /* Physical address of page, passed
                                          *  to pmap_enter (read-only) */
   /*
@@ -2610,7 +2647,8 @@ typedef struct vm_page_fake_mavericks {
 } *vm_page_fake_mavericks_t;
 
 typedef struct vm_page_fake_yosemite {
-  uint64_t pad1[4];
+  uint64_t pad1[2];
+  queue_chain_t listq;  /* all pages in same object (O) */
   vm_object_offset_t offset; /* offset into that object (O,P) */
   vm_object_t object;  /* which object am I in (O&P) */ // Offset 0x28
   uint64_t pad2;
@@ -2672,7 +2710,8 @@ typedef struct vm_page_fake_yosemite {
 } *vm_page_fake_yosemite_t;
 
 typedef struct vm_page_fake_elcapitan {
-  uint64_t pad1[4];
+  uint64_t pad1[2];
+  queue_chain_t listq;  /* all pages in same object (O) */
   vm_object_offset_t offset; /* offset into that object (O,P) */
   vm_object_t object;  /* which object am I in (O&P) */ // Offset 0x28
   uint64_t pad2;
@@ -2734,13 +2773,26 @@ typedef struct vm_page_fake_elcapitan {
 } *vm_page_fake_elcapitan_t;
 
 typedef uint32_t vm_page_packed_t;
+
+struct vm_page_packed_queue_entry {
+  vm_page_packed_t next;   /* next element */
+  vm_page_packed_t prev;   /* previous element */
+};
+
+typedef struct vm_page_packed_queue_entry *vm_page_queue_t;
+typedef struct vm_page_packed_queue_entry vm_page_queue_head_t;
+typedef struct vm_page_packed_queue_entry vm_page_queue_chain_t;
+typedef struct vm_page_packed_queue_entry *vm_page_queue_entry_t;
+
 typedef vm_page_packed_t vm_page_object_t;
 
 typedef struct vm_page_fake_sierra {
-  uint64_t pad1[3];
+  uint64_t pad1[1];
+  vm_page_queue_chain_t listq;
+  uint64_t pad2[1];
   vm_object_offset_t offset; /* offset into that object (O,P) */
   vm_page_object_t vm_page_object;  /* which object am I in (O&P) */ // Offset 0x20
-  uint32_t pad2[2];
+  uint32_t pad3[2];
  /*
   * The following word of flags is protected
   * by the "VM object" lock.
@@ -2799,10 +2851,12 @@ typedef struct vm_page_fake_sierra {
 } *vm_page_fake_sierra_t;
 
 typedef struct vm_page_fake_highsierra {
-  uint64_t pad1[3];
+  uint64_t pad1[1];
+  vm_page_queue_chain_t listq;
+  uint64_t pad2[1];
   vm_object_offset_t offset; /* offset into that object (O,P) */
   vm_page_object_t vm_page_object;  /* which object am I in (O&P) */ // Offset 0x20
-  uint32_t pad2[2];
+  uint32_t pad3[2];
  /*
   * The following word of flags is protected
   * by the "VM object" lock.
@@ -2859,10 +2913,12 @@ typedef struct vm_page_fake_highsierra {
 } *vm_page_fake_highsierra_t;
 
 typedef struct vm_page_fake_bigsur {
-  uint64_t pad1[3];
+  uint64_t pad1[1];
+  vm_page_queue_chain_t listq;
+  uint64_t pad2[1];
   vm_object_offset_t offset; /* offset into that object (O,P) */
   vm_page_object_t vm_page_object;  /* which object am I in (O&P) */ // Offset 0x20
-  uint32_t pad2[2];
+  uint32_t pad3[2];
  /*
   * The following word of flags is protected
   * by the "VM object" lock.
@@ -2921,13 +2977,10 @@ typedef struct vm_page_fake_bigsur {
 
 #define VM_PACKED_FROM_VM_PAGES_ARRAY 0x80000000
 
-vm_page_packed_t vm_page_pack_ptr(uintptr_t p)
+uintptr_t vm_page_pack_ptr(uintptr_t p)
 {
-  if (!p || (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave() &&
-             !macOS_Catalina() && !macOS_BigSur() && !macOS_Monterey() &&
-             !macOS_Ventura()))
-  {
-    return 0;
+  if (!p || OSX_Mavericks() || OSX_Yosemite() || OSX_ElCapitan()) {
+    return p;
   }
 
   vm_page_fake_sierra_t vm_page_array_beginning_addr = (vm_page_fake_sierra_t)
@@ -2935,12 +2988,14 @@ vm_page_packed_t vm_page_pack_ptr(uintptr_t p)
   vm_page_fake_sierra_t vm_page_array_ending_addr = (vm_page_fake_sierra_t)
     *g_vm_page_array_ending_addr;
 
+#if (0)
   // Sanity check
   if (((uint64_t) vm_page_array_ending_addr - (uint64_t) vm_page_array_beginning_addr) %
       sizeof(struct vm_page_fake_sierra))
   {
     return 0;
   }
+#endif
 
   vm_page_packed_t packed_ptr;
 
@@ -2965,13 +3020,11 @@ vm_page_packed_t vm_page_pack_ptr(uintptr_t p)
 
 uintptr_t vm_page_unpack_ptr(uintptr_t p)
 {
-  if (!p || (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave() &&
-             !macOS_Catalina() && !macOS_BigSur() && !macOS_Monterey() &&
-             !macOS_Ventura()))
-  {
-    return 0;
+  if (!p || OSX_Mavericks() || OSX_Yosemite() || OSX_ElCapitan()) {
+    return p;
   }
 
+#if (0)
   vm_map_offset_t vm_page_array_beginning_addr = (vm_map_offset_t)
     *g_vm_page_array_beginning_addr;
   vm_map_offset_t vm_page_array_ending_addr = (vm_map_offset_t)
@@ -2983,6 +3036,7 @@ uintptr_t vm_page_unpack_ptr(uintptr_t p)
   {
     return 0;
   }
+#endif
 
   vm_page_fake_sierra_t vm_pages = (vm_page_fake_sierra_t) *g_vm_pages;
 
@@ -2994,6 +3048,56 @@ uintptr_t vm_page_unpack_ptr(uintptr_t p)
 }
 
 // Modified from the Sierra xnu kernel's osfmk/vm/vm_page.h (end)
+
+uintptr_t page_listq(vm_page_t page)
+{
+  if (!page) {
+    return 0;
+  }
+
+  uintptr_t retval = 0;
+
+  if (OSX_Mavericks()) {
+    retval = (uintptr_t) &((vm_page_fake_mavericks_t) page)->listq;
+  } else if (OSX_Yosemite() || OSX_ElCapitan()) {
+    retval = (uintptr_t) &((vm_page_fake_yosemite_t) page)->listq;
+  } else {
+    retval = (uintptr_t) &((vm_page_fake_sierra_t) page)->listq;
+  }
+
+  return retval;
+}
+
+vm_page_t page_queue_next(uintptr_t queue_entry)
+{
+  if (!queue_entry) {
+    return NULL;
+  }
+
+  vm_page_t retval = NULL;
+
+  if (OSX_Mavericks() || OSX_Yosemite() || OSX_ElCapitan()) {
+    queue_entry_t entry_local = (queue_entry_t) queue_entry;
+    retval = (vm_page_t) entry_local->next;
+  } else {
+    vm_page_queue_entry_t entry_local = (vm_page_queue_entry_t) queue_entry;
+    retval = (vm_page_t) vm_page_unpack_ptr(entry_local->next);
+  }
+
+  return retval;
+}
+
+#define vm_page_queue_end(q, qe) ((q) == (qe))
+#define vm_page_queue_first(q) (page_queue_next(q))
+#define vm_page_queue_next(qc) (page_queue_next(qc))
+
+// 'head' is always a vm_object_t object. The actual target is its 'memq'
+// field. But this is always its first member, so just using a pointer to
+// the object is fine.
+#define vm_page_queue_iterate(head, elt)                       \
+  for ((elt) = vm_page_queue_first((uintptr_t)head);           \
+      !vm_page_queue_end((uintptr_t)(head), (uintptr_t)(elt)); \
+      (elt) = vm_page_queue_next(page_listq(elt)))             \
 
 ppnum_t page_phys_page(vm_page_t page)
 {
@@ -3051,6 +3155,31 @@ bool page_is_wpmapped(vm_page_t page)
   } else if (OSX_Mavericks()) {
     vm_page_fake_mavericks_t page_local = (vm_page_fake_mavericks_t) page;
     retval = page_local->wpmapped;
+  }
+  return retval;
+}
+
+bool page_is_pmapped(vm_page_t page)
+{
+  if (!page) {
+    return false;
+  }
+  bool retval = false;
+  if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
+      macOS_Catalina() || macOS_BigSur() || macOS_Monterey() ||
+      macOS_Ventura())
+  {
+    vm_page_fake_sierra_t page_local = (vm_page_fake_sierra_t) page;
+    retval = page_local->pmapped;
+  } else if (OSX_ElCapitan()) {
+    vm_page_fake_elcapitan_t page_local = (vm_page_fake_elcapitan_t) page;
+    retval = page_local->pmapped;
+  } else if (OSX_Yosemite()) {
+    vm_page_fake_yosemite_t page_local = (vm_page_fake_yosemite_t) page;
+    retval = page_local->pmapped;
+  } else if (OSX_Mavericks()) {
+    vm_page_fake_mavericks_t page_local = (vm_page_fake_mavericks_t) page;
+    retval = page_local->pmapped;
   }
   return retval;
 }
@@ -8622,6 +8751,112 @@ vm_prot_t user_region_protection(vm_map_t map, vm_map_offset_t start,
   return retval;
 }
 
+typedef struct user_region_wired_info {
+  uint32_t wired_count;
+  uint32_t not_wired_count;
+  uint32_t entry_count;
+} *user_region_wired_info_t;
+
+void user_region_wired_iterator(vm_map_t map, vm_map_entry_t entry,
+                                uint32_t submap_level, void *info)
+{
+  if (!map || !entry || !info) {
+    return;
+  }
+  user_region_wired_info_t info_local = (user_region_wired_info_t) info;
+  ++info_local->entry_count;
+
+  vm_map_entry_fake_t an_entry = (vm_map_entry_fake_t) entry;
+  unsigned short wired_count = an_entry->wired_count;
+  unsigned short user_wired_count = an_entry->user_wired_count;
+
+  if (wired_count || user_wired_count) {
+    ++info_local->wired_count;
+  } else {
+    ++info_local->not_wired_count;
+  }
+}
+
+// retval == -1 indicates an invalid value. Either vm_map_iterate_entries()
+// failed or the region has some pages that are wired and some that aren't.
+int32_t user_region_wired(vm_map_t map, vm_map_offset_t start,
+                          vm_map_offset_t end)
+{
+  if (!map || (map == kernel_map)) {
+    return -1;
+  }
+
+  struct user_region_wired_info info;
+  bzero(&info, sizeof(info));
+
+  vm_map_iterate_entries(map, start, end,
+                         user_region_wired_iterator, &info);
+
+  vm_prot_t retval = -1;
+  if (info.entry_count) {
+    if (info.wired_count == info.entry_count) {
+      retval = 1;
+    } else if (info.not_wired_count == info.entry_count) {
+      retval = 0;
+    }
+  }
+  return retval;
+}
+
+typedef struct  pageout_user_region_info {
+  vm_map_offset_t start;
+  vm_map_offset_t end;
+} *pageout_user_region_info_t;
+
+void pageout_user_region_iterator(vm_map_t map, vm_map_entry_t entry,
+                                  uint32_t submap_level, void *info)
+{
+  if (!map || !entry || !info) {
+    return;
+  }
+
+  pageout_user_region_info_t info_local = (pageout_user_region_info_t) info;
+
+  vm_object_t object = map_entry_object(entry).vmo_object;
+
+  if (!object) {
+    return;
+  }
+
+  while (object) {
+    vm_object_lock(object);
+
+    vm_page_t page;
+    vm_page_queue_iterate(object, page) {
+      if (!page_is_pmapped(page)) {
+        continue;
+      }
+      ppnum_t phys_page = page_phys_page(page);
+      uintptr_t page_vmaddr = ppnum_to_vaddr(phys_page);
+      if ((page_vmaddr < info_local->start) ||
+          (page_vmaddr >= info_local->end))
+      {
+        continue;
+      }
+      pmap_disconnect(phys_page);
+    }
+
+    vm_object_unlock(object);
+    object = object_get_shadow(object);
+  }
+}
+
+void pageout_user_region(vm_map_t map, vm_map_offset_t start,
+                         vm_map_offset_t end)
+{
+  struct pageout_user_region_info info;
+  info.start = start;
+  info.end = end;
+
+  vm_map_iterate_entries(map, start, end,
+                         pageout_user_region_iterator, &info);
+}
+
 // At the heart of HookCase.kext's infrastructure is a lock-protected linked
 // list of hook_t structures.  Think of these as something like fish hooks.
 // There are "cast hooks" and "user hooks".  There are also two different
@@ -8929,12 +9164,19 @@ typedef struct _watcher_info {
 
 typedef enum {
   watcher_state_unset                  = 0,
-  // Set a watchpoint without changing memory access permissions -- for
-  // pageable memory blocks.
-  watcher_state_set_no_write_protect   = 1,
+  // Set a watchpoint without changing memory access permissions or paging
+  // anything out -- for pageable memory blocks, has no effect on wired blocks.
+  watcher_state_set_plain              = 1,
   // Set a watchpoint and make its memory range read-only -- for wired memory
   // blocks, though it can also be used (cautiously) with pageable blocks.
-  watcher_state_set_with_write_protect = 2,
+  watcher_state_set_write_protect      = 2,
+  // Set a watchpoint without changing memory access permissions, but page out
+  // its memory range -- for pageable memory blocks, forbidden for wired blocks.
+  watcher_state_set_pageout            = 3,
+  watcher_state_set_max                = 3,
+  // Old usage
+  watcher_state_set_no_write_protect   = watcher_state_set_plain,
+  watcher_state_set_with_write_protect = watcher_state_set_write_protect,
 } watcher_state;
 
 typedef struct _watcher {
@@ -8946,6 +9188,7 @@ typedef struct _watcher {
   watcher_info_t info;
   user_addr_t info_addr;
   watcher_state status;
+  pid_t pid;
 } watcher_t;
 
 #define CALL_ORIG_FUNC_SIZE 0x20
@@ -9556,6 +9799,37 @@ hook_t *find_cast_hook(uint64_t unique_pid)
 void free_watcher(watcher_t *watcherp);
 bool unset_watcher(vm_map_t proc_map, watcher_t *watcherp);
 
+void remove_process_watchers(uint64_t unique_pid)
+{
+  if (!check_init_locks() || !unique_pid) {
+    return;
+  }
+
+  vm_map_t proc_map = NULL;
+  proc_t cur_proc = current_proc();
+  if (proc_uniqueid(cur_proc) == unique_pid) {
+    proc_map = task_map_for_proc(cur_proc);
+  }
+
+  all_watchers_lock_write();
+  watcher_t *watcherp = NULL;
+  watcher_t *tmp_watcherp = NULL;
+  LIST_FOREACH_SAFE(watcherp, &g_all_watchers, list_entry, tmp_watcherp) {
+    if (watcherp->unique_pid == unique_pid) {
+      LIST_REMOVE(watcherp, list_entry);
+      if (proc_map) {
+        unset_watcher(proc_map, watcherp);
+      }
+      free_watcher(watcherp);
+    }
+  }
+  all_watchers_unlock_write();
+
+  if (proc_map) {
+    vm_map_deallocate(proc_map);
+  }
+}
+
 void remove_process_hooks(uint64_t unique_pid)
 {
   if (!check_init_locks() || !unique_pid) {
@@ -9581,25 +9855,7 @@ void remove_process_hooks(uint64_t unique_pid)
   }
   all_hooks_unlock_write();
 
-  vm_map_t proc_map = task_map_for_proc(current_proc());
-
-  all_watchers_lock_write();
-  watcher_t *watcherp = NULL;
-  watcher_t *tmp_watcherp = NULL;
-  LIST_FOREACH_SAFE(watcherp, &g_all_watchers, list_entry, tmp_watcherp) {
-    if (watcherp->unique_pid == unique_pid) {
-      LIST_REMOVE(watcherp, list_entry);
-      if (proc_map) {
-        unset_watcher(proc_map, watcherp);
-      }
-      free_watcher(watcherp);
-    }
-  }
-  all_watchers_unlock_write();
-
-  if (proc_map) {
-    vm_map_deallocate(proc_map);
-  }
+  remove_process_watchers(unique_pid);
 }
 
 // Make copies of src_proc's hook list entries and add them to g_all_hooks.
@@ -9755,6 +10011,30 @@ bool is_added_kid(hc_path_t proc_path, hc_path_t dylib_path,
   return retval;
 }
 
+void remove_zombie_watchers()
+{
+  if (!check_init_locks()) {
+    return;
+  }
+  all_watchers_lock_write();
+  watcher_t *watcherp = NULL;
+  watcher_t *tmp_watcherp = NULL;
+  LIST_FOREACH_SAFE(watcherp, &g_all_watchers, list_entry, tmp_watcherp) {
+    proc_t proc = NULL;
+    if (watcherp->pid != 0) {
+      proc = proc_find(watcherp->pid);
+    }
+    if (!proc || (watcherp->unique_pid != proc_uniqueid(proc))) {
+      LIST_REMOVE(watcherp, list_entry);
+      free_watcher(watcherp);
+    }
+    if (proc) {
+      proc_rele(proc);
+    }
+  }
+  all_watchers_unlock_write();
+}
+
 // This is unsafe when called at process exit -- proc_find() sometimes hangs,
 // possibly when its pid_t parameter is itself a zombie process. But it works
 // fine when loading a process. Now that HookCase supports HC_ADDKIDS, it's
@@ -9782,6 +10062,7 @@ void remove_zombie_hooks()
     }
   }
   all_hooks_unlock_write();
+  remove_zombie_watchers();
 }
 
 kern_hook_t *create_kern_hook()
@@ -10022,7 +10303,9 @@ bool set_watcher(vm_map_t proc_map, user_addr_t watchpoint,
                  size_t watchpoint_length, user_addr_t info_addr,
                  watcher_state status, watcher_t **watcher_result)
 {
-  if (!proc_map || !watchpoint || !watchpoint_length || !status) {
+  if (!proc_map || !watchpoint || !watchpoint_length ||
+      !status || (status > watcher_state_set_max))
+  {
     return false;
   }
   if (watcher_result) {
@@ -10042,15 +10325,25 @@ bool set_watcher(vm_map_t proc_map, user_addr_t watchpoint,
                       vm_map_page_mask(proc_map));
 
   vm_prot_t prev_prot = 0;
-  if (status == watcher_state_set_with_write_protect) {
+  if (status == watcher_state_set_write_protect) {
     prev_prot = user_region_protection(proc_map, range_start, range_end);
     if (prev_prot == -1) {
-      printf("HookCase(%s[%d]): set_watcher(): watchpoint \'0x%llx\' with length \'0x%lx\' is invalid\n",
+      printf("HookCase(%s[%d]): set_watcher(): watchpoint \'0x%llx\' with length \'0x%lx\' is invalid for \"watcher_state_set_write_protect\"\n",
+             procname, pid, watchpoint, watchpoint_length);
+      return false;
+    } else if (prev_prot == VM_PROT_NONE) {
+      printf("HookCase(%s[%d]): set_watcher(): Unexpected VM_PROT_NONE permission at watchpoint \'0x%llx\' with length \'0x%lx\'\n",
              procname, pid, watchpoint, watchpoint_length);
       return false;
     }
-    if (prev_prot == VM_PROT_NONE) {
-      printf("HookCase(%s[%d]): set_watcher(): Unexpected VM_PROT_NONE permission at watchpoint \'0x%llx\' with length \'0x%lx\'\n",
+  } else if (status == watcher_state_set_pageout) {
+    int32_t wired = user_region_wired(proc_map, range_start, range_end);
+    if (wired == -1) {
+      printf("HookCase(%s[%d]): set_watcher(): watchpoint \'0x%llx\' with length \'0x%lx\' is invalid for \"watcher_state_set_pageout\"\n",
+             procname, pid, watchpoint, watchpoint_length);
+      return false;
+    } else if (wired) {
+      printf("HookCase(%s[%d]): set_watcher(): watchpoint \'0x%llx\' with length \'0x%lx\' would page out wired pages\n",
              procname, pid, watchpoint, watchpoint_length);
       return false;
     }
@@ -10074,7 +10367,10 @@ bool set_watcher(vm_map_t proc_map, user_addr_t watchpoint,
     if (!watcherp) {
       return false;
     }
-  // Don't do anything if the watchpoint's status is already what we want
+  // Don't do anything if the watchpoint's status is already what we want.
+  // The watchpoint hasn't yet been hit, so we don't need to do anything
+  // more. If it had been hit, unset_watcher() would have been called from
+  // user_trap_hook() and the status would be 'watcher_state_unset'.
   } else if (watcherp->status == status) {
     if (watcher_result) {
       *watcher_result = watcherp;
@@ -10082,7 +10378,7 @@ bool set_watcher(vm_map_t proc_map, user_addr_t watchpoint,
     return true;
   }
 
-  if ((status == watcher_state_set_with_write_protect) &&
+  if ((status == watcher_state_set_write_protect) &&
       (prev_prot & VM_PROT_WRITE))
   {
     vm_prot_t new_prot = (prev_prot & ~VM_PROT_WRITE);
@@ -10101,14 +10397,20 @@ bool set_watcher(vm_map_t proc_map, user_addr_t watchpoint,
     }
   }
 
+  if (status == watcher_state_set_pageout) {
+    pageout_user_region(proc_map, range_start, range_end);
+  }
+
   if (have_old_watcher) {
     all_watchers_lock_write();
   }
   watcherp->range_start = range_start;
   watcherp->range_end = range_end;
-  // prev_prot will be 0 if status == watcher_state_set_no_write_protect
+  // prev_prot will be 0 if status is watcher_state_set_plain or
+  // watcher_state_set_pageout
   watcherp->orig_prot = prev_prot;
   watcherp->unique_pid = unique_pid;
+  watcherp->pid = pid;
   watcherp->info_addr = info_addr; // May be 0
   OSCompareAndSwap(watcherp->status, status, (UInt32 *) &watcherp->status);
   if (have_old_watcher) {
@@ -10159,7 +10461,7 @@ bool unset_watcher(vm_map_t proc_map, watcher_t *watcherp)
 
   kern_return_t rv = KERN_SUCCESS;
   vm_prot_t orig_prot = watcherp->orig_prot;
-  if (watcherp->status == watcher_state_set_with_write_protect) {
+  if (watcherp->status == watcher_state_set_write_protect) {
     rv = vm_map_protect(proc_map, watcherp->range_start,
                         watcherp->range_end, orig_prot, false);
   }
@@ -13405,6 +13707,12 @@ void config_watcher(x86_saved_state_t *intr_state)
     printf("HookCase(%s[%d]): config_watcher(): \"info\" address \'0x%llx\' is invalid\n",
            procname, pid, info_addr);
     info_addr = 0;
+  }
+
+  if (status > watcher_state_set_max) {
+    printf("HookCase(%s[%d]): config_watcher(): \"status\" \'0x%x\' is invalid\n",
+           procname, pid, status);
+    watchpoint = 0;
   }
 
   if (!watchpoint_length) {

@@ -1,3 +1,9 @@
+# What's New in Version 7.2.1
+
+HookCase 7.2.1 has further improvements in watchpoint support. There
+are now three different kinds, including two that can catch both read
+and write accesses.
+
 # What's New in Version 7.2
 
 HookCase 7.2 has improved support for watchpoints. Its documentation
@@ -183,14 +189,14 @@ information see
 
 This version of HookCase fixes a bug that caused intermittent
 instability, though not kernel panics. I fixed it by tweaking the
-[code at the heart of HookCase's watchpoint support](HookCase/HookCase/HookCase.cpp#L14537).
+[code at the heart of HookCase's watchpoint support](HookCase/HookCase/HookCase.cpp#L14845).
 See [Issue #26](https://github.com/steven-michaud/HookCase/issues/26)
 for more information.
 
 HookCase's watchpoint code is quite complex. So if you see any sort of
 instability short of kernel panics, especially if it resembles what's
 reported at Issue #26, you should try
-[disabling watchpoint support](HookCase/HookCase/HookCase.cpp#L15486).
+[disabling watchpoint support](HookCase/HookCase/HookCase.cpp#L15794).
 
 # What's New in Version 5.0.3
 
@@ -251,7 +257,7 @@ watchpoint on a location in memory and gather information (including a
 stack trace) about the code that writes to that location.  For more
 information see
 [config_watcher() in the hook library template](HookLibraryTemplate/hook.mm#L1118),
-[Hooked_watcher_example() in the hook library template](HookLibraryTemplate/hook.mm#L1286)
+[Hooked_watcher_example() in the hook library template](HookLibraryTemplate/hook.mm#L1301)
 and [the watchpoints example](examples-watchpoints.md).
 
 # What's New in Version 4.0.5
@@ -314,7 +320,7 @@ HookCase now supports dynamically adding patch hooks for raw function
 pointers. This is useful in hooks for methods that use callbacks --
 for example CFMachPortCreate() and CFRunLoopObserverCreate(). For more
 information see
-[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L1230)
+[dynamic_patch_example() in the hook library template](HookLibraryTemplate/hook.mm#L1245)
 and [the dynamic patch hooks example](examples-dynamic-hooking.md).
 
 # What's New in Version 3.2.1
@@ -394,14 +400,14 @@ instead of `int 0x22`, as follows:
 at a particular address in a given module.  This means that HookCase
 can now hook methods that aren't in their module's symbol table.  For
 more information see
-[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L1269).
+[Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L1284).
 
-* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L12226) that
+* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L12528) that
 prevented interpose hooks from working outside the shared cache of
 system modules.
 
 * Version 2.0
-[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L13979)
+[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L14287)
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0

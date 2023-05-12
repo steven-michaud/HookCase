@@ -1118,22 +1118,30 @@ typedef struct _watcher_info {
 } watcher_info_t;
 
 // (Re)set or unset a watchpoint on a range of memory. A watchpoint is "hit"
-// whenever a page fault happens in its address range. This can be triggered
-// by something reading or writing memory in this range (though not all such
-// memory accesses trigger a page fault). When this happens, information on
-// it is collected in a watcher_info_t structure. This includes a stack trace
-// of the code running when the watchpoint was hit. This information is passed
-// back to user-land when config_watcher() is called to unset or re-set the
-// watchpoint. Watchpoints are implemented using "watchers", which "catch"
-// page faults that happen in a range of memory. Page faults are processed in
-// user_trap_hook(), which records the requisite information and unsets the
-// watchpoint. If a block of memory is pageable (if it can be paged in and
-// out of physical memory), use watcher_state_set_no_write_protect to set a
-// watchpoint on it. With wired memory, page faults won't happen unless you
-// trigger them by (temporarily) changing memory access permissions to prevent
-// writes. Do this using watcher_state_set_with_write_protect. Only write
-// accesses will trigger page faults. Unsetting the watchpoint restores the
-// original access permissions.
+// whenever a non-fatal page fault happens in its address range. This can be
+// triggered by something reading or writing memory in this range (though not
+// all such memory accesses trigger a page fault). When this happens,
+// information on it is collected in a watcher_info_t structure. This includes
+// a stack trace of the code running when the watchpoint was hit. This
+// information is passed back to user-land when config_watcher() is called to
+// unset or re-set the watchpoint. Watchpoints are implemented using
+// "watchers", which "catch" non-fatal page faults that happen in a range of
+// memory. Page faults are processed in user_trap_hook(), which records the
+// requisite information and unsets the watchpoint.
+//
+// To catch only write accesses, use watcher_state_set_write_protect. This
+// temporarily changes memory access permissions to prevent writes. It works
+// on all kinds of memory, but is the only kind of watchpoint that works on
+// wired memory. Unsetting the watchpoint restores the original access
+// permissions. If your block of memory is pageable (if it can be paged in
+// and out of physical memory), you can also use the other two kinds. They
+// catch both read and write accesses. A watcher_state_set_plain watchpoint is
+// entirely passive. Unlike the other two kinds, it doesn't do anything to
+// trigger additional page faults. Use it to observe non-fatal page faults
+// that would happen anyway. watcher_state_set_pageout pages out all the
+// memory in the watchpoint's memory range. Use it to catch as many hits as
+// possible. Reads and writes anywhere in the range will trigger page faults,
+// which the kernel will process to load each page back into physical memory.
 //
 // HookCase's watchpoints are imprecise. They don't catch all memory accesses
 // inside their address range. They're also only appropriate for page-aligned
@@ -1143,17 +1151,24 @@ typedef struct _watcher_info {
 // accesses anywhere inside the page. And once the kernel's fault handling
 // code has mapped in the page (possibly after HookCase has restored its
 // original permissions), further accesses won't trigger new page faults until
-// the kernel has mapped the page out again or config_watcher() has made it
-// read-only again.
+// something (the kernel or config_watcher()) has mapped the page out again,
+// or config_watcher() has made it read-only again.
 
 typedef enum {
   watcher_state_unset                  = 0,
-  // Set a watchpoint without changing memory access permissions -- for
-  // pageable memory blocks.
-  watcher_state_set_no_write_protect   = 1,
+  // Set a watchpoint without changing memory access permissions or paging
+  // anything out -- for pageable memory blocks, has no effect on wired blocks.
+  watcher_state_set_plain              = 1,
   // Set a watchpoint and make its memory range read-only -- for wired memory
   // blocks, though it can also be used (cautiously) with pageable blocks.
-  watcher_state_set_with_write_protect = 2,
+  watcher_state_set_write_protect      = 2,
+  // Set a watchpoint without changing memory access permissions, but page out
+  // its memory range -- for pageable memory blocks, forbidden for wired blocks.
+  watcher_state_set_pageout            = 3,
+  watcher_state_set_max                = 3,
+  // Old usage
+  watcher_state_set_no_write_protect   = watcher_state_set_plain,
+  watcher_state_set_with_write_protect = watcher_state_set_write_protect,
 } watcher_state;
 
 bool config_watcher(void *watchpoint, size_t watchpoint_length,
@@ -1301,17 +1316,15 @@ static int Hooked_sub_123abc(char *arg)
   return retval;
 }
 
-// An example of setting a watchpoint at a particular memory address (actually
-// an address range), then unsetting it to collect information on whatever
-// code (if any) triggered the watchpoint (by writing to its address range).
-// Watchpoints are hit at most once between each pair of calls to
-// config_watcher(true) and config_watcher(false). If a watchpoint has been
-// triggered, it is already unset by the time config_watcher(false) is called
-// (and we collect information on it). To find the next hit one must hook the
-// method that triggered the first one, then set another watchpoint inside its
-// hook. This example is quite trivial -- it sets a watchpoint and also
-// triggers it. A more useful one would set a watchpoint to find out what
-// other code can trigger it.
+// An example of setting a watchpoint on a range of memory, then unsetting it
+// to collect information on whatever code (if any) triggered it (by reading
+// from or writing to its address range). If a watchpoint has been hit, it is
+// already unset by the time config_watcher() is called again on it (and
+// collects information on it). To find the next hit, hook the method that
+// triggered the first one, then set another watchpoint inside its hook. This
+// example is quite trivial -- it sets a watchpoint and also triggers it. A
+// more useful one would set a watchpoint to find out what other code can
+// trigger it.
 watcher_info_t s_watcher_info = {0};
 
 int (*watcher_example_caller)(char *arg) = NULL;
@@ -1321,11 +1334,13 @@ static int Hooked_watcher_example(char *arg)
   int retval = watcher_example_caller(arg);
   unsigned char *pages = (unsigned char *) valloc(PAGE_SIZE);
   if (pages) {
-    bzero(pages, PAGE_SIZE);
     void *watchpoint = pages;
-    if (config_watcher(watchpoint, &s_watcher_info, true)) {
+    if (config_watcher(watchpoint, PAGE_SIZE, &s_watcher_info,
+        watcher_state_set_pageout))
+    {
       pages[0] = 1;
-      config_watcher(watchpoint, &s_watcher_info, false);
+      config_watcher(watchpoint, PAGE_SIZE, &s_watcher_info,
+                     watcher_state_unset);
       if (s_watcher_info.hit) {
         pthread_t thread =
           pthread_from_mach_thread_np(s_watcher_info.mach_thread);
@@ -1333,9 +1348,10 @@ static int Hooked_watcher_example(char *arg)
         if (thread) {
           pthread_getname_np(thread, thread_name, sizeof(thread_name) - 1);
         }
-        LogWithFormat(true, "Hook.mm: watcher_example(): arg \"%s\", returning \'%i\', pages[0] \'0x%x\', watchpoint \'%p\', hit \'0x%llx\', thread %s[%p], mach_thread \'0x%x\'\n",
-                      arg, retval, pages[0], watchpoint, s_watcher_info.hit, thread_name, thread, s_watcher_info.mach_thread);
+        LogWithFormat(true, "Hook.mm: watcher_example(): arg \"%s\", returning \'%i\', pages[0] \'0x%x\', watchpoint \'%p\', hit \'0x%llx\', code \'0x%x\', thread %s[%p], mach_thread \'0x%x\'\n",
+                      arg, retval, pages[0], watchpoint, s_watcher_info.hit, s_watcher_info.page_fault_code, thread_name, thread, s_watcher_info.mach_thread);
         PrintCallstack(s_watcher_info.callstack);
+        bzero(&s_watcher_info, sizeof(s_watcher_info));
       }
     }
     free(pages);
