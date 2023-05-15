@@ -212,7 +212,7 @@ the following.
 6. Once your computer has finished rebooting, run `sysctl
 kern.stack_size`. It should return `kern.stack_size 65536`.
 
-# Important
+### Important
 
 Any changes you've made to the `config.plist` file will disappear when
 you use the OpenCore-patcher app to change settings. You'll need to
