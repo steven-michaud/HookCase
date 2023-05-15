@@ -5,7 +5,7 @@ HookCase 7.3 now works with the
 This environment is something of a torture test for HookCase. It
 needed several new sanity checks. But it also needs a *much* larger
 kernel stack size. For more information see
-[Using the OpenCore Legacy Patcher](3-using.md#L129)
+[Using the OpenCore Legacy Patcher](3-installing.md#L129)
 
 # What's New in Version 7.2.1
 
