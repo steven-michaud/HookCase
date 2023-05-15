@@ -142,16 +142,72 @@ args".
 
 2. Reboot your computer.
 
-## Using the "development" and "debug" kernels
+## Using the [OpenCore Legacy Patcher](https://github.com/dortania/OpenCore-Legacy-Patcher)
 
-HookCase supports the release, development and debug kernels.  But if
-you use it with the debug kernel, we recommend increasing the kernel
-stack size.  One way to do this is as follows.
+As of version 7.3, HookCase now works with OCLP. But it requires a
+*substantial* increase in the kernel stack size (to at least 16
+pages). And you need to use a non-standard way to set it, or any other
+kernel boot arg. In fact you need to directly edit the OCLP
+`config.plist` settings file on the EFI partition.
 
-1. Copy `kernel.debug` (from the appropriate Kernel Debug Kit) to
-   `/System/Library/Kernels`.
+1. Run `diskutil list` to display all the partitions on your system,
+mounted and unmounted. For each "physical" disk you should find
+something like the following. Note the device name of the EFI
+partition on the "physical" disk from which you've currently
+booted. In the following it's `disk0s1`. I will use this as an example
+in the following instructions.
 
-        sudo nvram boot-args="kcsuffix=debug kernel_stack_pages=6"
+```
+/dev/disk0 (internal, physical):
+   #:                       TYPE NAME                    SIZE       IDENTIFIER
+   0:      GUID_partition_scheme                        *1.0 TB     disk0
+   1:                        EFI EFI                     209.7 MB   disk0s1
+   ...
+```
 
-2. Reboot your computer.
+2. Run `diskutil mount disk0s1`. This should mount the EFI partition
+at `/Volumes/EFI`. Then `cd /Volumes/EFI/EFI/OC`.
 
+3. Note the `config.plist` file, which should contain a section like
+the following.
+
+```
+<key>NVRAM</key>
+<dict>
+    <key>Add</key>
+    <dict>
+        ...
+        <key>7C436110-AB2A-4BBB-A880-FE41995C9F82</key>
+        <dict>
+            <key>boot-args</key>
+            <string>keepsyms=1 debug=0x100 ipc_control_port_options=0 -nokcmismatchpanic amfi=0x80</string>
+            ...
+        </dict>
+    </dict>
+    ...
+</dict>
+```
+
+4. Edit it so it looks like this:
+
+```
+<key>NVRAM</key>
+<dict>
+    <key>Add</key>
+    <dict>
+        ...
+        <key>7C436110-AB2A-4BBB-A880-FE41995C9F82</key>
+        <dict>
+            <key>boot-args</key>
+            <string>keepsyms=1 debug=0x100 ipc_control_port_options=0 -nokcmismatchpanic amfi=0x80 kernel_stack_pages=16</string>
+            ...
+        </dict>
+    </dict>
+    ...
+</dict>
+```
+
+5. Reboot your computer.
+
+6. Once your computer has finished rebooting, run `sysctl
+kern.stack_size`. It should return `kern.stack_size 65536`.

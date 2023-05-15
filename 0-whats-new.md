@@ -1,3 +1,12 @@
+# What's New in Version 7.3
+
+HookCase 7.3 now works with the
+[OpenCore Legacy Patcher](https://github.com/dortania/OpenCore-Legacy-Patcher).
+This environment is something of a torture test for HookCase. It
+needed several new sanity checks. But it also needs a *much* larger
+kernel stack size. For more information see
+[Using the OpenCore Legacy Patcher](3-using.md#L129)
+
 # What's New in Version 7.2.1
 
 HookCase 7.2.1 has further improvements in watchpoint support. There
@@ -189,14 +198,14 @@ information see
 
 This version of HookCase fixes a bug that caused intermittent
 instability, though not kernel panics. I fixed it by tweaking the
-[code at the heart of HookCase's watchpoint support](HookCase/HookCase/HookCase.cpp#L14845).
+[code at the heart of HookCase's watchpoint support](HookCase/HookCase/HookCase.cpp#L14850).
 See [Issue #26](https://github.com/steven-michaud/HookCase/issues/26)
 for more information.
 
 HookCase's watchpoint code is quite complex. So if you see any sort of
 instability short of kernel panics, especially if it resembles what's
 reported at Issue #26, you should try
-[disabling watchpoint support](HookCase/HookCase/HookCase.cpp#L15794).
+[disabling watchpoint support](HookCase/HookCase/HookCase.cpp#L15799).
 
 # What's New in Version 5.0.3
 
@@ -402,12 +411,12 @@ can now hook methods that aren't in their module's symbol table.  For
 more information see
 [Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L1284).
 
-* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L12528) that
+* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L12533) that
 prevented interpose hooks from working outside the shared cache of
 system modules.
 
 * Version 2.0
-[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L14287)
+[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L14292)
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0

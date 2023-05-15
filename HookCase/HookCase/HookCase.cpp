@@ -7520,6 +7520,7 @@ typedef struct _symbol_table {
   // refer to the indirect symbol table.
   uint32_t symbol_index; // Index to "interesting" symbols
   uint32_t symbol_count; // Number of "interesting" symbols
+  uint32_t total_symbol_count; // Total # of items in symbol table
   symbol_type_t symbol_type;
   bool is_64bit;
   bool is_in_shared_cache;
@@ -8031,6 +8032,7 @@ bool copyin_symbol_table(module_info_t *module_info,
   symbol_table->pagezero_size = pagezero_size;
   symbol_table->symbol_index = interesting_symbol_index;
   symbol_table->symbol_count = interesting_symbol_count;
+  symbol_table->total_symbol_count = total_symbol_count;
   symbol_table->symbol_type = symbol_type;
   symbol_table->is_64bit = is_64bit;
   symbol_table->is_in_shared_cache = is_in_shared_cache;
@@ -12367,8 +12369,7 @@ void set_patch_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
 void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
                                     module_info_t *module_info,
                                     hook_desc *interpose_hooks,
-                                    uint32_t num_interpose_hooks,
-                                    bool check_for_hook)
+                                    uint32_t num_interpose_hooks)
 {
   if (!proc || !proc_map || !module_info ||
       !interpose_hooks || !num_interpose_hooks)
@@ -12396,6 +12397,9 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
       (symbol_table.indirect_symbol_table + (i * sizeof(uint32_t)));
     if (0xF0000000 & *indirectSymbolTableItem) {
       continue;
+    }
+    if (*indirectSymbolTableItem >= symbol_table.total_symbol_count) {
+      break;
     }
 
     char *string_table_item;
@@ -12429,6 +12433,11 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
       n_desc = symbol_table_item->n_desc;
       n_value = symbol_table_item->n_value;
 #endif
+    }
+    if ((vm_offset_t) string_table_item >=
+        symbol_table.string_table + symbol_table.string_table_size)
+    {
+      break;
     }
 
     uint64_t target_index = i - symbol_table.symbol_index;
@@ -12497,14 +12506,10 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
     }
 
     for (j = 0; j < num_interpose_hooks; ++j) {
-      // This loop can take so long, when called from on_add_image(), that our
-      // hook gets deleted partway through, leading to kernel panics in
-      // strncmp() or strlen() below.
-      if (check_for_hook) {
-        hook_t *hookp = find_hook_with_add_image_func(proc_uniqueid(proc));
-        if (!hookp) {
-          break;
-        }
+      // This loop can take so long that our cast hook gets deleted partway
+      // through, leading to kernel panics in strncmp() or strlen() below.
+      if (!find_cast_hook(proc_uniqueid(proc))) {
+        break;
       }
       if (!interpose_hooks[j].hook_function ||
           !interpose_hooks[j].orig_function_name[0])
@@ -12730,7 +12735,7 @@ void set_interpose_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
     module_info.libSystem_initialized = libSystem_initialized;
     module_info.proc = proc;
     set_interpose_hooks_for_module(proc, proc_map, &module_info,
-                                   interpose_hooks, num_interpose_hooks, false);
+                                   interpose_hooks, num_interpose_hooks);
   }
 
   vm_deallocate(kernel_map, (vm_map_offset_t) holder, info_array_size);
@@ -13438,7 +13443,7 @@ void on_add_image(x86_saved_state_t *intr_state)
   if (hookp->interpose_hooks) {
     set_interpose_hooks_for_module(proc, proc_map, &module_info,
                                    hookp->interpose_hooks,
-                                   hookp->num_interpose_hooks, true);
+                                   hookp->num_interpose_hooks);
   }
 
   thread_interrupt_level(old_state);
