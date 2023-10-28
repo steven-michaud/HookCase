@@ -426,5 +426,5 @@ system modules.
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0
-[fixes a premature-release bug](Examples/events/hook.mm#L1611)
+[fixes a premature-release bug](Examples/events/hook.mm#L1622)
 in the "System Events" example's hook library.
