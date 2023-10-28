@@ -50,7 +50,7 @@ want to run the Console app before starting. Filter on
 "events". Alternatively, you can use `serialportlogger` from
 [PySerialPortLogger](https://github.com/steven-michaud/PySerialPortLogger)
 and
-[define VIRTUAL_SERIAL_PORT in the hook library](Examples/events/hook.mm#L286).
+[define VIRTUAL_SERIAL_PORT in the hook library](Examples/events/hook.mm#L292).
 Most output should be visible in the Terminal window from which you
 run the main application's main process, though.
 

@@ -1,6 +1,6 @@
 // The MIT License (MIT)
 //
-// Copyright (c) 2022 Steven Michaud
+// Copyright (c) 2023 Steven Michaud
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -115,6 +115,7 @@ bool CanUseCF()
 #define MAC_OS_X_VERSION_11_00_HEX 0x00000B00
 #define MAC_OS_X_VERSION_12_00_HEX 0x00000C00
 #define MAC_OS_X_VERSION_13_00_HEX 0x00000D00
+#define MAC_OS_X_VERSION_14_00_HEX 0x00000E00
 
 char gOSVersionString[PATH_MAX] = {0};
 
@@ -213,6 +214,11 @@ bool macOS_Monterey()
 bool macOS_Ventura()
 {
   return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_13_00_HEX);
+}
+
+bool macOS_Sonoma()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_14_00_HEX);
 }
 
 class nsAutoreleasePool {
@@ -2239,15 +2245,25 @@ static ssize_t Hooked_read(int fildes, void *buf, size_t nbyte)
 }
 
 #if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101400
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 110000
+bool (*uuidpath_resolve_fd_caller)(int fd, uuid_t uuid, uint64_t name_offset, uint64_t arg3,
+                                   char **name, char **arg5, char **imagepath, char **arg7) = NULL;
+#else
 bool (*uuidpath_resolve_fd_caller)(int fd, uuid_t uuid, uint32_t name_offset, uint32_t arg3,
                                    char **name, char **arg5, char **imagepath, char **arg7) = NULL;
+#endif
 
 // Resolves the information from a kernel log message (received via
 // read(/dev/oslog_stream)) into a "name" and "imagepath" for the outgoing
 // message to the "log" or "Console" app. Fails if these strings aren't in the
 // "uuiddb". Used on Mojave and up.
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 110000
+bool Hooked_uuidpath_resolve_fd(int fd, uuid_t uuid, uint64_t name_offset, uint64_t arg3,
+                                char **name, char **arg5, char **imagepath, char **arg7)
+#else
 bool Hooked_uuidpath_resolve_fd(int fd, uuid_t uuid, uint32_t name_offset, uint32_t arg3,
                                 char **name, char **arg5, char **imagepath, char **arg7)
+#endif
 {
   bool retval = uuidpath_resolve_fd_caller(fd, uuid, name_offset, arg3, name, arg5, imagepath, arg7);
 
@@ -2256,10 +2272,17 @@ bool Hooked_uuidpath_resolve_fd(int fd, uuid_t uuid, uint32_t name_offset, uint3
   char uuid_string[PATH_MAX] = {0};
   uuid_unparse(uuid, uuid_string);
   if (has_new_kext(uuid)) {
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 110000
+    LogWithFormat(true, "Hook.mm: uuidpath_resolve_fd(): fd \'%i\' (path \"%s\"), uuid \"%s\", name_offset \'0x%llx\', arg3 \'0x%llx\', name \"%s\", arg5 \"%s\", imagepath \"%s\", arg7 \"%s\", returning \'%i\'",
+                  fd, fd_path, uuid_string, name_offset, arg3, (name && *name) ? *name : "null",
+                  (arg5 && *arg5) ? *arg5 : "null", (imagepath && *imagepath) ? *imagepath : "null",
+                  (arg7 && *arg7) ? *arg7 : "null", retval);
+#else
     LogWithFormat(true, "Hook.mm: uuidpath_resolve_fd(): fd \'%i\' (path \"%s\"), uuid \"%s\", name_offset \'0x%x\', arg3 \'0x%x\', name \"%s\", arg5 \"%s\", imagepath \"%s\", arg7 \"%s\", returning \'%i\'",
                   fd, fd_path, uuid_string, name_offset, arg3, (name && *name) ? *name : "null",
                   (arg5 && *arg5) ? *arg5 : "null", (imagepath && *imagepath) ? *imagepath : "null",
                   (arg7 && *arg7) ? *arg7 : "null", retval);
+#endif
   }
 
   return retval;

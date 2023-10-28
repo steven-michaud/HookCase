@@ -41,6 +41,8 @@ sandbox-specific parts of the current process's entitlements.  Then
 `_libsecinit_setup_app_sandbox()` will call `__mac_syscall()` with
 'call' set to '0' and 'arg' pointing (among other things) to the blob
 of Scheme byte code.  This initializes and turns on Apple's sandbox.
+(For some reason this doesn't happen on macOS 13 and above.  I haven't
+yet figured out why.)
 
 On the server side, `secinitd` runs as the currently logged in user
 and sits waiting for requests from "secinitd clients".  When a new
@@ -62,17 +64,12 @@ loaded into whichever application you're testing with, and also into
 `secinitd` (via `HC_ADDKIDS`). In this kind of environment it's best
 to configure it to redirect its output to a virtual serial port like
 [PySerialPortLogger](https://github.com/steven-michaud/PySerialPortLogger),
-[here](Examples/secinit/hook.mm#L336).
+[here](Examples/secinit/hook.mm#L342).
 
 Multiple instances of `secinitd` may already be running, each serving
 a different purpose. So first you need to identify the one you'll use
 in these tests -- the one for the domain of the user you're currently
-logged in as. In the following we assume you're logged in as the
-primary admin user, whose `uid` is always `501`. If you have a
-non-standard configuration your `uid` may be different. One way to
-find your `uid` is to do `ps -f`. The "UIDS" in the first column
-should all belong to the user you're currently logged in as. We also
-assume you'll be testing the Calculator app.
+logged in as.
 
 The first step is to (re)start `secinitd` for your domain. The command
 will return the `pid` of the new instance. Then you'll kill this
@@ -80,7 +77,7 @@ instance, so that running Calculator will cause it to be restarted yet
 again with the hook library loaded.
 
 ```
-% launchctl kickstart -kp user/501/com.apple.secinitd
+% launchctl kickstart -p user/${UID}/com.apple.secinitd
 service spawned with pid: [pid]
 % kill -9 [pid]
 ```
@@ -88,7 +85,7 @@ service spawned with pid: [pid]
 Now run the Calculator app (or whichever app you're testing with):
 
 ```
-HC_ADDKIDS=/usr/libexec/secinitd HC_INSERT_LIBRARY=/full/path/to/hook.dylib /System/Applications/Calculator.app/Contents/MacOS/Calculator
+HC_ADDKIDS=/usr/libexec/secinitd HC_INSERT_LIBRARY=/full/path/to/hook.dylib open /System/Applications/Calculator.app
 ```
 
 To see `sandbox_compile_entitlements()` in action, first delete the
@@ -96,6 +93,13 @@ To see `sandbox_compile_entitlements()` in action, first delete the
 
 ```
 rm -rf ~/Library/Containers/com.apple.calculator
+```
+
+It's also possible to do all the above "automatically" via a shell
+script, as follows:
+
+```
+HC_ADDKIDS=/usr/libexec/secinitd HC_INSERT_LIBRARY=/full/path/to/hook.dylib ./runtest.sh
 ```
 
 Also test with other applications that may or may not be `secinitd`
@@ -112,6 +116,6 @@ doing the following. This latest instance of `secinitd` will no longer
 have the hook library loaded into it.
 
 ```
-launchctl kickstart -kp	user/501/com.apple.secinitd
+launchctl kickstart -kp	user/${UID}/com.apple.secinitd
 ```
 

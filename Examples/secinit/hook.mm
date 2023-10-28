@@ -1,6 +1,6 @@
 // The MIT License (MIT)
 //
-// Copyright (c) 2022 Steven Michaud
+// Copyright (c) 2023 Steven Michaud
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -114,6 +114,7 @@ bool CanUseCF()
 #define MAC_OS_X_VERSION_11_00_HEX 0x00000B00
 #define MAC_OS_X_VERSION_12_00_HEX 0x00000C00
 #define MAC_OS_X_VERSION_13_00_HEX 0x00000D00
+#define MAC_OS_X_VERSION_14_00_HEX 0x00000E00
 
 char gOSVersionString[PATH_MAX] = {0};
 
@@ -212,6 +213,11 @@ bool macOS_Monterey()
 bool macOS_Ventura()
 {
   return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_13_00_HEX);
+}
+
+bool macOS_Sonoma()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_14_00_HEX);
 }
 
 class nsAutoreleasePool {
