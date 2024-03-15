@@ -212,14 +212,14 @@ information see
 
 This version of HookCase fixes a bug that caused intermittent
 instability, though not kernel panics. I fixed it by tweaking the
-[code at the heart of HookCase's watchpoint support](HookCase/HookCase/HookCase.cpp#L15334).
+[code at the heart of HookCase's watchpoint support](HookCase/HookCase/HookCase.cpp#L15454).
 See [Issue #26](https://github.com/steven-michaud/HookCase/issues/26)
 for more information.
 
 HookCase's watchpoint code is quite complex. So if you see any sort of
 instability short of kernel panics, especially if it resembles what's
 reported at Issue #26, you should try
-[disabling watchpoint support](HookCase/HookCase/HookCase.cpp#L16283).
+[disabling watchpoint support](HookCase/HookCase/HookCase.cpp#L16403).
 
 # What's New in Version 5.0.3
 
