@@ -558,6 +558,22 @@ bool macOS_Sonoma_1_or_greater()
   return ((OSX_Version() & 0xFF) >= 0x10);
 }
 
+bool macOS_Sonoma_less_than_4()
+{
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_14_HEX)) {
+    return false;
+  }
+  return ((OSX_Version() & 0xFF) < 0x40);
+}
+
+bool macOS_Sonoma_4_or_greater()
+{
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_14_HEX)) {
+    return false;
+  }
+  return ((OSX_Version() & 0xFF) >= 0x40);
+}
+
 bool OSX_Version_Unsupported()
 {
   return (((OSX_Version() & 0xFF00) < MAC_OS_X_VERSION_10_9_HEX) ||
@@ -1369,8 +1385,9 @@ typedef kern_return_t (*vm_map_region_recurse_64_t)(vm_map_t map,
                                                     vm_region_submap_info_64_t info, /* IN/OUT */
                                                     mach_msg_type_number_t *count);  /* IN/OUT */
 typedef kern_return_t (*task_hold_t)(task_t task);
-typedef kern_return_t (*task_release_t)(task_t task);
 typedef kern_return_t (*task_wait_t)(task_t task, boolean_t until_not_runnable);
+typedef kern_return_t (*task_hold_and_wait_t)(task_t task);
+typedef kern_return_t (*task_release_t)(task_t task);
 typedef uint64_t (*cpuid_features_t)();
 typedef uint64_t (*cpuid_leaf7_features_t)();
 typedef kern_return_t (*vm_fault_t)(vm_map_t map,
@@ -1448,8 +1465,9 @@ static task_act_iterate_wth_args_t task_act_iterate_wth_args = NULL;
 static get_bsdthread_info_t get_bsdthread_info = NULL;
 static vm_map_region_recurse_64_t vm_map_region_recurse_64 = NULL;
 static task_hold_t task_hold = NULL;
-static task_release_t task_release = NULL;
 static task_wait_t task_wait = NULL;
+static task_hold_and_wait_t task_hold_and_wait = NULL;
+static task_release_t task_release = NULL;
 static cpuid_features_t cpuid_features_ptr = NULL;
 static cpuid_leaf7_features_t cpuid_leaf7_features_ptr = NULL;
 static vm_fault_t vm_fault = NULL;
@@ -1612,24 +1630,34 @@ bool find_kernel_private_functions()
       return false;
     }
   }
-  if (!task_hold) {
-    task_hold = (task_hold_t)
-      kernel_dlsym("_task_hold");
+  if (macOS_Sonoma_4_or_greater()) {
+    if (!task_hold_and_wait) {
+      task_hold_and_wait = (task_hold_and_wait_t)
+        kernel_dlsym("_task_hold_and_wait");
+      if (!task_hold_and_wait) {
+        return false;
+      }
+    }
+  } else {
     if (!task_hold) {
-      return false;
+      task_hold = (task_hold_t)
+        kernel_dlsym("_task_hold");
+      if (!task_hold) {
+        return false;
+      }
+    }
+    if (!task_wait) {
+      task_wait = (task_wait_t)
+        kernel_dlsym("_task_wait");
+      if (!task_wait) {
+        return false;
+      }
     }
   }
   if (!task_release) {
     task_release = (task_release_t)
       kernel_dlsym("_task_release");
     if (!task_release) {
-      return false;
-    }
-  }
-  if (!task_wait) {
-    task_wait = (task_wait_t)
-      kernel_dlsym("_task_wait");
-    if (!task_wait) {
       return false;
     }
   }
@@ -4784,6 +4812,42 @@ typedef struct _proc_fake_sonoma_dev {
   u_short p_acflag;       // Offset 0x6ac
 } *proc_fake_sonoma_dev_t;
 
+typedef struct _proc_fake_sonoma_4 {
+  uint32_t pad1[4];
+  task_t task;            // Offset 0x10 (Not valid on Ventura and up?)
+  uint32_t pad2[12];
+  uint64_t p_uniqueid;    // Offset 0x48 (Not valid on 12.1 and up?)
+  uint32_t pad3[4];
+  pid_t p_pid;            // Offset 0x60
+  uint32_t pad4[272];
+  unsigned int p_flag;    // P_* flags (offset 0x4a4)
+  unsigned int p_lflag;   // Offset 0x4a8
+  uint32_t pad5[75];
+  uint32_t p_argslen;     // Length of "string area" at beginning of user stack (offset 0x5d8)
+  int32_t p_argc;         // Offset 0x5dc
+  user_addr_t user_stack; // Where user stack was allocated (offset 0x5e0)
+  uint32_t pad6[51];
+  u_short p_acflag;       // Offset 0x6b4
+} *proc_fake_sonoma_4_t;
+
+typedef struct _proc_fake_sonoma_dev_4 {
+  uint32_t pad1[4];
+  task_t task;            // Offset 0x10 (Not valid on Ventura and up?)
+  uint32_t pad2[12];
+  uint64_t p_uniqueid;    // Offset 0x48 (Not valid on 12.1 and up?)
+  uint32_t pad3[4];
+  pid_t p_pid;            // Offset 0x60
+  uint32_t pad4[278];
+  unsigned int p_flag;    // P_* flags (offset 0x4bc)
+  unsigned int p_lflag;   // Offset 0x4c0
+  uint32_t pad5[75];
+  uint32_t p_argslen;     // Length of "string area" at beginning of user stack (offset 0x5f0)
+  int32_t p_argc;         // Offset 0x5f4
+  user_addr_t user_stack; // Where user stack was allocated (offset 0x5f8)
+  uint32_t pad6[51];
+  u_short p_acflag;       // Offset 0x6cc
+} *proc_fake_sonoma_dev_4_t;
+
 static uint64_t proc_uniqueid(proc_t proc)
 {
   if (!proc) {
@@ -4834,7 +4898,15 @@ static bool IS_64BIT_PROCESS(proc_t proc)
   if (!proc) {
     return false;
   }
-  if (macOS_Sonoma()) {
+  if (macOS_Sonoma_4_or_greater()) {
+    if (kernel_type_is_release()) {
+      proc_fake_sonoma_4_t p = (proc_fake_sonoma_4_t) proc;
+      return (p && (p->p_flag & P_LP64));
+    } else if (kernel_type_is_development()) {
+      proc_fake_sonoma_dev_4_t p = (proc_fake_sonoma_dev_4_t) proc;
+      return (p && (p->p_flag & P_LP64));
+    }
+  } else if (macOS_Sonoma()) {
     if (kernel_type_is_release()) {
       proc_fake_sonoma_t p = (proc_fake_sonoma_t) proc;
       return (p && (p->p_flag & P_LP64));
@@ -4906,7 +4978,15 @@ u_short get_acflag(proc_t proc)
   if (!proc) {
     return 0;
   }
-  if (macOS_Sonoma()) {
+  if (macOS_Sonoma_4_or_greater()) {
+    if (kernel_type_is_release()) {
+      proc_fake_sonoma_4_t p = (proc_fake_sonoma_4_t) proc;
+      return p->p_acflag;
+    } else if (kernel_type_is_development()) {
+      proc_fake_sonoma_dev_4_t p = (proc_fake_sonoma_dev_4_t) proc;
+      return p->p_acflag;
+    }
+  } else if (macOS_Sonoma()) {
     if (kernel_type_is_release()) {
       proc_fake_sonoma_t p = (proc_fake_sonoma_t) proc;
       return p->p_acflag;
@@ -4983,7 +5063,15 @@ unsigned int get_lflag(proc_t proc)
   if (!proc) {
     return 0;
   }
-  if (macOS_Sonoma()) {
+  if (macOS_Sonoma_4_or_greater()) {
+    if (kernel_type_is_release()) {
+      proc_fake_sonoma_4_t p = (proc_fake_sonoma_4_t) proc;
+      return p->p_lflag;
+    } else if (kernel_type_is_development()) {
+      proc_fake_sonoma_dev_4_t p = (proc_fake_sonoma_dev_4_t) proc;
+      return p->p_lflag;
+    }
+  } else if (macOS_Sonoma()) {
     if (kernel_type_is_release()) {
       proc_fake_sonoma_t p = (proc_fake_sonoma_t) proc;
       return p->p_lflag;
@@ -5055,7 +5143,15 @@ unsigned int get_flag(proc_t proc)
   if (!proc) {
     return 0;
   }
-  if (macOS_Sonoma()) {
+  if (macOS_Sonoma_4_or_greater()) {
+    if (kernel_type_is_release()) {
+      proc_fake_sonoma_4_t p = (proc_fake_sonoma_4_t) proc;
+      return p->p_flag;
+    } else if (kernel_type_is_development()) {
+      proc_fake_sonoma_dev_4_t p = (proc_fake_sonoma_dev_4_t) proc;
+      return p->p_flag;
+    }
+  } else if (macOS_Sonoma()) {
     if (kernel_type_is_release()) {
       proc_fake_sonoma_t p = (proc_fake_sonoma_t) proc;
       return p->p_flag;
@@ -6832,7 +6928,23 @@ bool get_proc_info(int32_t pid, char **path,
   uint32_t p_argslen = 0;
   int32_t p_argc = 0;
   user_addr_t user_stack = 0;
-  if (macOS_Sonoma()) {
+  if (macOS_Sonoma_4_or_greater()) {
+    if (kernel_type_is_release()) {
+      proc_fake_sonoma_4_t p = (proc_fake_sonoma_4_t) our_proc;
+      if (p) {
+        p_argslen = p->p_argslen;
+        p_argc = p->p_argc;
+        user_stack = p->user_stack;
+      }
+    } else if (kernel_type_is_development()) {
+      proc_fake_sonoma_dev_4_t p = (proc_fake_sonoma_dev_4_t) our_proc;
+      if (p) {
+        p_argslen = p->p_argslen;
+        p_argc = p->p_argc;
+        user_stack = p->user_stack;
+      }
+    }
+  } else if (macOS_Sonoma()) {
     if (kernel_type_is_release()) {
       proc_fake_sonoma_t p = (proc_fake_sonoma_t) our_proc;
       if (p) {
@@ -13714,8 +13826,12 @@ void process_hook_set(hook_t *hookp, x86_saved_state_t *intr_state)
       task_t task = proc_task(proc);
       if (task) {
         task_reference(task);
-        task_hold(task);
-        task_wait(task, false);
+        if (macOS_Sonoma_4_or_greater()) {
+          task_hold_and_wait(task);
+        } else {
+          task_hold(task);
+          task_wait(task, false);
+        }
       }
       if (proc_copyout(proc_map, &hookp->orig_code, hookp->orig_addr,
                        sizeof(hookp->orig_code)))
@@ -13863,8 +13979,12 @@ void reset_hook(x86_saved_state_t *intr_state)
     task_t task = proc_task(proc);
     if (task) {
       task_reference(task);
-      task_hold(task);
-      task_wait(task, false);
+      if (macOS_Sonoma_4_or_greater()) {
+        task_hold_and_wait(task);
+      } else {
+        task_hold(task);
+        task_wait(task, false);
+      }
     }
     uint16_t new_code = HC_INT1_OPCODE_SHORT;
     if (proc_copyout(proc_map, &new_code, hookp->orig_addr,

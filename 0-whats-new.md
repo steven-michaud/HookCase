@@ -1,3 +1,11 @@
+# What's New in Version 8.0.1
+
+macOS 14.4 broke HookCase by making changes to an internal structure
+(`struct proc`) and to two internal function calls. These are the
+kinds of changes that normally only happen in a major
+release. HookCase 8.0.1 works around them. This resolves
+[Issue #48](https://github.com/steven-michaud/HookCase/issues/48).
+
 # What's New in Version 8.0
 
 HookCase 8.0 now supports macOS 14 (Sonoma).
@@ -387,7 +395,7 @@ HookCase now supports macOS Mojave (10.14).
 
 But Mojave's Debug kernel is currently very flaky -- lots of panics,
 with and without HookCase.  So support for the Debug kernel
-[has been disabled](HookCase/HookCase/HookCase.cpp#L623), at least
+[has been disabled](HookCase/HookCase/HookCase.cpp#L639), at least
 temporarily.
 
 # What's New in Version 2.1
@@ -417,12 +425,12 @@ can now hook methods that aren't in their module's symbol table.  For
 more information see
 [Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L1290).
 
-* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L13000) that
+* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L13112) that
 prevented interpose hooks from working outside the shared cache of
 system modules.
 
 * Version 2.0
-[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L14776)
+[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L14896)
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0
