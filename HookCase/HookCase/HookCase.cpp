@@ -144,6 +144,8 @@
 
 #include "HookCase.h"
 
+#define toupper(c) ((c) - 0x20 * (((c) >= 'a') && ((c) <= 'z')))
+
 extern "C" int atoi(const char *str);
 
 typedef struct pmap *pmap_t;
@@ -216,26 +218,122 @@ int32_t OSX_Version()
   return version;
 }
 
-long macOS_build_num()
+// Build ids for macOS all start with a three-character alphanumeric value
+// which corresponds to the version number (major and minor together) -- for
+// example "13A" for "10.9", "13B" for "10.9.1" and "22G" for "13.5.X" and
+// "13.6.X". Following this is the build number, which restarts from zero for
+// each new three-character value.
+unsigned long build_id_to_ulong(const char *build_id)
 {
-  static long retval = -1;
-  if (retval == -1) {
+  if (!build_id) {
+    return -1UL;
+  }
+
+  size_t i;
+  static const char *alpha_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  static const char *number_chars = "0123456789";
+
+  size_t total_length = strlen(build_id);
+  char *holder = (char *) IOMalloc(total_length + 1);
+  if (!holder) {
+    return -1UL;
+  }
+  strncpy(holder, build_id, total_length + 1);
+  char *remaining = holder;
+
+  unsigned long retval = 0UL;
+
+  char *major_version_str = strsep(&remaining, alpha_chars);
+  size_t major_version_length = strlen(major_version_str);
+  if (!remaining || (major_version_length == 0)) {
+    retval = -1UL;
+  } else {
+    for (i = 0; i < major_version_length; ++i) {
+      if ((major_version_str[i] < '0') || (major_version_str[i] > '9')) {
+        retval = -1UL;
+        break;
+      }
+    }
+    if (retval != -1UL) {
+      unsigned long major_version = strtoul(major_version_str, NULL, 10);
+      if (major_version > UINT_MAX) {
+        retval = -1UL;
+      } else {
+        retval |= (major_version << 32);
+      }
+    }
+  }
+
+  size_t minor_version_length = 0;
+  if (remaining && (retval != -1UL)) {
+    --remaining;
+    remaining[0] = build_id[major_version_length];
+    char *minor_version_str = strsep(&remaining, number_chars);
+    minor_version_length = strlen(minor_version_str);
+    if (!remaining || (minor_version_length == 0)) {
+      retval = -1UL;
+    } else {
+      for (i = 0; i < minor_version_length; ++i) {
+        if ((minor_version_str[i] < 'A') || (minor_version_str[i] > 'Z')) {
+          retval = -1UL;
+          break;
+        }
+      }
+      if (retval != -1UL) {
+        unsigned long minor_version = strtoul(minor_version_str, NULL, 36);
+        if (minor_version > UINT_MAX) {
+          retval = -1UL;
+        } else {
+          retval |= (minor_version << 16);
+        }
+      }
+    }
+  }
+
+  if (remaining && (retval != -1UL)) {
+    --remaining;
+    remaining[0] = build_id[major_version_length + minor_version_length];
+    char *build_num_str = remaining;
+    size_t build_num_length = strlen(build_num_str);
+    if (build_num_length == 0) {
+      retval = -1UL;
+    } else {
+      for (i = 0; i < build_num_length; ++i) {
+        if ((build_num_str[i] < '0') || (build_num_str[i] > '9')) {
+          retval = -1UL;
+          break;
+        }
+      }
+      if (retval != -1UL) {
+        unsigned long build_num = strtoul(build_num_str, NULL, 10);
+        if (build_num > UINT_MAX) {
+          retval = -1UL;
+        } else {
+          retval |= build_num;
+        }
+      }
+    }
+  }
+
+  IOFree(holder, total_length + 1);
+
+  return retval;
+}
+
+unsigned long macOS_build_id()
+{
+  static unsigned long retval = -1UL;
+  if (retval == -1UL) {
     size_t build_id_string_length;
     sysctlbyname("kern.osversion", NULL, &build_id_string_length, NULL, 0);
     char *build_id_string = (char *) IOMalloc(build_id_string_length);
     if (!build_id_string) {
-      return -1;
+      return -1UL;
     }
-    // Build ids for macOS all start with a three-character alphanumeric value
-    // which corresponds to part or all of the version number -- for example
-    // "13A" for "10.9", "13B" for "10.9.1" and "22G" for "13.5.X" and
-    // "13.6.X". Remove this and use the rest as a build number. Note that the
-    // build numbers restart from zero for each three-character value.
     if (sysctlbyname("kern.osversion", build_id_string,
                      &build_id_string_length, NULL, 0) == 0)
     {
-      const char *build_num_string = build_id_string + 3;
-      retval = strtol(build_num_string, NULL, 10);
+      retval = build_id_to_ulong(build_id_string);
     }
     IOFree(build_id_string, build_id_string_length);
   }
@@ -462,8 +560,9 @@ bool macOS_Monterey_less_than_7_1()
     return false;
   }
 
-  long build_num = macOS_build_num();
-  return ((build_num != -1) && (build_num < 920));
+  unsigned long build_id = macOS_build_id();
+  return ((build_id != -1UL) &&
+          (build_id < build_id_to_ulong("21G920")));
 }
 
 // The build number for macOS 12.7.1 is 21G920.
@@ -478,8 +577,9 @@ bool macOS_Monterey_7_1_or_greater()
     return false;
   }
 
-  long build_num = macOS_build_num();
-  return ((build_num != -1) && (build_num >= 920));
+  unsigned long build_id = macOS_build_id();
+  return ((build_id != -1UL) &&
+          (build_id >= build_id_to_ulong("21G920")));
 }
 
 bool macOS_Ventura()
@@ -517,8 +617,9 @@ bool macOS_Ventura_less_than_6_1()
     return false;
   }
 
-  long build_num = macOS_build_num();
-  return ((build_num != -1) && (build_num < 313));
+  unsigned long build_id = macOS_build_id();
+  return ((build_id != -1UL) &&
+          (build_id < build_id_to_ulong("22G313")));
 }
 
 // The build number for macOS 13.6.1 is 22G313.
@@ -533,8 +634,9 @@ bool macOS_Ventura_6_1_or_greater()
     return false;
   }
 
-  long build_num = macOS_build_num();
-  return ((build_num != -1) && (build_num >= 313));
+  unsigned long build_id = macOS_build_id();
+  return ((build_id != -1UL) &&
+          (build_id >= build_id_to_ulong("22G313")));
 }
 
 bool macOS_Sonoma()
