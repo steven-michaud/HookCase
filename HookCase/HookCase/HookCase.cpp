@@ -16671,7 +16671,7 @@ kern_return_t HookCase_start(kmod_info_t * ki, void *d)
     // rebooting.  But this makes the kernel "capture" the serial port -- it's
     // no longer available to user-mode code, and drivers for it no longer show
     // up in the /dev directory.
-    kprintf("HookCase requires OS X Mavericks (10.9), Yosemite (10.10), El Capitan (10.11), macOS Sierra (10.12), macOS High Sierra (10.13), macOS Mojave (10.14), macOS Catalina (10.15), macOS Big Sur (11), or macOS Monterey (12) or macOS Ventura (13): current version %s\n",
+    kprintf("HookCase requires OS X Mavericks (10.9), Yosemite (10.10), El Capitan (10.11), macOS Sierra (10.12), macOS High Sierra (10.13), macOS Mojave (10.14), macOS Catalina (10.15), macOS Big Sur (11), macOS Monterey (12), macOS Ventura (13), or macOS Sonoma (14): current version %s\n",
             gOSVersionString ? gOSVersionString : "null");
     if (gOSVersionString) {
       IOFree(gOSVersionString, gOSVersionStringLength);
