@@ -64,7 +64,7 @@ loaded into whichever application you're testing with, and also into
 `secinitd` (via `HC_ADDKIDS`). In this kind of environment it's best
 to configure it to redirect its output to a virtual serial port like
 [PySerialPortLogger](https://github.com/steven-michaud/PySerialPortLogger),
-[here](Examples/secinit/hook.mm#L342).
+[here](Examples/secinit/hook.mm#L348).
 
 Multiple instances of `secinitd` may already be running, each serving
 a different purpose. So first you need to identify the one you'll use
@@ -116,6 +116,8 @@ doing the following. This latest instance of `secinitd` will no longer
 have the hook library loaded into it.
 
 ```
-launchctl kickstart -kp	user/${UID}/com.apple.secinitd
+% launchctl kickstart -p user/${UID}/com.apple.secinitd
+service spawned with pid: [pid]
+% kill -9 [pid]
 ```
 

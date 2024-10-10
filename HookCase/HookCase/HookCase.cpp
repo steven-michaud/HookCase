@@ -1,6 +1,6 @@
 // The MIT License (MIT)
 //
-// Copyright (c) 2023 Steven Michaud
+// Copyright (c) 2024 Steven Michaud
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -146,6 +146,10 @@
 
 #define toupper(c) ((c) - 0x20 * (((c) >= 'a') && ((c) <= 'z')))
 
+#ifndef MAX_CPUS
+#define MAX_CPUS 64
+#endif
+
 extern "C" int atoi(const char *str);
 
 typedef struct pmap *pmap_t;
@@ -178,6 +182,7 @@ extern "C" void *get_bsdtask_info(task_t);
 #define MAC_OS_X_VERSION_12_HEX    0x00001500
 #define MAC_OS_X_VERSION_13_HEX    0x00001600
 #define MAC_OS_X_VERSION_14_HEX    0x00001700
+#define MAC_OS_X_VERSION_15_HEX    0x00001800
 
 char *gOSVersionString = NULL;
 size_t gOSVersionStringLength = 0;
@@ -446,6 +451,14 @@ bool macOS_Catalina_less_than_5()
   return ((OSX_Version() & 0xFF) < 0x50);
 }
 
+bool macOS_Catalina_5_or_greater()
+{
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_10_15_HEX)) {
+    return false;
+  }
+  return ((OSX_Version() & 0xFF) >= 0x50);
+}
+
 bool macOS_BigSur()
 {
   return ((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_11_HEX);
@@ -676,10 +689,34 @@ bool macOS_Sonoma_4_or_greater()
   return ((OSX_Version() & 0xFF) >= 0x40);
 }
 
+bool macOS_Sequoia()
+{
+  return ((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_15_HEX);
+}
+
 bool OSX_Version_Unsupported()
 {
   return (((OSX_Version() & 0xFF00) < MAC_OS_X_VERSION_10_9_HEX) ||
-          ((OSX_Version() & 0xFF00) > MAC_OS_X_VERSION_14_HEX));
+          ((OSX_Version() & 0xFF00) > MAC_OS_X_VERSION_15_HEX));
+}
+
+typedef struct kthread_key {
+  void *values[MAX_CPUS];
+} kthread_key_t;
+
+void kthread_key_init(kthread_key_t *key)
+{
+  bzero(key, sizeof(kthread_key_t));
+}
+
+void *kthread_getspecific(kthread_key_t *key)
+{
+  return key->values[get_cpu_number()];
+}
+
+void kthread_setspecific(kthread_key_t *key, void *value)
+{
+  key->values[get_cpu_number()] = value;
 }
 
 // When using the debug kernel, set "kernel_stack_pages=6" in the boot args
@@ -809,7 +846,8 @@ bool find_kernel_header()
   // vm_kernel_unslide_or_perm_external() is only available on OS X 10.11 and up.
   if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra() ||
       macOS_Mojave() || macOS_Catalina() || macOS_BigSur() ||
-      macOS_Monterey() || macOS_Ventura() || macOS_Sonoma())
+      macOS_Monterey() || macOS_Ventura() || macOS_Sonoma() ||
+      macOS_Sequoia())
   {
     vm_offset_t func_address = (vm_offset_t) vm_kernel_unslide_or_perm_external;
     vm_offset_t func_address_unslid = 0;
@@ -819,8 +857,8 @@ bool find_kernel_header()
     // slide" -- an offset to the location of the "kernel cache", which
     // contains the kernel and a bunch of kernel extensions. The kernel
     // itself is inside this "cache". Find it to determine the "kernel slide".
-    if (macOS_Sonoma() || macOS_Ventura() || macOS_Monterey() ||
-        macOS_BigSur())
+    if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura() ||
+        macOS_Monterey() || macOS_BigSur())
     {
       bool kernel_header_found = false;
       vm_offset_t slide_increment;
@@ -1198,7 +1236,7 @@ bool find_sysent_table()
   const char *data_segment_name;
   const char *const_section_name;
   if (macOS_Catalina() || macOS_BigSur() || macOS_Monterey() ||
-      macOS_Ventura() || macOS_Sonoma())
+      macOS_Ventura() || macOS_Sonoma() || macOS_Sequoia())
   {
     data_segment_name = "__DATA_CONST";
     const_section_name = "__const";
@@ -1624,7 +1662,7 @@ bool find_kernel_private_functions()
 
   if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
       macOS_Catalina() || macOS_BigSur() || macOS_Monterey() ||
-      macOS_Ventura() || macOS_Sonoma())
+      macOS_Ventura() || macOS_Sonoma() || macOS_Sequoia())
   {
     if (!g_vm_pages) {
       g_vm_pages = (vm_page_t *)
@@ -1732,7 +1770,7 @@ bool find_kernel_private_functions()
       return false;
     }
   }
-  if (macOS_Sonoma_4_or_greater()) {
+  if (macOS_Sequoia() || macOS_Sonoma_4_or_greater()) {
     if (!task_hold_and_wait) {
       task_hold_and_wait = (task_hold_and_wait_t)
         kernel_dlsym("_task_hold_and_wait");
@@ -1920,7 +1958,7 @@ bool find_kernel_private_functions()
   if (OSX_Yosemite() || OSX_ElCapitan() || macOS_Sierra() ||
       macOS_HighSierra() || macOS_Mojave() || macOS_Catalina() ||
       macOS_BigSur() || macOS_Monterey() || macOS_Ventura() ||
-      macOS_Sonoma())
+      macOS_Sonoma() || macOS_Sequoia())
   {
     if (!proc_getexecutablevnode) {
       proc_getexecutablevnode = (proc_getexecutablevnode_t)
@@ -1932,7 +1970,8 @@ bool find_kernel_private_functions()
   }
   if (OSX_ElCapitan() || macOS_Sierra() || macOS_HighSierra() ||
       macOS_Mojave() || macOS_Catalina() || macOS_BigSur() ||
-      macOS_Monterey() || macOS_Ventura() || macOS_Sonoma())
+      macOS_Monterey() || macOS_Ventura() || macOS_Sonoma() ||
+      macOS_Sequoia())
   {
     if (!task_coalition_ids) {
       task_coalition_ids = (task_coalition_ids_t)
@@ -1965,7 +2004,7 @@ bool find_kernel_private_functions()
   }
   if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
       macOS_Catalina() || macOS_BigSur() || macOS_Monterey() ||
-      macOS_Ventura() || macOS_Sonoma())
+      macOS_Ventura() || macOS_Sonoma() || macOS_Sequoia())
   {
     if (!vm_object_unlock_ptr) {
       vm_object_unlock_ptr = (vm_object_unlock_t)
@@ -1975,7 +2014,9 @@ bool find_kernel_private_functions()
       }
     }
   }
-  if (macOS_Monterey() || macOS_Ventura() || macOS_Sonoma()) {
+  if (macOS_Monterey() || macOS_Ventura() || macOS_Sonoma() ||
+      macOS_Sequoia())
+  {
     if (!proc_uniqueid_ptr) {
       proc_uniqueid_ptr = (proc_uniqueid_t)
         kernel_dlsym("_proc_uniqueid");
@@ -2228,7 +2269,9 @@ pmap_t vm_map_pmap(vm_map_t map)
   if (!map) {
     return NULL;
   }
-  if (macOS_Sonoma() || macOS_Ventura() || macOS_Monterey_3_or_greater()) {
+  if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura() ||
+      macOS_Monterey_3_or_greater())
+  {
     vm_map_fake_monterey_3_t m = (vm_map_fake_monterey_3_t) map;
     return m->pmap;
   } else if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
@@ -2248,7 +2291,7 @@ unsigned int vm_map_timestamp(vm_map_t map)
     return 0;
   }
   unsigned int retval = 0;
-  if (macOS_Sonoma()) {
+  if (macOS_Sequoia() || macOS_Sonoma()) {
     vm_map_fake_sonoma_t map_local = (vm_map_fake_sonoma_t) map;
     retval = map_local->timestamp;
   } else if (macOS_Ventura() || macOS_Monterey_3_or_greater()) {
@@ -2314,7 +2357,9 @@ vm_map_size_t vm_map_user_wire_limit(vm_map_t map)
     return 0;
   }
   vm_map_size_t retval;
-  if (macOS_Sonoma() || macOS_Ventura() || macOS_Monterey_3_or_greater()) {
+  if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura() ||
+      macOS_Monterey_3_or_greater())
+  {
     vm_map_fake_monterey_3_t m = (vm_map_fake_monterey_3_t) map;
     retval = m->user_wire_limit;
   } else if (macOS_Monterey()) {
@@ -2338,7 +2383,9 @@ vm_map_size_t vm_map_user_wire_size(vm_map_t map)
     return 0;
   }
   vm_map_size_t retval;
-  if (macOS_Sonoma() || macOS_Ventura() || macOS_Monterey_3_or_greater()) {
+  if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura() ||
+      macOS_Monterey_3_or_greater())
+  {
     vm_map_fake_monterey_3_t m = (vm_map_fake_monterey_3_t) map;
     retval = m->user_wire_size;
   } else if (macOS_Monterey()) {
@@ -2361,7 +2408,9 @@ void vm_map_set_user_wire_size(vm_map_t map, vm_map_size_t new_size)
   if (!map) {
     return;
   }
-  if (macOS_Sonoma() || macOS_Ventura() || macOS_Monterey_3_or_greater()) {
+  if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura() ||
+      macOS_Monterey_3_or_greater())
+  {
     vm_map_fake_monterey_3_t m = (vm_map_fake_monterey_3_t) map;
     m->user_wire_size = new_size;
   } else if (macOS_Monterey()) {
@@ -2515,7 +2564,9 @@ bool vm_map_entry_get_superpage_size(vm_map_entry_t entry)
     return false;
   }
   bool retval = false;
-  if (macOS_Sonoma() || macOS_Ventura() || macOS_Monterey()) {
+  if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura() ||
+      macOS_Monterey())
+  {
     vm_map_entry_fake_monterey_t entry_local =
       (vm_map_entry_fake_monterey_t) entry;
     retval = entry_local->superpage_size;
@@ -2591,7 +2642,7 @@ void vm_map_lock_write_to_read(vm_map_t map)
   if (!map) {
     return;
   }
-  if (macOS_Sonoma()) {
+  if (macOS_Sequoia() || macOS_Sonoma()) {
     vm_map_fake_sonoma_t map_local = (vm_map_fake_sonoma_t) map;
     ++map_local->timestamp;
     lck_rw_lock_exclusive_to_shared(&(map_local->lock));
@@ -2647,7 +2698,7 @@ void vm_map_unlock(vm_map_t map)
   if (!map) {
     return;
   }
-  if (macOS_Sonoma()) {
+  if (macOS_Sequoia() || macOS_Sonoma()) {
     vm_map_fake_sonoma_t map_local = (vm_map_fake_sonoma_t) map;
     ++map_local->timestamp;
     lck_rw_done(&(map_local->lock));
@@ -2745,7 +2796,9 @@ bool map_entry_is_submap(vm_map_entry_t entry)
 
   bool retval = false;
   vm_map_entry_fake_t entry_local = (vm_map_entry_fake_t) entry;
-  if (macOS_Sonoma() || macOS_Ventura() || macOS_Monterey_5_or_greater()) {
+  if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura() ||
+      macOS_Monterey_5_or_greater())
+  {
     uintptr_t value = (uintptr_t) entry_local->vme_object.vmo_object;
     uintptr_t flag = (value & 0xffff);
     retval = ((flag & 2) != 0);
@@ -2765,7 +2818,9 @@ union vm_map_object map_entry_object_unpack_ptr(vm_object_t p)
   union vm_map_object retval;
   retval.vmo_object = p;
 
-  if (!macOS_Sonoma() && !macOS_Ventura() && !macOS_Monterey_5_or_greater()) {
+  if (!macOS_Sequoia() && !macOS_Sonoma() && !macOS_Ventura() &&
+      !macOS_Monterey_5_or_greater())
+  {
     return retval;
   }
 
@@ -3379,7 +3434,7 @@ ppnum_t page_phys_page(vm_page_t page)
   if (offset_in_struct == -1) {
     if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
         macOS_Catalina() || macOS_BigSur() || macOS_Monterey() ||
-        macOS_Ventura() || macOS_Sonoma())
+        macOS_Ventura() || macOS_Sonoma() || macOS_Sequoia())
     {
       offset_in_struct = offsetof(struct vm_page_fake_sierra, phys_page);
     } else if (OSX_ElCapitan()) {
@@ -3412,7 +3467,7 @@ bool page_is_wpmapped(vm_page_t page)
   bool retval = false;
   if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
       macOS_Catalina() || macOS_BigSur() || macOS_Monterey() ||
-      macOS_Ventura() || macOS_Sonoma())
+      macOS_Ventura() || macOS_Sonoma() || macOS_Sequoia())
   {
     vm_page_fake_sierra_t page_local = (vm_page_fake_sierra_t) page;
     retval = page_local->wpmapped;
@@ -3437,7 +3492,7 @@ bool page_is_pmapped(vm_page_t page)
   bool retval = false;
   if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
       macOS_Catalina() || macOS_BigSur() || macOS_Monterey() ||
-      macOS_Ventura() || macOS_Sonoma())
+      macOS_Ventura() || macOS_Sonoma() || macOS_Sequoia())
   {
     vm_page_fake_sierra_t page_local = (vm_page_fake_sierra_t) page;
     retval = page_local->pmapped;
@@ -3461,7 +3516,7 @@ void page_set_wpmapped(vm_page_t page, bool flag)
   }
   if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
       macOS_Catalina() || macOS_BigSur() || macOS_Monterey() ||
-      macOS_Ventura() || macOS_Sonoma())
+      macOS_Ventura() || macOS_Sonoma() || macOS_Sequoia())
   {
     vm_page_fake_sierra_t page_local = (vm_page_fake_sierra_t) page;
     page_local->wpmapped = flag;
@@ -3484,7 +3539,7 @@ unsigned char page_is_cs_validated(vm_page_t page)
   }
   unsigned char retval = 0;
   if (macOS_BigSur() || macOS_Monterey() || macOS_Ventura() ||
-      macOS_Sonoma())
+      macOS_Sonoma() || macOS_Sequoia())
   {
     vm_page_fake_bigsur_t page_local = (vm_page_fake_bigsur_t) page;
     retval = page_local->cs_validated;
@@ -3513,7 +3568,7 @@ void page_set_cs_validated(vm_page_t page, unsigned char value)
     return;
   }
   if (macOS_BigSur() || macOS_Monterey() || macOS_Ventura() ||
-      macOS_Sonoma())
+      macOS_Sonoma() || macOS_Sequoia())
   {
     vm_page_fake_bigsur_t page_local = (vm_page_fake_bigsur_t) page;
     page_local->cs_validated = value;
@@ -3542,7 +3597,7 @@ unsigned char page_is_cs_tainted(vm_page_t page)
   }
   unsigned char retval = 0;
   if (macOS_BigSur() || macOS_Monterey() || macOS_Ventura() ||
-      macOS_Sonoma())
+      macOS_Sonoma() || macOS_Sequoia())
   {
     vm_page_fake_bigsur_t page_local = (vm_page_fake_bigsur_t) page;
     retval = page_local->cs_tainted;
@@ -3571,7 +3626,7 @@ void page_set_cs_tainted(vm_page_t page, unsigned char value)
     return;
   }
   if (macOS_BigSur() || macOS_Monterey() || macOS_Ventura() ||
-      macOS_Sonoma())
+      macOS_Sonoma() || macOS_Sequoia())
   {
     vm_page_fake_bigsur_t page_local = (vm_page_fake_bigsur_t) page;
     page_local->cs_tainted = value;
@@ -3600,7 +3655,7 @@ unsigned char page_is_cs_nx(vm_page_t page)
   }
   unsigned char retval = 0;
   if (macOS_BigSur() || macOS_Monterey() || macOS_Ventura() ||
-      macOS_Sonoma())
+      macOS_Sonoma() || macOS_Sequoia())
   {
     vm_page_fake_bigsur_t page_local = (vm_page_fake_bigsur_t) page;
     retval = page_local->cs_nx;
@@ -3626,7 +3681,7 @@ void page_set_cs_nx(vm_page_t page, unsigned char value)
     return;
   }
   if (macOS_BigSur() || macOS_Monterey() || macOS_Ventura() ||
-      macOS_Sonoma())
+      macOS_Sonoma() || macOS_Sequoia())
   {
     vm_page_fake_bigsur_t page_local = (vm_page_fake_bigsur_t) page;
     page_local->cs_nx = value;
@@ -3650,7 +3705,8 @@ bool page_is_slid(vm_page_t page)
   // As best I can tell, the notion of slid pages is absent in macOS Mojave
   // and above.
   if (!page || macOS_Mojave() || macOS_Catalina() || macOS_BigSur() ||
-      macOS_Monterey() || macOS_Ventura() || macOS_Sonoma())
+      macOS_Monterey() || macOS_Ventura() || macOS_Sonoma() ||
+      macOS_Sequoia())
   {
     return false;
   }
@@ -3679,7 +3735,8 @@ void page_set_slid(vm_page_t page, bool flag)
   // As best I can tell, the notion of slid pages is absent in macOS Mojave
   // and above.
   if (!page || macOS_Mojave() || macOS_Catalina() || macOS_BigSur() ||
-      macOS_Monterey() || macOS_Ventura() || macOS_Sonoma())
+      macOS_Monterey() || macOS_Ventura() || macOS_Sonoma() ||
+      macOS_Sequoia())
   {
     return;
   }
@@ -3711,7 +3768,7 @@ vm_object_t page_object(vm_page_t page)
   if (offset_in_struct == -1) {
     if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
         macOS_Catalina() || macOS_BigSur() || macOS_Monterey() ||
-        macOS_Ventura() || macOS_Sonoma())
+        macOS_Ventura() || macOS_Sonoma() || macOS_Sequoia())
     {
       offset_in_struct = offsetof(struct vm_page_fake_sierra, vm_page_object);
     } else if (OSX_ElCapitan()) {
@@ -3727,7 +3784,7 @@ vm_object_t page_object(vm_page_t page)
   if (offset_in_struct != -1) {
     if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
         macOS_Catalina() || macOS_BigSur() || macOS_Monterey() ||
-        macOS_Ventura() || macOS_Sonoma())
+        macOS_Ventura() || macOS_Sonoma() || macOS_Sequoia())
     {
       vm_page_object_t packed =
         *((vm_page_object_t *)((vm_map_offset_t)page + offset_in_struct));
@@ -3750,7 +3807,7 @@ vm_object_offset_t page_object_offset(vm_page_t page)
   if (offset_in_struct == -1) {
     if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
         macOS_Catalina() || macOS_BigSur() || macOS_Monterey() ||
-        macOS_Ventura() || macOS_Sonoma())
+        macOS_Ventura() || macOS_Sonoma() || macOS_Sequoia())
     {
       offset_in_struct = offsetof(struct vm_page_fake_sierra, offset);
     } else if (OSX_ElCapitan()) {
@@ -4298,7 +4355,8 @@ bool object_is_code_signed(vm_object_t object)
     retval = object_local->code_signed;
   } else if (macOS_Monterey_7_1_or_greater() ||
              macOS_Ventura_6_1_or_greater() ||
-             macOS_Sonoma_1_or_greater())
+             macOS_Sonoma_1_or_greater() ||
+             macOS_Sequoia())
   {
     vm_object_fake_sonoma_1_t object_local =
       (vm_object_fake_sonoma_1_t) object;
@@ -4381,7 +4439,8 @@ void object_set_code_signed(vm_object_t object, bool flag)
     object_local->code_signed = flag;
   } else if (macOS_Monterey_7_1_or_greater() ||
              macOS_Ventura_6_1_or_greater() ||
-             macOS_Sonoma_1_or_greater())
+             macOS_Sonoma_1_or_greater() ||
+             macOS_Sequoia())
   {
     vm_object_fake_sonoma_1_t object_local =
       (vm_object_fake_sonoma_1_t) object;
@@ -4406,7 +4465,8 @@ bool object_is_slid(vm_object_t object)
   // As best I can tell, the notion of slid objects is absent in macOS Mojave
   // and above.
   if (!object || macOS_Mojave() || macOS_Catalina() || macOS_BigSur() ||
-      macOS_Monterey() || macOS_Ventura() || macOS_Sonoma())
+      macOS_Monterey() || macOS_Ventura() || macOS_Sonoma() ||
+      macOS_Sequoia())
   {
     return false;
   }
@@ -4490,7 +4550,8 @@ vm_object_t object_get_shadow(vm_object_t object)
     retval = object_local->shadow;
   } else if (macOS_Monterey_7_1_or_greater() ||
              macOS_Ventura_6_1_or_greater() ||
-             macOS_Sonoma_1_or_greater())
+             macOS_Sonoma_1_or_greater() ||
+             macOS_Sequoia())
   {
     vm_object_fake_sonoma_1_t object_local =
       (vm_object_fake_sonoma_1_t) object;
@@ -4511,7 +4572,8 @@ vm_object_offset_t object_get_shadow_offset(vm_object_t object)
   vm_object_offset_t retval = 0;
   if (macOS_Monterey_7_1_or_greater() ||
       macOS_Ventura_6_1_or_greater() ||
-      macOS_Sonoma_1_or_greater())
+      macOS_Sonoma_1_or_greater() ||
+      macOS_Sequoia())
   {
     vm_object_fake_sonoma_1_t object_local =
       (vm_object_fake_sonoma_1_t) object;
@@ -4565,7 +4627,7 @@ void vm_object_unlock(vm_object_t object)
 {
   if (macOS_Sierra() || macOS_HighSierra() || macOS_Mojave() ||
       macOS_Catalina() || macOS_BigSur() || macOS_Monterey() ||
-      macOS_Ventura() || macOS_Sonoma())
+      macOS_Ventura() || macOS_Sonoma() || macOS_Sequoia())
   {
     vm_object_unlock_ptr(object);
     return;
@@ -4958,7 +5020,9 @@ static uint64_t proc_uniqueid(proc_t proc)
   // As of macOS 12.1, finding a process's uniquepid became much more
   // complicated, to the point that we're forced to use the system call. It's
   // also available on 12.0.1, so we can also use it there.
-  if (macOS_Monterey() || macOS_Ventura() || macOS_Sonoma()) {
+  if (macOS_Monterey() || macOS_Ventura() || macOS_Sonoma() ||
+      macOS_Sequoia())
+  {
     return proc_uniqueid_ptr(proc);
   }
   if (macOS_Catalina() || macOS_BigSur()) {
@@ -4980,7 +5044,7 @@ static task_t proc_task(proc_t proc)
   }
   // As of macOS 13, finding a process's task became much more complicated.
   // So just use the (private) system call.
-  if (macOS_Ventura() || macOS_Sonoma()) {
+  if (macOS_Ventura() || macOS_Sonoma() || macOS_Sequoia()) {
     return proc_task_ptr(proc);
   }
   if (macOS_Mojave() || macOS_Catalina() || macOS_BigSur() ||
@@ -5000,7 +5064,7 @@ static bool IS_64BIT_PROCESS(proc_t proc)
   if (!proc) {
     return false;
   }
-  if (macOS_Sonoma_4_or_greater()) {
+  if (macOS_Sequoia() || macOS_Sonoma_4_or_greater()) {
     if (kernel_type_is_release()) {
       proc_fake_sonoma_4_t p = (proc_fake_sonoma_4_t) proc;
       return (p && (p->p_flag & P_LP64));
@@ -5080,7 +5144,7 @@ u_short get_acflag(proc_t proc)
   if (!proc) {
     return 0;
   }
-  if (macOS_Sonoma_4_or_greater()) {
+  if (macOS_Sequoia() || macOS_Sonoma_4_or_greater()) {
     if (kernel_type_is_release()) {
       proc_fake_sonoma_4_t p = (proc_fake_sonoma_4_t) proc;
       return p->p_acflag;
@@ -5165,7 +5229,7 @@ unsigned int get_lflag(proc_t proc)
   if (!proc) {
     return 0;
   }
-  if (macOS_Sonoma_4_or_greater()) {
+  if (macOS_Sequoia() || macOS_Sonoma_4_or_greater()) {
     if (kernel_type_is_release()) {
       proc_fake_sonoma_4_t p = (proc_fake_sonoma_4_t) proc;
       return p->p_lflag;
@@ -5245,7 +5309,7 @@ unsigned int get_flag(proc_t proc)
   if (!proc) {
     return 0;
   }
-  if (macOS_Sonoma_4_or_greater()) {
+  if (macOS_Sequoia() || macOS_Sonoma_4_or_greater()) {
     if (kernel_type_is_release()) {
       proc_fake_sonoma_4_t p = (proc_fake_sonoma_4_t) proc;
       return p->p_flag;
@@ -5923,7 +5987,9 @@ bool initialize_thread_offsets()
     }
   }
 
-  if (macOS_Sonoma() || macOS_Ventura() || macOS_Monterey()) {
+  if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura() ||
+      macOS_Monterey())
+  {
     if (kernel_type_is_release()) {
       g_iotier_override_offset =
         offsetof(struct thread_fake_monterey, iotier_override);
@@ -6067,7 +6133,7 @@ wait_interrupt_t thread_interrupt_level(wait_interrupt_t new_level)
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
     if (macOS_BigSur() || macOS_Monterey() || macOS_Ventura() ||
-        macOS_Sonoma())
+        macOS_Sonoma() || macOS_Sequoia())
     {
       if (kernel_type_is_release()) {
         offset_in_struct = offsetof(struct thread_fake_bigsur, options);
@@ -6232,7 +6298,9 @@ int get_uu_flag(uthread_t uthread)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sonoma() || macOS_Ventura() || macOS_Monterey_3_or_greater()) {
+    if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura() ||
+        macOS_Monterey_3_or_greater())
+    {
       offset_in_struct = offsetof(struct uthread_fake_monterey_3, uu_flag);
     } else if (macOS_Monterey_1_or_greater()) {
       offset_in_struct = offsetof(struct uthread_fake_monterey_1, uu_flag);
@@ -6347,7 +6415,8 @@ bool set_kernel_physmap_protection(vm_map_offset_t start, vm_map_offset_t end,
   // help prevent weirdness.  But on Mojave we hang, even if we use
   // vm_map_trylock() instead.
   if (!macOS_Mojave() && !macOS_Catalina() && !macOS_BigSur() &&
-      !macOS_Monterey() && !macOS_Ventura() && !macOS_Sonoma())
+      !macOS_Monterey() && !macOS_Ventura() && !macOS_Sonoma() &&
+      !macOS_Sequoia())
   {
     vm_map_lock(kernel_map);
   }
@@ -6382,7 +6451,8 @@ bool set_kernel_physmap_protection(vm_map_offset_t start, vm_map_offset_t end,
   }
 
   if (!macOS_Mojave() && !macOS_Catalina() && !macOS_BigSur() &&
-      !macOS_Monterey() && !macOS_Ventura() && !macOS_Sonoma())
+      !macOS_Monterey() && !macOS_Ventura() && !macOS_Sonoma() &&
+      !macOS_Sequoia())
   {
     vm_map_unlock(kernel_map);
   }
@@ -6608,6 +6678,35 @@ bool proc_mapin(vm_map_t proc_map, const user_addr_t source,
   return true;
 }
 
+//#define DEBUG_LAZY_POINTERS 1
+
+#ifdef DEBUG_LAZY_POINTERS
+
+kthread_key_t s_set_interpose_hooks_for_module_proc;
+int64_t s_set_interpose_hooks_for_module_proc_initialized = 0;
+
+proc_t get_set_interpose_hooks_for_module_proc()
+{
+  if (!s_set_interpose_hooks_for_module_proc_initialized) {
+    OSIncrementAtomic64(&s_set_interpose_hooks_for_module_proc_initialized);
+    kthread_key_init(&s_set_interpose_hooks_for_module_proc);
+  }
+  return (proc_t)
+    kthread_getspecific(&s_set_interpose_hooks_for_module_proc);
+}
+
+void set_set_interpose_hooks_for_module_proc(proc_t proc)
+{
+  if (!s_set_interpose_hooks_for_module_proc_initialized) {
+    OSIncrementAtomic64(&s_set_interpose_hooks_for_module_proc_initialized);
+    kthread_key_init(&s_set_interpose_hooks_for_module_proc);
+  }
+  kthread_setspecific(&s_set_interpose_hooks_for_module_proc,
+                      (void *) proc);
+}
+
+#endif
+
 bool user_region_codesigned(vm_map_t map, vm_map_offset_t start,
                             vm_map_offset_t end);
 void sign_user_pages(vm_map_t map, vm_map_offset_t start,
@@ -6631,6 +6730,9 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
   while (dest_rounded + len_rounded < dest + len) {
     len_rounded += page_size;
   }
+
+  kern_return_t rv1 = KERN_SUCCESS;
+  kern_return_t rv2 = KERN_SUCCESS;
 
   // It's possible to write to kernel memory without altering existing write
   // permissions -- just temporarily unset the "write protect" bit of the CR0
@@ -6657,30 +6759,14 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
     // only disabled for kernel extensions (and not for anything else).
     new_prot = VM_PROT_READ | VM_PROT_WRITE;
     if (macOS_Mojave() || macOS_Catalina() || macOS_BigSur() ||
-        macOS_Monterey() || macOS_Ventura() || macOS_Sonoma())
+        macOS_Monterey() || macOS_Ventura() || macOS_Sonoma() ||
+        macOS_Sequoia())
     {
       // Though shared libraries are all "copy on write", Mojave and above
       // somehow need us to request this specifically, if SIP is only disabled
       // for kernel extensions.
       if (info.share_mode == SM_COW) {
         new_prot |= VM_PROT_COPY;
-      }
-    }
-    // If we're writing to a "private" region that's codesigned, we should
-    // first "unsign" it -- otherwise the OS may give us trouble for setting
-    // write permission on a region that should remain unchanged. We don't
-    // need to worry about this for a shared region, because the region we
-    // write to will be a private copy of it (generated via COW). On Mojave
-    // and above we need to do this for all private regions. Starting on
-    // Monterey 12.4, "private" regions have the share_mode SM_PRIVATE or
-    // SM_PRIVATE_ALIASED.
-    if ((info.share_mode == SM_PRIVATE) ||
-        (info.share_mode == SM_PRIVATE_ALIASED))
-    {
-      if (macOS_Mojave() || macOS_Catalina() || macOS_BigSur() ||
-          macOS_Monterey() || macOS_Ventura() || macOS_Sonoma() || codesigned)
-      {
-        unsign_user_pages(proc_map, dest, dest + len);
       }
     }
     // If 'dest' is in the "DYLD shared cache", the first time vm_protect() is
@@ -6709,6 +6795,27 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
     //  'is_submap'      == false
     //  'depth'          == 0
     vm_protect(proc_map, dest_rounded, len_rounded, false, new_prot);
+    // user_region_codesigned() and unsign_user_pages() need to be called
+    // after vm_protect(), which can move things around in memory.
+    codesigned = user_region_codesigned(proc_map, dest, dest + len);
+    // If we're writing to a "private" region that's codesigned, we should
+    // first "unsign" it -- otherwise the OS may give us trouble for setting
+    // write permission on a region that should remain unchanged. We don't
+    // need to worry about this for a shared region, because the region we
+    // write to will be a private copy of it (generated via COW). On Mojave
+    // and above we need to do this for all private regions. Starting on
+    // Monterey 12.4, "private" regions have the share_mode SM_PRIVATE or
+    // SM_PRIVATE_ALIASED.
+    if ((info.share_mode == SM_PRIVATE) ||
+        (info.share_mode == SM_PRIVATE_ALIASED))
+    {
+      if (macOS_Mojave() || macOS_Catalina() || macOS_BigSur() ||
+          macOS_Monterey() || macOS_Ventura() || macOS_Sonoma() ||
+          macOS_Sequoia() || codesigned)
+      {
+        unsign_user_pages(proc_map, dest, dest + len);
+      }
+    }
   }
 
   // This call to vm_fault() finishes the job of preparing the region that
@@ -6717,12 +6824,13 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
   // that already had write permission.  This call to vm_fault() also helps
   // to remedy some kind of race condition -- without it we sometimes panic
   // with a write-protect GPF.
-  kern_return_t rv =
-    vm_fault(proc_map, dest_rounded, new_prot, false,
-             VM_KERN_MEMORY_NONE, THREAD_UNINT, NULL, 0);
-  if (rv == KERN_SUCCESS) {
+  if (prot_needs_restore) {
+    rv1 = vm_fault(proc_map, dest_rounded, new_prot, false,
+                   VM_KERN_MEMORY_NONE, THREAD_UNINT, NULL, 0);
+  }
+  if (rv1 == KERN_SUCCESS) {
     vm_map_t oldmap = vm_map_switch(proc_map);
-    rv = copyout(source, dest, len);
+    rv2 = copyout(source, dest, len);
     vm_map_switch(oldmap);
   }
 
@@ -6730,9 +6838,13 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
   // it ourselves to prevent later rechecks from finding the signature no
   // longer matches.  On macOS 10.14 (Mojave) and above we need to "sign"
   // every write-protected page we change, whether or not it's codesigned.
-  if (prot_needs_restore) {
+  if ((rv1 == KERN_SUCCESS) &&
+      (rv2 == KERN_SUCCESS) &&
+      prot_needs_restore)
+  {
     if (macOS_Mojave() || macOS_Catalina() || macOS_BigSur() ||
-        macOS_Monterey() || macOS_Ventura() || macOS_Sonoma() || codesigned)
+        macOS_Monterey() || macOS_Ventura() || macOS_Sonoma() ||
+        macOS_Sequoia() || codesigned)
     {
       sign_user_pages(proc_map, dest, dest + len);
     }
@@ -6750,7 +6862,20 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
     vm_protect(proc_map, dest_rounded, len_rounded, false, old_prot);
   }
 
-  return (rv == KERN_SUCCESS);
+#ifdef DEBUG_LAZY_POINTERS
+  proc_t proc = get_set_interpose_hooks_for_module_proc();
+  if (proc) {
+    pid_t pid = proc_pid(proc);
+    char procname[PATH_MAX];
+    proc_name(pid, procname, sizeof(procname));
+    kprintf("HookCase(%s[%d]): proc_copyout(): codesigned %d, old_prot 0x%x, new_prot 0x%x, share mode 0x%x, depth %d, user wired count %d, submap %d, dest 0x%llx, cpu number %d, rv1 0x%x, rv2 0x%x\n",
+            procname, pid, codesigned, old_prot, new_prot, info.share_mode,
+            info.shadow_depth, info.user_wired_count, info.is_submap,
+            dest, get_cpu_number(), rv1, rv2);
+  }
+#endif
+
+  return ((rv1 == KERN_SUCCESS) && (rv2 == KERN_SUCCESS));
 }
 
 bool proc_mapout(vm_map_t proc_map, const void *source,
@@ -6785,7 +6910,8 @@ bool proc_mapout(vm_map_t proc_map, const void *source,
   // On macOS 10.14 (Mojave) and above we need to "sign" every page we add
   // to proc_map.
   if (macOS_Mojave() || macOS_Catalina() || macOS_BigSur() ||
-      macOS_Monterey() || macOS_Ventura() || macOS_Sonoma())
+      macOS_Monterey() || macOS_Ventura() || macOS_Sonoma() ||
+      macOS_Sequoia())
   {
     sign_user_pages(proc_map, out, out + len);
   }
@@ -6917,7 +7043,8 @@ pid_t get_xpc_parent(pid_t possible_child)
   if (!possible_child ||
       (!OSX_ElCapitan() && !macOS_Sierra() && !macOS_HighSierra() &&
        !macOS_Mojave() && !macOS_Catalina() && !macOS_BigSur() &&
-       !macOS_Monterey() && !macOS_Ventura() && !macOS_Sonoma()))
+       !macOS_Monterey() && !macOS_Ventura() && !macOS_Sonoma() &&
+       !macOS_Sequoia()))
   {
     return 0;
   }
@@ -7030,7 +7157,7 @@ bool get_proc_info(int32_t pid, char **path,
   uint32_t p_argslen = 0;
   int32_t p_argc = 0;
   user_addr_t user_stack = 0;
-  if (macOS_Sonoma_4_or_greater()) {
+  if (macOS_Sequoia() || macOS_Sonoma_4_or_greater()) {
     if (kernel_type_is_release()) {
       proc_fake_sonoma_4_t p = (proc_fake_sonoma_4_t) our_proc;
       if (p) {
@@ -7553,6 +7680,28 @@ typedef struct _task_fake_sonoma_dev {
   mach_vm_size_t all_image_info_size;    // Offset 0x580
 } *task_fake_sonoma_dev_t;
 
+typedef struct _task_fake_sequoia {
+  lck_mtx_t lock;       // Size 0x10
+  uint64_t pad1[8];
+  queue_head_t threads; // Size 0x10, offset 0x50
+  uint64_t pad3[113];
+  volatile uint32_t t_flags; /* Offset 0x3e8, general-purpose task flags protected by task_lock (TL) */
+  uint32_t pad4[1];
+  mach_vm_address_t all_image_info_addr; // Offset 0x3f0
+  mach_vm_size_t all_image_info_size;    // Offset 0x3f8
+} *task_fake_sequoia_t;
+
+typedef struct _task_fake_sequoia_dev {
+  lck_mtx_t lock;       // Size 0x10
+  uint64_t pad1[12];
+  queue_head_t threads; // Size 0x10, offset 0x70
+  uint64_t pad3[162];
+  volatile uint32_t t_flags; /* Offset 0x590, general-purpose task flags protected by task_lock (TL) */
+  uint32_t pad4[1];
+  mach_vm_address_t all_image_info_addr; // Offset 0x598
+  mach_vm_size_t all_image_info_size;    // Offset 0x5a0
+} *task_fake_sequoia_dev_t;
+
 void task_lock(task_t task)
 {
   if (!task) {
@@ -7579,7 +7728,15 @@ mach_vm_address_t task_all_image_info_addr(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sonoma()) {
+    if (macOS_Sequoia()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_sequoia, all_image_info_addr);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_sequoia_dev, all_image_info_addr);
+      }
+    } else if (macOS_Sonoma()) {
       if (kernel_type_is_release()) {
         offset_in_struct =
           offsetof(struct _task_fake_sonoma, all_image_info_addr);
@@ -7682,7 +7839,15 @@ mach_vm_size_t task_all_image_info_size(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sonoma()) {
+    if (macOS_Sequoia()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_sequoia, all_image_info_size);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_sequoia_dev, all_image_info_size);
+      }
+    } else if (macOS_Sonoma()) {
       if (kernel_type_is_release()) {
         offset_in_struct =
           offsetof(struct _task_fake_sonoma, all_image_info_size);
@@ -7785,7 +7950,14 @@ uint32_t task_flags(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sonoma()) {
+    if (macOS_Sequoia()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct = offsetof(struct _task_fake_sequoia, t_flags);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_sequoia_dev, t_flags);
+      }
+    } else if (macOS_Sonoma()) {
       if (kernel_type_is_release()) {
         offset_in_struct = offsetof(struct _task_fake_sonoma, t_flags);
       } else if (kernel_type_is_development()) {
@@ -7894,7 +8066,7 @@ proc_t task_proc(task_t task)
 
   // Getting bsd_info has gotten very complicated as of macOS 13. Just use
   // the system call.
-  if (macOS_Sonoma() || macOS_Ventura()) {
+  if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura()) {
     return (proc_t) get_bsdtask_info(task);
   }
 
@@ -9188,6 +9360,17 @@ void user_region_codesigned_iterator(vm_map_t map, vm_map_entry_t entry,
     }
 
     is_signed = object_is_code_signed(object);
+
+#ifdef DEBUG_LAZY_POINTERS
+    proc_t proc = get_set_interpose_hooks_for_module_proc();
+    if (proc) {
+      pid_t pid = proc_pid(proc);
+      char procname[PATH_MAX];
+      proc_name(pid, procname, sizeof(procname));
+      kprintf("HookCase(%s[%d]): user_region_codesigned_iterator(): is_signed %d, offset 0x%llx, submap_level %d\n",
+              procname, pid, is_signed, offset, submap_level);
+    }
+#endif
   }
 
   info_local->is_signed |= is_signed;
@@ -9252,18 +9435,29 @@ void sign_user_pages_iterator(vm_map_t map, vm_map_entry_t entry,
     // Emulate vm_map_sign() from the xnu kernel's osfmk/vm/vm_map.c
     if (sign) {
       if (macOS_BigSur() || macOS_Monterey() || macOS_Ventura() ||
-          macOS_Sonoma())
+          macOS_Sonoma() || macOS_Sequoia())
       {
-        page_set_cs_validated(page, -1);
+        page_set_cs_validated(page, 0xf);
       } else {
-        page_set_cs_validated(page, true);
+        page_set_cs_validated(page, 1);
       }
       page_set_wpmapped(page, false);
     } else {
-      page_set_cs_validated(page, false);
+      page_set_cs_validated(page, 0);
     }
 
     vm_object_unlock(object);
+
+#ifdef DEBUG_LAZY_POINTERS
+    proc_t proc = get_set_interpose_hooks_for_module_proc();
+    if (proc) {
+      pid_t pid = proc_pid(proc);
+      char procname[PATH_MAX];
+      proc_name(pid, procname, sizeof(procname));
+      kprintf("HookCase(%s[%d]): sign_user_pages_iterator(): sign %d, offset 0x%llx, submap_level %d\n",
+              procname, pid, sign, offset, submap_level);
+    }
+#endif
 
     shadow = object_get_shadow(object);
     if (!shadow) {
@@ -11744,8 +11938,10 @@ bool maybe_cast_hook(proc_t proc)
     if (copyin_symbol_table(&module_info, &symbol_table,
                             symbol_type_defined))
     {
-      if (macOS_Sonoma() || macOS_Ventura() || macOS_Monterey()) {
-        if (macOS_Sonoma() || macOS_Ventura()) {
+      if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura() ||
+          macOS_Monterey())
+      {
+        if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura()) {
           hasExistingDyldCache =
             find_symbol("__ZNK5dyld415SyscallDelegate20hasExistingDyldCacheERyS1_S1_",
                         &symbol_table);
@@ -11753,7 +11949,7 @@ bool maybe_cast_hook(proc_t proc)
         initializeMainExecutable =
           find_symbol("__ZN5dyld44APIs25runAllInitializersForMainEv",
                       &symbol_table);
-        if (macOS_Sonoma()) {
+        if (macOS_Sequoia() || macOS_Sonoma()) {
           dyld_afterInitMain =
             find_symbol("__ZN5dyld423ExternallyViewableState19notifyMonitorNeededEv",
                         &symbol_table);
@@ -11809,13 +12005,15 @@ bool maybe_cast_hook(proc_t proc)
   if (!initializeMainExecutable || !dyld_runInitializers) {
     return false;
   }
-  if (macOS_Sonoma() || macOS_Ventura() || macOS_Monterey()) {
-    if (macOS_Sonoma()) {
+  if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura() ||
+      macOS_Monterey())
+  {
+    if (macOS_Sequoia() || macOS_Sonoma()) {
       if (!dyld_runInitializers2) {
         return false;
       }
     }
-    if (macOS_Sonoma() || macOS_Ventura()) {
+    if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura()) {
       if (!hasExistingDyldCache) {
         return false;
       }
@@ -11841,7 +12039,9 @@ bool maybe_cast_hook(proc_t proc)
   }
 
   uint16_t orig_dyld_afterInitMain = 0;
-  if (macOS_Sonoma() || macOS_Ventura() || macOS_Monterey()) {
+  if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura() ||
+      macOS_Monterey())
+  {
     if (!proc_copyin(proc_map, dyld_afterInitMain, &orig_dyld_afterInitMain,
                      sizeof(orig_dyld_afterInitMain)))
     {
@@ -11869,7 +12069,9 @@ bool maybe_cast_hook(proc_t proc)
   }
 
   uint32_t orig_dyld_isMainExecutable = 0;
-  if (macOS_Sonoma() || macOS_Ventura() || macOS_Monterey()) {
+  if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura() ||
+      macOS_Monterey())
+  {
     if (!proc_copyin(proc_map, dyld_isMainExecutable, &orig_dyld_isMainExecutable,
                      sizeof(orig_dyld_isMainExecutable)))
     {
@@ -11953,7 +12155,7 @@ bool maybe_cast_hook(proc_t proc)
   // accomplish this is to make dyld4::SyscallDelegate::hasExistingDyldCache()
   // always return 'false'. (Another is to set the DYLD_IN_CACHE environment
   // variable to '0'.)
-  if (macOS_Sonoma() || macOS_Ventura()) {
+  if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura()) {
     if (hasExistingDyldCache) {
       rv6 = proc_copyout(proc_map, &ret_null, hasExistingDyldCache,
                          sizeof(ret_null));
@@ -12101,7 +12303,7 @@ void process_hook_cast(hook_t *hookp, x86_saved_state_t *intr_state)
   // calls to C++ initializers from being triggered by our call to dlopen().
   // Without this, C++ initializers might call methods before we've had a
   // chance to hook them. We'll restore the original method later in
-  // process_hook_flying(). On Sonoma we also need to patch hookp->
+  // process_hook_flying(). On Sonoma and up we also need to patch hookp->
   // dyld_runInitializers2.
   uint32_t new_code;
   if (intr_state->flavor == x86_SAVED_STATE64) {
@@ -12212,7 +12414,7 @@ bool get_valid_user_hooks(proc_t proc, char *inserted_dylib_path,
       // there used to be a soft link to the framework binary, we can hack
       // together a workaround for frameworks.
       if ((macOS_BigSur() || macOS_Monterey() || macOS_Ventura() ||
-           macOS_Sonoma()) &&
+           macOS_Sonoma() || macOS_Sequoia()) &&
           !fixed_module_name[0])
       {
         char holder[PATH_MAX];
@@ -13044,7 +13246,6 @@ void set_patch_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
   }
 }
 
-//#define DEBUG_LAZY_POINTERS 1
 //#define DEBUG_LAZY_POINTER_TYPES 1
 
 void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
@@ -13126,9 +13327,9 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
     pid_t pid = proc_pid(proc);
     char procname[PATH_MAX];
     proc_name(pid, procname, sizeof(procname));
-    printf("HookCase(%s[%d]): set_interpose_hooks_for_module(0x%x:0x%llx): module %s, string_table_item %s, n_type 0x%x, n_sect 0x%x, n_desc 0x%x, n_value 0x%llx\n",
-           procname, pid, i, target_index, module_info->path,
-           string_table_item, n_type, n_sect, n_desc, n_value);
+    kprintf("HookCase(%s[%d]): set_interpose_hooks_for_module(0x%x:0x%llx): module %s, string_table_item %s, n_type 0x%x, n_sect 0x%x, n_desc 0x%x, n_value 0x%llx\n",
+            procname, pid, i, target_index, module_info->path,
+            string_table_item, n_type, n_sect, n_desc, n_value);
 #endif
 
     // If 'symbol_table.use_stubs_table_proxy' == true, we find entries in the
@@ -13229,7 +13430,9 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
           // On macOS Monterey and above, most (if not all) "lazy" pointers
           // are already initialized. Supposedly this makes applications
           // load faster.
-          if (macOS_Monterey() || macOS_Ventura() || macOS_Sonoma()) {
+          if (macOS_Monterey() || macOS_Ventura() || macOS_Sonoma() ||
+              macOS_Sequoia())
+          {
             interesting = true;
           }
           if (interesting) {
@@ -13239,13 +13442,15 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
             proc_name(pid, procname, sizeof(procname));
 #endif
             vm_offset_t slide = symbol_table.slide;
-            printf("HookCase(%s[%d]): set_interpose_hooks_for_module(0x%x:0x%llx): module %s, string_table_item %s, new_lazy_ptr 0x%llx, old_lazy_ptr 0x%.08llx%.08llx, orig_function 0x%llx, module_begin 0x%llx, module_end 0x%llx, uninitialized %d\n",
-                   procname, pid, i, target_index, module_info->path, string_table_item,
-                   new_lazy_ptr - slide, (old_lazy_ptr - slide) >> 32,
-                   (old_lazy_ptr - slide) & 0xffffffff,
-                   interpose_hooks[j].orig_function - slide,
-                   module_begin - slide, module_end - slide, uninitialized);
+            kprintf("HookCase(%s[%d]): set_interpose_hooks_for_module(0x%x:0x%llx): module %s, string_table_item %s, new_lazy_ptr 0x%llx(0x%llx), old_lazy_ptr 0x%.08llx%.08llx, orig_function 0x%llx, module_begin 0x%llx, module_end 0x%llx, uninitialized %d, cpu number %d\n",
+                    procname, pid, i, target_index, module_info->path, string_table_item,
+                    new_lazy_ptr, new_lazy_ptr - slide, (old_lazy_ptr - slide) >> 32,
+                    (old_lazy_ptr - slide) & 0xffffffff,
+                    interpose_hooks[j].orig_function - slide,
+                    module_begin - slide, module_end - slide, uninitialized,
+                    get_cpu_number());
           }
+          set_set_interpose_hooks_for_module_proc(proc);
 #endif
           if (!interpose_hooks[j].orig_function || uninitialized ||
               (old_lazy_ptr == interpose_hooks[j].orig_function))
@@ -13253,6 +13458,9 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
             proc_copyout(proc_map, &new_lazy_ptr, old_lazy_ptr_addr,
                          sizeof(new_lazy_ptr));
           }
+#ifdef DEBUG_LAZY_POINTERS
+          set_set_interpose_hooks_for_module_proc(NULL);
+#endif
         } else {
           uint32_t new_lazy_ptr =
             (uint32_t) interpose_hooks[j].hook_function;
@@ -13277,10 +13485,11 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
             proc_name(pid, procname, sizeof(procname));
 #endif
             vm_offset_t slide = symbol_table.slide;
-            printf("HookCase(%s[%d]): set_interpose_hooks_for_module(): module %s, new_lazy_ptr 0x%x, old_lazy_ptr 0x%llx, module_begin 0x%llx, module_end 0x%llx, uninitialized %d\n",
-                   procname, pid, module_info->path, new_lazy_ptr - (uint32_t) slide,
-                   old_lazy_ptr - slide, module_begin - slide, module_end - slide, uninitialized);
+            kprintf("HookCase(%s[%d]): set_interpose_hooks_for_module(): module %s, new_lazy_ptr 0x%x(0x%x), old_lazy_ptr 0x%llx, module_begin 0x%llx, module_end 0x%llx, uninitialized %d\n",
+                    procname, pid, module_info->path, new_lazy_ptr, new_lazy_ptr - (uint32_t) slide,
+                    old_lazy_ptr - slide, module_begin - slide, module_end - slide, uninitialized);
           }
+          set_set_interpose_hooks_for_module_proc(proc);
 #endif
           if (!interpose_hooks[j].orig_function || uninitialized ||
               (old_lazy_ptr == (uint32_t) interpose_hooks[j].orig_function))
@@ -13288,6 +13497,9 @@ void set_interpose_hooks_for_module(proc_t proc, vm_map_t proc_map,
             proc_copyout(proc_map, &new_lazy_ptr, old_lazy_ptr_addr,
                          sizeof(new_lazy_ptr));
           }
+#ifdef DEBUG_LAZY_POINTERS
+          set_set_interpose_hooks_for_module_proc(NULL);
+#endif
         }
       }
     }
@@ -13451,9 +13663,9 @@ bool set_hooks(proc_t proc, vm_map_t proc_map, hook_t *cast_hookp,
 
   if (interpose_hooks) {
 #ifdef DELAY_SET_INTERPOSE_HOOKS
-    // On macOS Ventura we delay calling set_interpose_hooks() until our
+    // On macOS Ventura we can delay calling set_interpose_hooks() until our
     // shared "__got" sections, if any, have been initialized.
-    if (macOS_Ventura() || macOS_Sonoma()) {
+    if (macOS_Ventura() || macOS_Sonoma() || macOS_Sequoia()) {
       cast_hookp->set_interpose_hooks_delayed = true;
     } else {
       set_interpose_hooks(proc, proc_map, cast_hookp,
@@ -13928,7 +14140,7 @@ void process_hook_set(hook_t *hookp, x86_saved_state_t *intr_state)
       task_t task = proc_task(proc);
       if (task) {
         task_reference(task);
-        if (macOS_Sonoma_4_or_greater()) {
+        if (macOS_Sequoia() || macOS_Sonoma_4_or_greater()) {
           task_hold_and_wait(task);
         } else {
           task_hold(task);
@@ -14081,7 +14293,7 @@ void reset_hook(x86_saved_state_t *intr_state)
     task_t task = proc_task(proc);
     if (task) {
       task_reference(task);
-      if (macOS_Sonoma_4_or_greater()) {
+      if (macOS_Sequoia() || macOS_Sonoma_4_or_greater()) {
         task_hold_and_wait(task);
       } else {
         task_hold(task);
@@ -14663,7 +14875,7 @@ int hook_execve(proc_t p, struct execve_args *uap, int *retv)
 #ifndef DEBUG_PROCESS_START
     if (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave() &&
         !macOS_Catalina() && !macOS_BigSur() && !macOS_Monterey() &&
-        !macOS_Ventura() && !macOS_Sonoma())
+        !macOS_Ventura() && !macOS_Sonoma() && !macOS_Sequoia())
     {
       maybe_cast_hook(current_proc());
     }
@@ -14742,7 +14954,7 @@ int hook_posix_spawn(proc_t p, struct posix_spawn_args *uap, int *retv)
 #ifndef DEBUG_PROCESS_START
       if (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave() &&
           !macOS_Catalina() && !macOS_BigSur() && !macOS_Monterey() &&
-          !macOS_Ventura() && !macOS_Sonoma())
+          !macOS_Ventura() && !macOS_Sonoma() && !macOS_Sequoia())
       {
         maybe_cast_hook(proc);
       }
@@ -14772,7 +14984,7 @@ int hook_mac_execve(proc_t p, struct mac_execve_args *uap, int *retv)
 #ifndef DEBUG_PROCESS_START
     if (!macOS_Sierra() && !macOS_HighSierra() && !macOS_Mojave() &&
         !macOS_Catalina() && !macOS_BigSur() && !macOS_Monterey() &&
-        !macOS_Ventura() && !macOS_Sonoma())
+        !macOS_Ventura() && !macOS_Sonoma() && !macOS_Sequoia())
     {
       maybe_cast_hook(current_proc());
     }
@@ -15003,7 +15215,7 @@ void vm_page_validate_cs_hook(x86_saved_state_t *intr_state,
     // 4) Unload HookCase.kext from the kernel.
     // 5) Run the app from step 2 again in exactly the same way.  Without the
     //    following line, this will result in a "page is slid" kernel panic.
-    page_set_cs_validated(page, true);
+    page_set_cs_validated(page, 1);
   }
 
   uint64_t return_address = *((uint64_t *)(intr_state->ss_64.isf.rsp));
@@ -15746,7 +15958,8 @@ void initialize_use_invpcid()
 
   if (macOS_Mojave_less_than_5() ||
       (!macOS_Mojave() && !macOS_Catalina() && !macOS_BigSur() &&
-       !macOS_Monterey() && !macOS_Ventura() && !macOS_Sonoma()))
+       !macOS_Monterey() && !macOS_Ventura() && !macOS_Sonoma() &&
+       !macOS_Sequoia()))
   {
     g_use_invpcid = false;
   } else {
@@ -15892,7 +16105,7 @@ bool initialize_cpu_data_offsets()
     return true;
   }
 
-  if (macOS_Catalina()) {
+  if (macOS_Catalina_5_or_greater()) {
     g_cpu_active_thread_offset =
       offsetof(cpu_data_fake_catalina_t, cpu_active_thread);
     g_cpu_number_offset =
@@ -15948,7 +16161,7 @@ bool initialize_cpu_data_offsets()
     return true;
   }
 
-  if (macOS_Sonoma() || macOS_Ventura()) {
+  if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura()) {
     g_cpu_active_thread_offset =
       offsetof(cpu_data_fake_ventura_t, cpu_active_thread);
     g_cpu_number_offset =
@@ -16546,30 +16759,32 @@ bool install_intr_handlers()
   }
 
   if (!macOS_Mojave() && !macOS_Catalina() && !macOS_BigSur() &&
-      !macOS_Monterey() && !macOS_Ventura() && !macOS_Sonoma())
+      !macOS_Monterey() && !macOS_Ventura() && !macOS_Sonoma() &&
+      !macOS_Sequoia())
   {
     if (!hook_vm_page_validate_cs()) {
       return false;
     }
   }
-  if (macOS_Sonoma() || macOS_Ventura() || macOS_Monterey() ||
-      macOS_BigSur() || macOS_Catalina() || macOS_Mojave() ||
-      macOS_HighSierra() || macOS_Sierra())
+  if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura() ||
+      macOS_Monterey() || macOS_BigSur() || macOS_Catalina() ||
+      macOS_Mojave() || macOS_HighSierra() || macOS_Sierra())
   {
     if (!hook_mac_file_check_library_validation()) {
       return false;
     }
   }
-  if (macOS_Sonoma() || macOS_Ventura() || macOS_Monterey() ||
-      macOS_BigSur() || macOS_Catalina() || macOS_Mojave() ||
-      macOS_HighSierra() || macOS_Sierra() || OSX_ElCapitan())
+  if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura() ||
+      macOS_Monterey() || macOS_BigSur() || macOS_Catalina() ||
+      macOS_Mojave() || macOS_HighSierra() || macOS_Sierra() ||
+      OSX_ElCapitan())
   {
     if (!hook_mac_file_check_mmap()) {
       return false;
     }
   }
-  if (macOS_Sonoma() || macOS_Ventura() || macOS_Monterey() ||
-      macOS_BigSur() || macOS_Catalina())
+  if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura() ||
+      macOS_Monterey() || macOS_BigSur() || macOS_Catalina())
   {
     if (!hook_mac_vnode_check_open()) {
       return false;
@@ -16578,8 +16793,8 @@ bool install_intr_handlers()
       return false;
     }
   }
-  if (macOS_Sonoma() || macOS_Ventura() || macOS_Monterey() ||
-      macOS_BigSur())
+  if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura() ||
+      macOS_Monterey() || macOS_BigSur())
   {
     if (!hook_sandbox_filters()) {
       return false;
@@ -16671,7 +16886,7 @@ kern_return_t HookCase_start(kmod_info_t * ki, void *d)
     // rebooting.  But this makes the kernel "capture" the serial port -- it's
     // no longer available to user-mode code, and drivers for it no longer show
     // up in the /dev directory.
-    kprintf("HookCase requires OS X Mavericks (10.9), Yosemite (10.10), El Capitan (10.11), macOS Sierra (10.12), macOS High Sierra (10.13), macOS Mojave (10.14), macOS Catalina (10.15), macOS Big Sur (11), or macOS Monterey (12) or macOS Ventura (13): current version %s\n",
+    kprintf("HookCase requires OS X Mavericks (10.9), Yosemite (10.10), El Capitan (10.11), macOS Sierra (10.12), macOS High Sierra (10.13), macOS Mojave (10.14), macOS Catalina (10.15), macOS Big Sur (11), macOS Monterey (12), macOS Ventura (13), macOS Sonoma (14) or macOS Sequoia (15): current version %s\n",
             gOSVersionString ? gOSVersionString : "null");
     if (gOSVersionString) {
       IOFree(gOSVersionString, gOSVersionStringLength);

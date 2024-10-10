@@ -1,6 +1,6 @@
 /* The MIT License (MIT)
  *
- * Copyright (c) 2020 Steven Michaud
+ * Copyright (c) 2024 Steven Michaud
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -583,10 +583,12 @@ bool macOS_Catalina_5_or_greater();
 bool macOS_BigSur();
 bool macOS_Monterey();
 bool macOS_Ventura();
+bool macOS_Sonoma();
+bool macOS_Sequoia();
 
 static inline int get_cpu_number(void)
 {
-  if (macOS_Ventura()) {
+  if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura()) {
     CPU_DATA_GET_FUNC_BODY(cpu_data_fake_ventura_t,cpu_number,int)
   } else if (macOS_BigSur() || macOS_Monterey()) {
     CPU_DATA_GET_FUNC_BODY(cpu_data_fake_bigsur_t,cpu_number,int)

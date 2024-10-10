@@ -22,7 +22,7 @@ before you do the following.  Use "xpcproxy" to filter the Console
 app's output. Alternatively, you can use `serialportlogger` from
 [PySerialPortLogger](https://github.com/steven-michaud/PySerialPortLogger)
 and
-[define VIRTUAL_SERIAL_PORT in the hook library](Examples/xpcproxy/hook.mm#L296).
+[define VIRTUAL_SERIAL_PORT in the hook library](Examples/xpcproxy/hook.mm#L302).
 
         HC_INSERT_LIBRARY=/full/path/to/hook.dylib open /Applications/Safari.app
 

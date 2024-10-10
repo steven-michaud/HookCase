@@ -17,7 +17,7 @@ kernel extensions whose `start()` method fails.
 
 Note that there's a workaround, which involves installing a serial
 port and using `kprintf()` to write to it. For more information see
-[HookCase_start()](HookCase/HookCase/HookCase.cpp#L16652).
+[HookCase_start()](HookCase/HookCase/HookCase.cpp#L16867).
 
 The root of the problem is that the messages received by Apple's new
 logging subsystem no longer contain any strings. Each message is
@@ -92,7 +92,7 @@ sudo cp -R KernelLogging.kext /usr/local/sbin/
 Then build the hook library. You'll first need to configure it to
 redirect its output to a virtual serial port like
 [PySerialPortLogger](https://github.com/steven-michaud/PySerialPortLogger),
-[here](Examples/kernel-logging/hook.mm#L343). Otherwise you won't see
+[here](Examples/kernel-logging/hook.mm#L349). Otherwise you won't see
 any output from `diagnosticd`.
 
 To load this example's hook library into both the application you're
@@ -139,6 +139,8 @@ again by doing the following. This latest instance of `diagnosticd`
 will no longer have the hook library loaded into it.
 
 ```
-sudo launchctl kickstart -kp system/com.apple.diagnosticd
+% sudo launchctl kickstart -p system/com.apple.diagnosticd
+service spawned with pid: [pid]
+% sudo kill -9 [pid]
 ```
 

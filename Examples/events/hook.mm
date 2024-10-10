@@ -1,6 +1,6 @@
 // The MIT License (MIT)
 //
-// Copyright (c) 2023 Steven Michaud
+// Copyright (c) 2024 Steven Michaud
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -113,6 +113,7 @@ bool CanUseCF()
 #define MAC_OS_X_VERSION_12_00_HEX 0x00000C00
 #define MAC_OS_X_VERSION_13_00_HEX 0x00000D00
 #define MAC_OS_X_VERSION_14_00_HEX 0x00000E00
+#define MAC_OS_X_VERSION_15_00_HEX 0x00000F00
 
 char gOSVersionString[PATH_MAX] = {0};
 
@@ -216,6 +217,11 @@ bool macOS_Ventura()
 bool macOS_Sonoma()
 {
   return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_14_00_HEX);
+}
+
+bool macOS_Sequoia()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_15_00_HEX);
 }
 
 class nsAutoreleasePool {
@@ -1020,8 +1026,9 @@ public:
 // As reported by CGSEventRecordLength()/SLSEventRecordLength(), this
 // structure is 0xF8 (248) bytes long on Mavericks through Ventura in 64-bit
 // mode, and 0xD0 (208) bytes long in 32-bit mode. On Sonoma it's 0x100 (256)
-// bytes long. A full definition (though without member names) is present in
-// the class-dump output for the AppKit framework.
+// bytes long. On Sequoia it's back to 0xF8 (248) bytes long. A full
+// definition (though without member names) is present in the class-dump
+// output for the AppKit framework.
 typedef struct _CGSEventRecord {
   unsigned short unknown1;
   unsigned short unknown2;
@@ -1034,7 +1041,8 @@ typedef struct _CGSEventRecord {
 #ifdef __i386__
   uint32_t pad[42];
 #else
-#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 140000
+#if (__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 140000) && \
+    (__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 150000)
   uint32_t pad[49];
 #else
   uint32_t pad[47];

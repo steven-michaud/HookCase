@@ -14,9 +14,9 @@ watchpoints. So HookCase is considerably more powerful than
 has placed on `DYLD_INSERT_LIBRARIES`. So, for example, HookCase can
 be used with applications that have
 [entitlements](https://developer.apple.com/library/content/documentation/Miscellaneous/Reference/EntitlementKeyReference/Chapters/AboutEntitlements.html).
-HookCase runs on OS X 10.9 (Mavericks) through macOS 14 (Sonoma).
+HookCase runs on OS X 10.9 (Mavericks) through macOS 15 (Sequoia).
 
-Steven Michaud, 10/2023
+Steven Michaud, 10/2024
 
 ## Table of Contents
 

@@ -15,6 +15,8 @@ then
   abort "Incorrect password for sudo"
 fi
 
-${SUDO} ${LAUNCHCTL} kickstart -kp system/com.apple.diagnosticd
+# 'launchctl kickstart -k' no longer works as of macOS 14.4 :-(
+PID=`${SUDO} ${LAUNCHCTL} kickstart -p system/com.apple.diagnosticd | cut -f 4`
+${SUDO} kill -9 ${PID}
 
 ${OPEN} /System/Applications/Utilities/Console.app

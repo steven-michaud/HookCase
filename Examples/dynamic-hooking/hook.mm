@@ -1,6 +1,6 @@
 // The MIT License (MIT)
 //
-// Copyright (c) 2023 Steven Michaud
+// Copyright (c) 2024 Steven Michaud
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -113,6 +113,7 @@ bool CanUseCF()
 #define MAC_OS_X_VERSION_12_00_HEX 0x00000C00
 #define MAC_OS_X_VERSION_13_00_HEX 0x00000D00
 #define MAC_OS_X_VERSION_14_00_HEX 0x00000E00
+#define MAC_OS_X_VERSION_15_00_HEX 0x00000F00
 
 char gOSVersionString[PATH_MAX] = {0};
 
@@ -216,6 +217,11 @@ bool macOS_Ventura()
 bool macOS_Sonoma()
 {
   return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_14_00_HEX);
+}
+
+bool macOS_Sequoia()
+{
+  return ((OSX_Version() & 0xFFF0) == MAC_OS_X_VERSION_15_00_HEX);
 }
 
 class nsAutoreleasePool {
@@ -1155,8 +1161,9 @@ Hooked_CFMachPortCallBack(CFMachPortRef port, void *msg,
 
 #if (0)
 // _CFMachPortCreateWithPort2() is an undocumented method called by both
-// CFMachPortCreate() and CFMachPortCreateWithPort().  So setting a patch
-// hook on it will catch all calls to both of the documented methods.
+// CFMachPortCreate() and CFMachPortCreateWithPort(). So setting a patch
+// hook on it will catch all calls to both of the documented methods. On
+// macOS 14.4 and above it's called _CFMachPortCreateWithPort4().
 CFMachPortRef
 _CFMachPortCreateWithPort2(CFAllocatorRef allocator, mach_port_t portNum,
                            CFMachPortCallBack callout, CFMachPortContext *context,
@@ -1164,26 +1171,26 @@ _CFMachPortCreateWithPort2(CFAllocatorRef allocator, mach_port_t portNum,
 #endif
 
 CFMachPortRef
-(*_CFMachPortCreateWithPort2_caller)(CFAllocatorRef allocator, mach_port_t portNum,
+(*_CFMachPortCreateWithPortX_caller)(CFAllocatorRef allocator, mach_port_t portNum,
                                      CFMachPortCallBack callout, CFMachPortContext *context,
                                      Boolean *shouldFreeInfo, uint32_t arg6) = NULL;
 
 static CFMachPortRef
-Hooked__CFMachPortCreateWithPort2(CFAllocatorRef allocator, mach_port_t portNum,
+Hooked__CFMachPortCreateWithPortX(CFAllocatorRef allocator, mach_port_t portNum,
                                   CFMachPortCallBack callout, CFMachPortContext *context,
                                   Boolean *shouldFreeInfo, uint32_t arg6)
 {
   CFMachPortRef retval =
-    _CFMachPortCreateWithPort2_caller(allocator, portNum, callout, context,
+    _CFMachPortCreateWithPortX_caller(allocator, portNum, callout, context,
                                       shouldFreeInfo, arg6);
-  LogWithFormat(true, "Hook.mm: _CFMachPortCreateWithPort2(): callout \'%p\', returning \'%p\'",
+  LogWithFormat(true, "Hook.mm: _CFMachPortCreateWithPortX(): callout \'%p\', returning \'%p\'",
                 callout, retval);
   if (callout) {
     add_patch_hook(reinterpret_cast<void*>(callout),
                    reinterpret_cast<void*>(Hooked_CFMachPortCallBack));
   }
   // Not always required, but using it when not required does no harm.
-  reset_hook(reinterpret_cast<void*>(Hooked__CFMachPortCreateWithPort2));
+  reset_hook(reinterpret_cast<void*>(Hooked__CFMachPortCreateWithPortX));
   return retval;
 }
 
@@ -1270,7 +1277,17 @@ __attribute__((used)) static const hook_desc user_hooks[]
   INTERPOSE_FUNCTION(NSPushAutoreleasePool),
   PATCH_FUNCTION(__CFInitialize, /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation),
 
-  PATCH_FUNCTION(_CFMachPortCreateWithPort2, /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation),
+  {
+    reinterpret_cast<const void*>(Hooked__CFMachPortCreateWithPortX),
+    reinterpret_cast<const void*>(&_CFMachPortCreateWithPortX_caller),
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 140000
+    "__CFMachPortCreateWithPort4",
+#else
+    "__CFMachPortCreateWithPort2",
+#endif
+    "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+  },
+
   //PATCH_FUNCTION(CFRunLoopObserverCreate, /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation),
 };
 
