@@ -1,3 +1,10 @@
+# What's New in Version 9.0.1
+
+macOS 15.2 broke HookCase by hiding the symbol for an internal
+function that HookCase uses. HookCase 9.0.1 works around the
+problem. This resolves
+[Issue #51](https://github.com/steven-michaud/HookCase/issues/51).
+
 # What's New in Version 9.0.0
 
 HookCase 9.0 now supports macOS 15 (Sequoia).
@@ -225,14 +232,14 @@ information see
 
 This version of HookCase fixes a bug that caused intermittent
 instability, though not kernel panics. I fixed it by tweaking the
-[code at the heart of HookCase's watchpoint support](HookCase/HookCase/HookCase.cpp#L15768).
+[code at the heart of HookCase's watchpoint support](HookCase/HookCase/HookCase.cpp#L15815).
 See [Issue #26](https://github.com/steven-michaud/HookCase/issues/26)
 for more information.
 
 HookCase's watchpoint code is quite complex. So if you see any sort of
 instability short of kernel panics, especially if it resembles what's
 reported at Issue #26, you should try
-[disabling watchpoint support](HookCase/HookCase/HookCase.cpp#L16718).
+[disabling watchpoint support](HookCase/HookCase/HookCase.cpp#L16765).
 
 # What's New in Version 5.0.3
 
@@ -438,12 +445,12 @@ can now hook methods that aren't in their module's symbol table.  For
 more information see
 [Hooked_sub_123abc() in the hook library template](HookLibraryTemplate/hook.mm#L1296).
 
-* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L13415) that
+* Version 2.0 [fixes a bug](HookCase/HookCase/HookCase.cpp#L13462) that
 prevented interpose hooks from working outside the shared cache of
 system modules.
 
 * Version 2.0
-[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L15210)
+[fixes a previously undiscovered edge case](HookCase/HookCase/HookCase.cpp#L15257)
 of an Apple kernel panic bug that was partially fixed in version 1.
 
 * Version 2.0

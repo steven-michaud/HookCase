@@ -1614,7 +1614,7 @@ static vm_fault_t vm_fault = NULL;
 static vm_map_page_mask_t vm_map_page_mask = NULL;
 static vm_map_page_size_t vm_map_page_size = NULL;
 static vm_map_lookup_entry_t vm_map_lookup_entry = NULL;
-static vm_map_protect_t vm_map_protect = NULL;
+static vm_map_protect_t vm_map_protect_ptr = NULL;
 static pmap_protect_t pmap_protect = NULL;
 static pmap_enter_t pmap_enter = NULL;
 static pmap_disconnect_t pmap_disconnect = NULL;
@@ -1843,12 +1843,11 @@ bool find_kernel_private_functions()
       return false;
     }
   }
-  if (!vm_map_protect) {
-    vm_map_protect = (vm_map_protect_t)
+  if (!vm_map_protect_ptr) {
+    // As of macOS 15.2 the symbol for vm_map_protect() is hidden. We get
+    // around this below.
+    vm_map_protect_ptr = (vm_map_protect_t)
       kernel_dlsym("_vm_map_protect");
-    if (!vm_map_protect) {
-      return false;
-    }
   }
   if (!pmap_protect) {
     pmap_protect = (pmap_protect_t)
@@ -2027,6 +2026,24 @@ bool find_kernel_private_functions()
   }
   s_kernel_private_functions_found = true;
   return true;
+}
+
+// As of macOS 15.2 the symbol for vm_map_protect() is hidden. We use this
+// function to get around the problem. Aside from a few parameter differences,
+// vm_protect() just does safety checks on the parameters it's called with,
+// then calls vm_map_protect(). I suppose the lack of these safety checks in
+// vm_map_protect() is why it got hidden.
+static kern_return_t vm_map_protect(vm_map_t map,
+                                    vm_map_offset_t start,
+                                    vm_map_offset_t end,
+                                    vm_prot_t new_prot,
+                                    boolean_t set_max)
+{
+  if (vm_map_protect_ptr) {
+    return vm_map_protect_ptr(map, start, end, new_prot, set_max);
+  }
+
+  return vm_protect(map, start, end - start, set_max, new_prot);
 }
 
 // From the xnu kernel's osfmk/i386/mp.h
@@ -5404,6 +5421,36 @@ typedef enum {
 // "struct thread" is defined in osfmk/kern/thread.h.  "struct machine_thread"
 // is defined in osfmk/i386/thread.h.  For the offset of iotier_override, look
 // at the machine code for set_thread_iotier_override().
+
+// Only "map"'s offset has changed in Sequoia, and then only in the release
+// kernel. We don't currently use "map".
+typedef struct thread_fake_sequoia
+{
+  uint32_t pad1[24];
+  integer_t options;    // Offset 0x60
+  uint32_t pad2[15];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0xa0
+  uint32_t pad3[231];
+  int iotier_override;  // Offset 0x444
+  uint32_t pad4[118];
+  vm_map_t map;         // Offset 0x620
+} thread_fake_sequoia_t;
+
+// thread_fake_sequoia_dev is exactly the same as
+// thread_fake_sonoma_dev_1.
+typedef struct thread_fake_sequoia_dev
+{
+  uint32_t pad1[26];
+  integer_t options;    // Offset 0x68
+  uint32_t pad2[15];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0xa8
+  uint32_t pad3[249];
+  int iotier_override;  // Offset 0x494
+  uint32_t pad4[134];
+  vm_map_t map;         // Offset 0x6b0
+} thread_fake_sequoia_dev_t;
 
 typedef struct thread_fake_sonoma
 {
