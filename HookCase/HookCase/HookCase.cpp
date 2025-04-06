@@ -694,6 +694,22 @@ bool macOS_Sequoia()
   return ((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_15_HEX);
 }
 
+bool macOS_Sequoia_less_than_4()
+{
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_15_HEX)) {
+    return false;
+  }
+  return ((OSX_Version() & 0xFF) < 0x40);
+}
+
+bool macOS_Sequoia_4_or_greater()
+{
+  if (!((OSX_Version() & 0xFF00) == MAC_OS_X_VERSION_15_HEX)) {
+    return false;
+  }
+  return ((OSX_Version() & 0xFF) >= 0x40);
+}
+
 bool OSX_Version_Unsupported()
 {
   return (((OSX_Version() & 0xFF00) < MAC_OS_X_VERSION_10_9_HEX) ||
@@ -1512,7 +1528,15 @@ typedef kern_return_t (*vm_map_copyout_t)(vm_map_t dst_map,
                                           vm_map_address_t *dst_addr,
                                           vm_map_copy_t copy);
 typedef void (*vm_map_copy_discard_t)(vm_map_copy_t copy);
+// As of macOS 15.4, vm_map_switch_to and vm_map_switch_back are used instead
+// of vm_map_switch.
 typedef vm_map_t (*vm_map_switch_t)(vm_map_t map);
+typedef struct vm_map_task {
+  vm_map_t map;
+  task_t task;
+} vm_map_task_t;
+typedef vm_map_task_t (*vm_map_switch_to_t)(vm_map_t map);
+typedef void (*vm_map_switch_back_t)(vm_map_task_t map_task);
 typedef uint16_t (*thread_get_tag_t)(thread_t);
 typedef void (*task_act_iterate_wth_args_t)(task_t task,
                                             void (*func_callback)(thread_t, void *),
@@ -1599,7 +1623,11 @@ static vm_map_copyin_t vm_map_copyin = NULL;
 static vm_map_copy_overwrite_t vm_map_copy_overwrite = NULL;
 static vm_map_copyout_t vm_map_copyout = NULL;
 static vm_map_copy_discard_t vm_map_copy_discard = NULL;
+// As of macOS 15.4, vm_map_switch_to and vm_map_switch_back are used instead
+// of vm_map_switch.
 static vm_map_switch_t vm_map_switch = NULL;
+static vm_map_switch_to_t vm_map_switch_to = NULL;
+static vm_map_switch_back_t vm_map_switch_back = NULL;
 static thread_get_tag_t thread_get_tag = NULL;
 static task_act_iterate_wth_args_t task_act_iterate_wth_args = NULL;
 static get_bsdthread_info_t get_bsdthread_info = NULL;
@@ -1671,16 +1699,28 @@ bool find_kernel_private_functions()
         return false;
       }
     }
+    // As of MacOS 15.4, vm_page_array_beginning_addr changes to vm_pages and
+    // vm_page_array_ending_addr changes to vm_pages_end.
     if (!g_vm_page_array_beginning_addr) {
-      g_vm_page_array_beginning_addr = (vm_page_t *)
-        kernel_dlsym("_vm_page_array_beginning_addr");
+      if (macOS_Sequoia_4_or_greater()) {
+        g_vm_page_array_beginning_addr = (vm_page_t *)
+          kernel_dlsym("_vm_pages");
+      } else {
+        g_vm_page_array_beginning_addr = (vm_page_t *)
+          kernel_dlsym("_vm_page_array_beginning_addr");
+      }
       if (!g_vm_page_array_beginning_addr) {
         return false;
       }
     }
     if (!g_vm_page_array_ending_addr) {
-      g_vm_page_array_ending_addr = (vm_page_t *)
-        kernel_dlsym("_vm_page_array_ending_addr");
+      if (macOS_Sequoia_4_or_greater()) {
+        g_vm_page_array_ending_addr = (vm_page_t *)
+          kernel_dlsym("_vm_pages_end");
+      } else {
+        g_vm_page_array_ending_addr = (vm_page_t *)
+          kernel_dlsym("_vm_page_array_ending_addr");
+      }
       if (!g_vm_page_array_ending_addr) {
         return false;
       }
@@ -1728,11 +1768,30 @@ bool find_kernel_private_functions()
       return false;
     }
   }
-  if (!vm_map_switch) {
-    vm_map_switch = (vm_map_switch_t)
-      kernel_dlsym("_vm_map_switch");
+  // As of macOS 15.4, vm_map_switch_to and vm_map_switch_back are used
+  // instead of vm_map_switch.
+  if (macOS_Sequoia_4_or_greater()) {
+    if (!vm_map_switch_to) {
+      vm_map_switch_to = (vm_map_switch_to_t)
+        kernel_dlsym("_vm_map_switch_to");
+      if (!vm_map_switch_to) {
+        return false;
+      }
+    }
+    if (!vm_map_switch_back) {
+      vm_map_switch_back = (vm_map_switch_back_t)
+        kernel_dlsym("_vm_map_switch_back");
+      if (!vm_map_switch_back) {
+        return false;
+      }
+    }
+  } else {
     if (!vm_map_switch) {
-      return false;
+      vm_map_switch = (vm_map_switch_t)
+        kernel_dlsym("_vm_map_switch");
+      if (!vm_map_switch) {
+        return false;
+      }
     }
   }
   if (!strnstr_ptr) {
@@ -5452,6 +5511,34 @@ typedef struct thread_fake_sequoia_dev
   vm_map_t map;         // Offset 0x6b0
 } thread_fake_sequoia_dev_t;
 
+// Only "map"'s offset has changed in Sequoia 15.4. We don't currently use
+// "map".
+typedef struct thread_fake_sequoia_4
+{
+  uint32_t pad1[24];
+  integer_t options;    // Offset 0x60
+  uint32_t pad2[15];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0xa0
+  uint32_t pad3[231];
+  int iotier_override;  // Offset 0x444
+  uint32_t pad4[120];
+  vm_map_t map;         // Offset 0x628
+} thread_fake_sequoia_4_t;
+
+typedef struct thread_fake_sequoia_dev_4
+{
+  uint32_t pad1[26];
+  integer_t options;    // Offset 0x68
+  uint32_t pad2[15];
+  // Actually a member of thread_t's 'machine' member.
+  void *ifps;           // Offset 0xa8
+  uint32_t pad3[249];
+  int iotier_override;  // Offset 0x494
+  uint32_t pad4[136];
+  vm_map_t map;         // Offset 0x6b8
+} thread_fake_sequoia_dev_4_t;
+
 typedef struct thread_fake_sonoma
 {
   uint32_t pad1[24];
@@ -6876,9 +6963,15 @@ bool proc_copyout(vm_map_t proc_map, const void *source,
                    VM_KERN_MEMORY_NONE, THREAD_UNINT, NULL, 0);
   }
   if (rv1 == KERN_SUCCESS) {
-    vm_map_t oldmap = vm_map_switch(proc_map);
-    rv2 = copyout(source, dest, len);
-    vm_map_switch(oldmap);
+    if (macOS_Sequoia_4_or_greater()) {
+      vm_map_task_t oldmap = vm_map_switch_to(proc_map);
+      rv2 = copyout(source, dest, len);
+      vm_map_switch_back(oldmap);
+    } else {
+      vm_map_t oldmap = vm_map_switch(proc_map);
+      rv2 = copyout(source, dest, len);
+      vm_map_switch(oldmap);
+    }
   }
 
   // If we've altered a write-protected codesigned region, we need to "sign"
@@ -6977,10 +7070,18 @@ bool proc_copyinstr(vm_map_t proc_map, const user_addr_t source,
     return false;
   }
 
-  vm_map_t oldmap = vm_map_switch(proc_map);
-  size_t size;
-  kern_return_t rv = copyinstr(source, dest, len, &size);
-  vm_map_switch(oldmap);
+  kern_return_t rv = KERN_SUCCESS;
+  if (macOS_Sequoia_4_or_greater()) {
+    vm_map_task_t oldmap = vm_map_switch_to(proc_map);
+    size_t size;
+    rv = copyinstr(source, dest, len, &size);
+    vm_map_switch_back(oldmap);
+  } else {
+    vm_map_t oldmap = vm_map_switch(proc_map);
+    size_t size;
+    rv = copyinstr(source, dest, len, &size);
+    vm_map_switch(oldmap);
+  }
 
   return (rv == KERN_SUCCESS);
 }
@@ -7749,6 +7850,28 @@ typedef struct _task_fake_sequoia_dev {
   mach_vm_size_t all_image_info_size;    // Offset 0x5a0
 } *task_fake_sequoia_dev_t;
 
+typedef struct _task_fake_sequoia_4 {
+  lck_mtx_t lock;       // Size 0x10
+  uint64_t pad1[8];
+  queue_head_t threads; // Size 0x10, offset 0x50
+  uint64_t pad3[117];
+  volatile uint32_t t_flags; /* Offset 0x408, general-purpose task flags protected by task_lock (TL) */
+  uint32_t pad4[1];
+  mach_vm_address_t all_image_info_addr; // Offset 0x410
+  mach_vm_size_t all_image_info_size;    // Offset 0x418
+} *task_fake_sequoia_4_t;
+
+typedef struct _task_fake_sequoia_dev_4 {
+  lck_mtx_t lock;       // Size 0x10
+  uint64_t pad1[12];
+  queue_head_t threads; // Size 0x10, offset 0x70
+  uint64_t pad3[166];
+  volatile uint32_t t_flags; /* Offset 0x5b0, general-purpose task flags protected by task_lock (TL) */
+  uint32_t pad4[1];
+  mach_vm_address_t all_image_info_addr; // Offset 0x5b8
+  mach_vm_size_t all_image_info_size;    // Offset 0x5c0
+} *task_fake_sequoia_dev_4_t;
+
 void task_lock(task_t task)
 {
   if (!task) {
@@ -7775,7 +7898,15 @@ mach_vm_address_t task_all_image_info_addr(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sequoia()) {
+    if (macOS_Sequoia_4_or_greater()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_sequoia_4, all_image_info_addr);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_sequoia_dev_4, all_image_info_addr);
+      }
+    } else if (macOS_Sequoia()) {
       if (kernel_type_is_release()) {
         offset_in_struct =
           offsetof(struct _task_fake_sequoia, all_image_info_addr);
@@ -7886,7 +8017,15 @@ mach_vm_size_t task_all_image_info_size(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sequoia()) {
+    if (macOS_Sequoia_4_or_greater()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_sequoia_4, all_image_info_size);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_sequoia_dev_4, all_image_info_size);
+      }
+    } else if (macOS_Sequoia()) {
       if (kernel_type_is_release()) {
         offset_in_struct =
           offsetof(struct _task_fake_sequoia, all_image_info_size);
@@ -7997,7 +8136,14 @@ uint32_t task_flags(task_t task)
 
   static vm_map_offset_t offset_in_struct = -1;
   if (offset_in_struct == -1) {
-    if (macOS_Sequoia()) {
+    if (macOS_Sequoia_4_or_greater()) {
+      if (kernel_type_is_release()) {
+        offset_in_struct = offsetof(struct _task_fake_sequoia_4, t_flags);
+      } else if (kernel_type_is_development()) {
+        offset_in_struct =
+          offsetof(struct _task_fake_sequoia_dev_4, t_flags);
+      }
+    } else if (macOS_Sequoia()) {
       if (kernel_type_is_release()) {
         offset_in_struct = offsetof(struct _task_fake_sequoia, t_flags);
       } else if (kernel_type_is_development()) {
@@ -11989,17 +12135,29 @@ bool maybe_cast_hook(proc_t proc)
           macOS_Monterey())
       {
         if (macOS_Sequoia() || macOS_Sonoma() || macOS_Ventura()) {
-          hasExistingDyldCache =
-            find_symbol("__ZNK5dyld415SyscallDelegate20hasExistingDyldCacheERyS1_S1_",
-                        &symbol_table);
+          if (macOS_Sequoia_4_or_greater()) {
+            hasExistingDyldCache =
+              find_symbol("__ZNK5dyld415SyscallDelegate20hasExistingDyldCacheERyR11FileIdTuple",
+                          &symbol_table);
+          } else {
+            hasExistingDyldCache =
+              find_symbol("__ZNK5dyld415SyscallDelegate20hasExistingDyldCacheERyS1_S1_",
+                          &symbol_table);
+          }
         }
         initializeMainExecutable =
           find_symbol("__ZN5dyld44APIs25runAllInitializersForMainEv",
                       &symbol_table);
         if (macOS_Sequoia() || macOS_Sonoma()) {
-          dyld_afterInitMain =
-            find_symbol("__ZN5dyld423ExternallyViewableState19notifyMonitorNeededEv",
-                        &symbol_table);
+          if (macOS_Sequoia_4_or_greater()) {
+            dyld_afterInitMain =
+              find_symbol("__ZN5dyld423ExternallyViewableState25notifyMonitorOfMainCalledEv",
+                          &symbol_table);
+          } else {
+            dyld_afterInitMain =
+              find_symbol("__ZN5dyld423ExternallyViewableState19notifyMonitorNeededEv",
+                          &symbol_table);
+          }
           dyld_runInitializers2 =
             find_symbol("__ZNK5dyld46Loader15runInitializersERNS_12RuntimeStateE",
                         &symbol_table);
