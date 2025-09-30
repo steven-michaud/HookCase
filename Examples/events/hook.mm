@@ -1,6 +1,6 @@
 // The MIT License (MIT)
 //
-// Copyright (c) 2024 Steven Michaud
+// Copyright (c) 2025 Steven Michaud
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -1668,7 +1668,7 @@ static CGEventRef Hooked__DPSNextEvent(CGSConnectionID cid,
   }
   if (cocoaEvent) {
     NSEventType cocoaType = [cocoaEvent type];
-    NSEventType subtype = 0;
+    NSEventSubtype subtype = (NSEventSubtype) 0;
     NSInteger data1 = 0;
     NSInteger data2 = 0;
     if (cocoaType == NSApplicationDefined) {
